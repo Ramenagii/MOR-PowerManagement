@@ -16,15 +16,15 @@
 #define WIFI_PASS "newhome2024"
 
 // ---- Backend (ASP.NET Core Web API) ----
-// Local dev HTTPS port is printed by `dotnet run` / Aspire on startup.
-#define BACKEND_HOST "192.168.0.101"
-#define BACKEND_PORT 5211
+// Cloud deployment (public, any-device access).
+#define BACKEND_HOST "mor-powermanagement.onrender.com"
+#define BACKEND_PORT 443
 #define BACKEND_BASE "/api"
-// 1 = https (dev cert, insecure), 0 = plain http for the LAN bench.
-#define BACKEND_USE_TLS 0
+// 1 = https (host has a real cert), 0 = plain http for the LAN bench.
+#define BACKEND_USE_TLS 1
 #define DEVICE_ID "mor-prototype-01"
 // Must match the backend Device:ApiKey when key enforcement is turned on.
-#define DEVICE_API_KEY ""
+#define DEVICE_API_KEY "vuZAWog0U6MnqHF58TK3DhCzO9Je2atQ"
 
 // ---- Timing ----
 #define TELEMETRY_INTERVAL_MS 5000UL
