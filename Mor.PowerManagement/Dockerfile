@@ -16,7 +16,14 @@ RUN dotnet publish src/Web/Web.csproj -c Release \
     -p:OpenApiGenerateDocuments=false \
     -o /app/publish
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-bookworm-slim AS runtime
+# Something in the dependency chain P/Invokes GSSAPI (Kerberos); the slim
+# image does not ship it, so the app crashes at startup without this.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgssapi-krb5-2 \
+    && rm -rf /var/lib/apt/lists/*
+USER app
 WORKDIR /app
 COPY --from=build /app/publish ./
 # Host injects $PORT; Program.cs binds to it. DB + device key via env:
