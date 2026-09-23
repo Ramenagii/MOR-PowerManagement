@@ -5,6 +5,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY Mor.PowerManagement.slnx ./
+COPY Directory.Build.props ./
+COPY Directory.Packages.props ./
+COPY global.json ./
 COPY src/ ./src/
 RUN dotnet publish src/Web/Web.csproj -c Release \
     -p:OpenApiGenerateDocuments=false \
