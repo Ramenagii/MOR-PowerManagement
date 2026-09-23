@@ -28,7 +28,7 @@
 
 // ---- Timing ----
 #define TELEMETRY_INTERVAL_MS 5000UL
-#define CONFIG_INTERVAL_MS 60000UL
+#define CONFIG_INTERVAL_MS 15000UL
 
 // ---- PZEM-004T v3.0 bus ----
 // 13-channel rig: single mains PZEM (address 1) on the common feed.

@@ -115,7 +115,12 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             }
 
             outlet.Status = report.RelayClosed
-                ? (outlet.CurrentWatts <= config.StandbyThresholdWatts ? OutletStatus.Standby : OutletStatus.Active)
+                // Outlets exempt from idle shutdown (IdleLimitMinutes == null,
+                // e.g. USB sockets) never downgrade to Standby: a small but
+                // legitimate load like 18W must not look like an idle device.
+                ? (outlet.IdleLimitMinutes is null || outlet.CurrentWatts > config.StandbyThresholdWatts
+                    ? OutletStatus.Active
+                    : OutletStatus.Standby)
                 : OutletStatus.Disconnected;
         }
 

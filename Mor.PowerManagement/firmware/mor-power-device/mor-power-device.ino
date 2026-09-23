@@ -353,6 +353,13 @@ bool postTelemetry() {
   }
   Serial.printf("telemetry: HTTP %d, total=%.0f W%s\n",
                 code, totalLoad(), sFault ? " FAULT" : "");
+  // Per-channel snapshot: C = relay closed, o = relay open.
+  // CH1-8 = 220V outlets, CH9 = 110V outlet, CH10-13 = USB sockets.
+  Serial.print("channels:");
+  for (int i = 0; i < OUTLET_COUNT; i++) {
+    Serial.printf(" %d:%s%.0fW", i + 1, channels[i].relayClosed ? "C" : "o", channels[i].power);
+  }
+  Serial.println();
   http.end();
   return ok;
 }
