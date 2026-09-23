@@ -33,8 +33,15 @@ app.UseForwardedHeaders();
 
 // Migrations are safe to apply on startup for a single instance (Neon-safe:
 // MigrateAsync never deletes). Hosted deploys have no dev machine to run
-// `dotnet ef database update` from, so initialise in every environment.
-await app.InitialiseDatabaseAsync();
+// `dotnet ef database update` from, so initialise in every environment —
+// except the OpenAPI doc-generation tool run at build time, which executes
+// this pipeline without a database.
+var isDocGen = string.Join(' ', Environment.GetCommandLineArgs())
+    .Contains("getdocument", StringComparison.OrdinalIgnoreCase);
+if (!isDocGen)
+{
+    await app.InitialiseDatabaseAsync();
+}
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
