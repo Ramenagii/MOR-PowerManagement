@@ -1,0 +1,20 @@
+﻿<Project Sdk="Aspire.AppHost.Sdk/13.2.0">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Mor.PowerManagement.AppHost</RootNamespace>
+    <AssemblyName>Mor.PowerManagement.AppHost</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+    <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
+    <PackageReference Include="Aspire.Hosting.JavaScript" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shared\Shared.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\Web\Web.csproj" />
+  </ItemGroup>
+
+</Project>

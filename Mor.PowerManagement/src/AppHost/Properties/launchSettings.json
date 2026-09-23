@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "https": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "https://mor.powermanagement.dev.localhost:17287;http://mor.powermanagement.dev.localhost:15166",
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "https://localhost:21010",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "https://localhost:22241"
+      }
+    },
+    "http": {
+      "commandName": "Project",
+      "dotnetRunMessages": true,
+      "launchBrowser": true,
+      "applicationUrl": "http://mor.powermanagement.dev.localhost:15166",
+      "environmentVariables": {
+        "ASPIRE_ALLOW_UNSECURED_TRANSPORT": "true",
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "DOTNET_ENVIRONMENT": "Development",
+        "DOTNET_DASHBOARD_OTLP_ENDPOINT_URL": "http://localhost:19224",
+        "DOTNET_RESOURCE_SERVICE_ENDPOINT_URL": "http://localhost:20097"
+      }
+    },
+    "manifest": {
+      "commandName": "Project",
+      "commandLineArgs": "--publisher manifest --output-path aspire-manifest.json",
+      "dotnetRunMessages": true,
+      "environmentVariables": {
+        "ASPNETCORE_ENVIRONMENT": "Production",
+        "DOTNET_ENVIRONMENT": "Production"
+      }
+    }
+  }
+}
