@@ -1,0 +1,8 @@
+artifacts/
+**/bin/
+**/obj/
+**/node_modules/
+src/Web/ClientApp/build/
+src/Web/wwwroot/assets/
+*.user
+.vs/

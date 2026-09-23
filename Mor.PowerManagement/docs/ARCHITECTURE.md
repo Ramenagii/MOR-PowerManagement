@@ -83,8 +83,22 @@ Wi-Fi + backend target: `WIFI_SSID` / `WIFI_PASS` / `BACKEND_HOST` /
 - **Stage 2 — Real hardware.** Wire relays/PZEM/CTs, set `SIMULATE_METERS 0`,
   reflash, re-validate thresholds against measured loads, keep SIM build as
   the documented fallback for bench tests.
-- **Stage 3 — Cloud (optional).** Host API+SPA on Azure/AWS/Render; Neon
-  already cloud. Only if remote access is required.
+- **Stage 3 — Public host (any device, no PC).** The app is host-ready:
+  `Dockerfile` at the solution root, `$PORT` binding, forwarded headers for
+  the host TLS proxy, and startup migrations in every environment.
+  1. Push to GitHub (done) and create a Render/Railway/Fly web service from
+     this repo (Docker build, no local Docker needed).
+  2. Env vars on the host: `ASPNETCORE_ENVIRONMENT=Production`,
+     `ConnectionStrings__Mor.PowerManagementDb=<Neon URL>`,
+     `Device__ApiKey=<shared secret>`. First boot auto-migrates Neon.
+  3. Note the public URL, e.g. `https://mor-power.onrender.com`.
+  4. Firmware for public backend: `BACKEND_HOST` = host domain (no
+     `https://`), `BACKEND_PORT 443`, `BACKEND_USE_TLS 1`,
+     `DEVICE_API_KEY` = same secret, reflash. Real certs are verified by
+     the host, so the firmware's insecure dev-cert mode is not used.
+  5. Dashboard + ESP32 then work from any device anywhere; the PC can stay
+     off. Free-tier hosts sleep when idle — first load and device sync take
+     ~30s to wake.
 
 ## 6. Operability (how you know it works)
 
