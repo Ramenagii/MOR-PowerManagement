@@ -335,6 +335,7 @@ bool syncConfig() {
 #endif
   HTTPClient http;
   if (!http.begin(client, backendUrl("/Device/config"))) return false;
+  if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
 
   int code = http.GET();
   if (code != 200) {
