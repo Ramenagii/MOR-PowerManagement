@@ -52,6 +52,7 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
         {
             outlet.Status = OutletStatus.Active;
             outlet.CurrentWatts = Math.Max(90, Math.Round(outlet.AllowanceWatts * 0.72));
+            outlet.CommandedAtUtc = now;
 
             _context.PowerEvents.Add(new PowerEvent
             {

@@ -28,6 +28,7 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
 
         outlet.Status = OutletStatus.Disconnected;
         outlet.CurrentWatts = 0;
+        outlet.CommandedAtUtc = DateTimeOffset.UtcNow;
 
         _context.PowerEvents.Add(new PowerEvent
         {

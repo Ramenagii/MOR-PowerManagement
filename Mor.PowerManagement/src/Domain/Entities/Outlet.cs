@@ -27,6 +27,11 @@ public class Outlet : BaseAuditableEntity
     // Live state, updated by telemetry ingest and policy actions.
     public OutletStatus Status { get; set; } = OutletStatus.Disconnected;
 
+    // Last dashboard command time (activation/disconnection). Telemetry must
+    // not overwrite the commanded state until the device has had time to
+    // confirm it (it polls config every ~15s, telemetry runs every ~5s).
+    public DateTimeOffset? CommandedAtUtc { get; set; }
+
     public double CurrentWatts { get; set; }
 
     public DateTimeOffset? LastSeen { get; set; }

@@ -114,14 +114,26 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 continue;
             }
 
-            outlet.Status = report.RelayClosed
-                // Outlets exempt from idle shutdown (IdleLimitMinutes == null,
-                // e.g. USB sockets) never downgrade to Standby: a small but
-                // legitimate load like 18W must not look like an idle device.
-                ? (outlet.IdleLimitMinutes is null || outlet.CurrentWatts > config.StandbyThresholdWatts
+            if (report.RelayClosed)
+            {
+                outlet.Status = outlet.IdleLimitMinutes is null || outlet.CurrentWatts > config.StandbyThresholdWatts
                     ? OutletStatus.Active
-                    : OutletStatus.Standby)
-                : OutletStatus.Disconnected;
+                    : OutletStatus.Standby;
+                outlet.CommandedAtUtc = null; // device confirmed: command fulfilled
+                continue;
+            }
+
+            // Relay reports open: only downgrade to Disconnected when the
+            // device has had a chance to confirm. A freshly commanded outlet
+            // (commanded <60s ago, device polls config every ~15s) keeps its
+            // commanded state until the device weighs in.
+            var confirmationPending = outlet.CommandedAtUtc.HasValue
+                && outlet.CommandedAtUtc.Value >= now.AddSeconds(-60);
+            if (!confirmationPending)
+            {
+                outlet.Status = OutletStatus.Disconnected;
+                outlet.CommandedAtUtc = null;
+            }
         }
 
         if (request.FaultFlag && outlets.Any(o => o.Status != OutletStatus.Restricted))
