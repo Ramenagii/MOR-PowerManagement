@@ -63,6 +63,69 @@ bool sFault = false;
 unsigned long lastTelemetryAt = 0;
 unsigned long lastConfigAt = 0;
 
+// ---- Multi-WiFi store (NVS "morwifi"): up to WIFI_SLOTS networks. ----
+Preferences nvsWifi;
+char wifiSsid[WIFI_SLOTS][33];
+char wifiPass[WIFI_SLOTS][65];
+int wifiLastOk = 0;
+
+void loadWifiSlots() {
+  for (int i = 0; i < WIFI_SLOTS; i++) {
+    wifiSsid[i][0] = 0;
+    wifiPass[i][0] = 0;
+  }
+  wifiLastOk = 0;
+  nvsWifi.begin("morwifi", true);
+  for (int i = 0; i < WIFI_SLOTS; i++) {
+    String s = nvsWifi.getString(("ssid" + String(i)).c_str(), "");
+    String p = nvsWifi.getString(("pass" + String(i)).c_str(), "");
+    s.toCharArray(wifiSsid[i], 33);
+    p.toCharArray(wifiPass[i], 65);
+  }
+  wifiLastOk = nvsWifi.getInt("lastok", 0);
+  nvsWifi.end();
+  // First boot ever: seed slot 0 from config.h (usually empty placeholders).
+  if (wifiSsid[0][0] == 0 && WIFI_SSID[0] != 0) {
+    strncpy(wifiSsid[0], WIFI_SSID, 32);
+    strncpy(wifiPass[0], WIFI_PASS, 64);
+  }
+  if (wifiLastOk < 0 || wifiLastOk >= WIFI_SLOTS) wifiLastOk = 0;
+}
+
+void saveWifiSlots() {
+  nvsWifi.begin("morwifi", false);
+  for (int i = 0; i < WIFI_SLOTS; i++) {
+    nvsWifi.putString(("ssid" + String(i)).c_str(), wifiSsid[i]);
+    nvsWifi.putString(("pass" + String(i)).c_str(), wifiPass[i]);
+  }
+  nvsWifi.putInt("lastok", wifiLastOk);
+  nvsWifi.end();
+}
+
+bool tryJoin(const char* ssid, const char* pass) {
+  if (ssid[0] == 0) return false;
+  Serial.printf("Wi-Fi trying \"%s\" ", ssid);
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_STA);
+  delay(200);
+  if (pass[0] == 0) {
+    WiFi.begin(ssid);
+  } else {
+    WiFi.begin(ssid, pass);
+  }
+  unsigned long deadline = millis() + WIFI_JOIN_TIMEOUT_MS;
+  while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.printf("wifi: join failed \"%s\" status=%d\n", ssid, (int)WiFi.status());
+    return false;
+  }
+  return true;
+}
+
 String backendUrl(const char* path) {
 #if BACKEND_USE_TLS
   String url = "https://";
@@ -389,14 +452,27 @@ void setup() {
   applyRelays();
 
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.print("Wi-Fi connecting");
-  for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(500);
-    Serial.print(".");
+  loadWifiSlots();
+
+  // Try last-working network first, then the rest.
+  bool linked = tryJoin(wifiSsid[wifiLastOk], wifiPass[wifiLastOk]);
+  for (int k = 0; !linked && k < WIFI_SLOTS; k++) {
+    int i = (wifiLastOk + k) % WIFI_SLOTS;
+    if (i == wifiLastOk) continue;
+    if (tryJoin(wifiSsid[i], wifiPass[i])) {
+      wifiLastOk = i;
+      saveWifiSlots();
+      linked = true;
+    }
   }
-  Serial.println();
-  if (WiFi.status() != WL_CONNECTED) {
+  if (!linked) {
+    Serial.println("wifi: scan start");
+    int scanN = WiFi.scanNetworks();
+    Serial.printf("wifi: scan found %d networks\n", scanN);
+    for (int i = 0; i < scanN; i++) {
+      Serial.printf("wifi: visible \"%s\" RSSI=%d ch=%d\n",
+                    WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
+    }
     Serial.println("Wi-Fi failed; running local-only until reset");
     return;
   }

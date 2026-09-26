@@ -12,8 +12,14 @@
 #define OUTLET_COUNT 13
 
 // ---- Wi-Fi ----
-#define WIFI_SSID "Tenda_7C8018"
-#define WIFI_PASS "newhome2024"
+// Credentials live in NVS flash (written on first setup), so the repo never
+// holds a real password. These are first-boot seeds only.
+#define WIFI_SSID ""
+#define WIFI_PASS ""
+
+// Saved-network store: up to WIFI_SLOTS SSID/password pairs in NVS.
+#define WIFI_SLOTS 3
+#define WIFI_JOIN_TIMEOUT_MS 12000UL
 
 // ---- Backend (ASP.NET Core Web API) ----
 // Cloud deployment (public, any-device access).

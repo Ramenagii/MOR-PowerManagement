@@ -47,8 +47,12 @@ physically possible — autonomy (edge) vs memory (server) is the thesis point.
   allowance. Relay pins: `{4,5,6,7,8,9,10,11,12,13,14,15,18}` (S3-safe,
   avoids strapping/USB/flash pins).
 
-Wi-Fi + backend target: `WIFI_SSID` / `WIFI_PASS` / `BACKEND_HOST` /
-`BACKEND_PORT` in `config.h`. Boot proof on serial @115200:
+Wi-Fi + backend target: `WIFI_SSID` / `WIFI_PASS` in `config.h` are first-boot
+seeds only; credentials persist in the NVS `morwifi` store (3 slots,
+last-working first, 12s join timeout each) so the repo never holds a real
+password. A `MOR-Setup` captive portal was prototyped for phone-based setup
+then removed to save ~35KB flash; Wi-Fi changes currently mean reflashing.
+Boot proof on serial @115200:
 `IP: 192.168.0.113` → `config synced: … 13 channels` → `telemetry: HTTP 200`.
 
 ## 4. Backend configuration
