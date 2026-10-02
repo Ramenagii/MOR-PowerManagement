@@ -26,7 +26,12 @@ public record ThresholdsDto(
     double MaxCapacityWatts,
     double WarningThresholdWatts,
     double CriticalThresholdWatts,
-    double StandbyThresholdWatts);
+    double StandbyThresholdWatts,
+    // Surfaced so the admin form can round-trip every field the
+    // UpdateThresholdsCommand accepts. Without these the UI could write them
+    // but never read them back, which made the setting invisible.
+    int StandbyIdleMinutes,
+    int StabilizationDelayMs);
 
 public record PowerEventDto(
     int Id,
@@ -103,7 +108,9 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 config.MaxCapacityWatts,
                 config.WarningThresholdWatts,
                 config.CriticalThresholdWatts,
-                config.StandbyThresholdWatts),
+                config.StandbyThresholdWatts,
+                config.StandbyIdleMinutes,
+                config.StabilizationDelayMs),
             events,
             deviceOnline,
             hasSeen ? deviceLastSeen : null);

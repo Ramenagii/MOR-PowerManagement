@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   backoffMs,
+  describeSeries,
   formatRelative,
   formatTick,
   formatValue,
+  histogram,
   niceDomain,
   pickTickIndices,
   roundToStep,
@@ -210,5 +212,71 @@ describe('backoffMs', () => {
     expect(backoffMs(1)).toBe(4000)
     expect(backoffMs(2)).toBe(8000)
     expect(backoffMs(10)).toBe(60_000)
+  })
+})
+
+describe('describeSeries', () => {
+  it('reports min, mean, max and sample sigma over present samples', () => {
+    const stats = describeSeries([2, 4, 4, 4, 5, 5, 7, 9])
+    expect(stats.count).toBe(8)
+    expect(stats.min).toBe(2)
+    expect(stats.max).toBe(9)
+    expect(stats.mean).toBe(5)
+    // Sample (n-1) sigma of this set is 2.13809...
+    expect(stats.stddev).toBeCloseTo(2.13809, 5)
+  })
+
+  it('skips null gaps instead of treating them as zero load', () => {
+    // The two nulls are relay-open gaps. Coercing them to 0 would drag the mean
+    // from 10 down to 5.71 and understate the real draw.
+    const stats = describeSeries([10, null, 10, null, 10])
+    expect(stats.count).toBe(3)
+    expect(stats.mean).toBe(10)
+    expect(stats.stddev).toBe(0)
+    expect(stats.min).toBe(10)
+  })
+
+  it('distinguishes a single sample from a perfectly steady series', () => {
+    // sigma is null (not 0) at n=1: "no data" must not read as "perfectly steady".
+    expect(describeSeries([7]).stddev).toBeNull()
+    expect(describeSeries([7, 7, 7]).stddev).toBe(0)
+  })
+
+  it('returns nulls for an entirely empty series', () => {
+    expect(describeSeries([null, null])).toEqual({
+      count: 0,
+      min: null,
+      max: null,
+      mean: null,
+      stddev: null,
+    })
+  })
+})
+
+describe('histogram', () => {
+  it('buckets samples and excludes nulls from every bin', () => {
+    const result = histogram([0, 1, 2, 3, null, null], 3)
+    expect(result).not.toBeNull()
+    // Range 0..3 over 3 bins of width 1: {0,1} {2} {3}
+    expect(result?.counts.reduce((a, b) => a + b, 0)).toBe(4)
+    expect(result?.min).toBe(0)
+    expect(result?.max).toBe(3)
+  })
+
+  it('returns null when the channel reported nothing at all', () => {
+    expect(histogram([null, null], 12)).toBeNull()
+  })
+
+  it('collapses a flat nominal rail into one bin instead of dividing by zero', () => {
+    // A 5 V USB rail reports a constant rating; edges must stay finite.
+    const result = histogram([5, 5, 5], 12)
+    expect(result?.counts).toEqual([3])
+    expect(Number.isFinite(result?.min)).toBe(true)
+    expect(Number.isFinite(result?.max)).toBe(true)
+  })
+
+  it('never drops a value sitting exactly at the maximum', () => {
+    const result = histogram([0, 5, 10], 2)
+    expect(result?.counts.reduce((a, b) => a + b, 0)).toBe(3)
   })
 })

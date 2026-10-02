@@ -1,5 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { Activity, Cpu, LayoutDashboard, SlidersHorizontal } from 'lucide-react'
+import { Activity, Cpu, Gauge, LayoutDashboard, Settings2, SlidersHorizontal } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import type { AppView } from '../types/dashboard'
 
@@ -9,7 +9,9 @@ const menuItems: Array<{
   icon: ReactNode
 }> = [
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
+  { id: 'channels', label: 'Channel Inventory', icon: <Gauge size={16} /> },
   { id: 'telemetry', label: 'Telemetry', icon: <Activity size={16} /> },
+  { id: 'admin', label: 'Policy Administration', icon: <Settings2 size={16} /> },
   { id: 'policies', label: 'Policies', icon: <SlidersHorizontal size={16} /> },
   { id: 'hardware', label: 'Hardware Components', icon: <Cpu size={16} /> },
 ]

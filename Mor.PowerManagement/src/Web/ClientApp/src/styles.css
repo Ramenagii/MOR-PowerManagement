@@ -1987,6 +1987,276 @@ h3 {
     --chart-h: 190px;
   }
 }
+/* ---------------------------------------------------------------------------
+   Channel Inventory (roadmap M2)
+   Card grid of the 13 metering channels. Readings use tabular numerals so the
+   figures stop jittering as they update every 10 s.
+   ------------------------------------------------------------------------- */
+
+.channel-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(268px, 1fr));
+}
+
+.channel-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 2px rgb(37 35 33 / 4%);
+}
+
+.channel-card.restricted,
+.channel-card.disconnected {
+  background: var(--surface-muted);
+}
+
+.channel-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.channel-card-header h3 {
+  font-size: 0.95rem;
+  margin: 2px 0 0;
+  line-height: 1.25;
+}
+
+.channel-id {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.channel-rail {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.channel-readings {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.channel-readings div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.channel-readings dt,
+.channel-stats span {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+}
+
+.channel-readings dd {
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 1.15rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.channel-readings span {
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.channel-allowance {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.channel-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.channel-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.channel-stats strong {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.channel-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 34px;
+}
+
+.histogram-bar {
+  flex: 1;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+  opacity: 0.75;
+}
+
+.channel-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.channel-coverage {
+  font-size: 0.7rem;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.icon-button.spin svg,
+svg.spin {
+  animation: mor-spin 900ms linear infinite;
+}
+
+@keyframes mor-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Policy Administration (roadmap M3)
+   ------------------------------------------------------------------------- */
+
+.threshold-form {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  margin-bottom: 16px;
+}
+
+.threshold-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.threshold-form input {
+  margin: 0;
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.threshold-preview {
+  margin-bottom: 12px;
+}
+
+.threshold-preview .warning-mark,
+.threshold-preview .critical-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.save-message {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+}
+
+.save-message.saved {
+  color: var(--blue-ink);
+}
+
+.save-message.error {
+  color: var(--red-ink);
+}
+
+.policy-table {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-x: auto;
+}
+
+.policy-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.6fr) minmax(110px, 1fr) minmax(100px, 0.9fr) minmax(110px, 1fr) minmax(100px, 0.9fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+}
+
+.policy-row.dirty {
+  background: var(--accent-soft);
+  border-color: var(--border-strong);
+}
+
+.policy-head {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--faint);
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.policy-channel {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.policy-channel strong {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.75rem;
+  color: var(--ink);
+}
+
+.policy-row input,
+.policy-row select {
+  margin: 0;
+  font-size: 0.82rem;
+  padding: 4px 8px;
+}
+
+.policy-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.info-card code {
+  font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.78em;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  white-space: nowrap;
+}
+
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1997,4 +2267,71 @@ h3 {
     scroll-behavior: auto !important;
     transition-duration: 1ms !important;
   }
+}
+
+/* Defense scenario panel: honesty surface. The result line must be legible in
+   all three tones, because it is the answer to "did that record anything?". */
+.scenario-honesty {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.scenario-honesty svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.scenario-result {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* Rows were stored and the policy engine answered. */
+.scenario-result.live {
+  border-color: #bfe0ef;
+  background: var(--accent-soft);
+  color: var(--blue-ink);
+}
+
+/* Backend unreachable: explicitly NOT stored. */
+.scenario-result.simulated {
+  border-color: #ecd9a4;
+  background: var(--yellow-soft);
+  color: var(--yellow-ink);
+}
+
+/* Write attempted and rejected. */
+.scenario-result.error {
+  border-color: #f2c9c9;
+  background: var(--red-soft);
+  color: var(--red-ink);
+}
+
+.scenario-result svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.scenario-grid button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

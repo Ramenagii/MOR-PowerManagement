@@ -351,6 +351,47 @@
         }
       }
     },
+    "/api/Dashboard/scenarios/ingest": {
+      "post": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Ingest a defense-demo telemetry batch",
+        "description": "Stores a scenario telemetry batch and returns the policy engine's own result: rows stored, aggregate watts, resulting system state and the events it raised. Metering mode is forced to Simulated because the batch is synthesised.",
+        "operationId": "IngestScenario",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IngestTelemetryCommand"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestTelemetryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
     "/api/Device/telemetry": {
       "post": {
         "tags": [
@@ -2307,7 +2348,9 @@
           "maxCapacityWatts",
           "warningThresholdWatts",
           "criticalThresholdWatts",
-          "standbyThresholdWatts"
+          "standbyThresholdWatts",
+          "standbyIdleMinutes",
+          "stabilizationDelayMs"
         ],
         "type": "object",
         "properties": {
@@ -2342,6 +2385,22 @@
               "string"
             ],
             "format": "double"
+          },
+          "standbyIdleMinutes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "stabilizationDelayMs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
           }
         }
       },

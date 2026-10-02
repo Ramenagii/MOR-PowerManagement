@@ -4,13 +4,14 @@ import { Activity, Gauge, PlugZap, ScanLine, ShieldCheck } from 'lucide-react'
 import {
   ApiError,
   activateOutlet,
-  applySelectiveResponse,
   checkSession,
   disconnectOutlet,
   fetchDashboardState,
+  ingestScenario,
   logout,
 } from './api'
 import { EventLogPanel } from './components/EventLogPanel'
+import { ChannelInventoryView } from './components/ChannelInventoryView'
 import { HardwareView } from './components/HardwareView'
 import { LoadwiseBrand } from './components/LoadwiseBrand'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -18,6 +19,7 @@ import { LoginGate } from './components/LoginGate'
 import { MetricCard } from './components/MetricCard'
 import { OutletCard } from './components/OutletCard'
 import { PoliciesView } from './components/PoliciesView'
+import { PolicyAdminView } from './components/PolicyAdminView'
 import { ScenarioPanel } from './components/ScenarioPanel'
 import { TelemetryView } from './components/TelemetryView'
 import { ViewMenu } from './components/ViewMenu'
@@ -26,11 +28,19 @@ import {
   CRITICAL_THRESHOLD,
   initialEvents,
   MAX_CAPACITY,
-  priorityRank,
   WARNING_THRESHOLD,
 } from './data/dashboard'
 import type { AppView, EventLog, Outlet, Severity } from './types/dashboard'
 import { formatWatts, getTimeStamp, isEnergizedOutlet, totalLoad } from './utils/dashboard'
+import {
+  buildScenarioPayload,
+  capacityBlockProfile,
+  idleProfile,
+  normalProfile,
+  overloadProfile,
+  selectiveProfile,
+  type ScenarioProfile,
+} from './utils/scenarios'
 
 type Session = 'checking' | 'authed' | 'login' | 'offline'
 
@@ -48,6 +58,14 @@ function App() {
   const [introDone, setIntroDone] = useState(false)
   const [introKey, setIntroKey] = useState(0)
   const [activeView, setActiveView] = useState<AppView>('dashboard')
+  // Outcome of the last scenario run, shown verbatim in the panel. This is the
+  // honesty surface: it states whether rows were actually stored, and reports
+  // the events the server's policy engine raised rather than a local string.
+  const [scenarioNotice, setScenarioNotice] = useState<{
+    tone: 'live' | 'simulated' | 'error'
+    text: string
+  } | null>(null)
+  const [scenarioBusy, setScenarioBusy] = useState(false)
   const prefersReducedMotion = useReducedMotion()
 
   const refreshFromBackend = useCallback(async () => {
@@ -133,19 +151,70 @@ function App() {
     fallback()
   }
 
-  const resetNormal = () => {
-    setOutlets(baseOutlets)
-    setEvents([
-      {
-        id: Date.now(),
-        time: getTimeStamp(),
-        title: 'Scenario reset',
-        detail: 'Baseline simulated laboratory load restored.',
-        severity: 'success',
-      },
-      ...initialEvents,
-    ])
+  // Defense scenarios now post real telemetry instead of only editing local
+  // state. The backend stores the rows, refreshes outlet state and runs the
+  // policy engine, so the events shown are the engine's own and the Telemetry
+  // charts move at the same time. If the backend is unreachable the local
+  // fallback still runs, and the banner says which path was taken.
+  const runScenario = async (profile: ScenarioProfile, label: string) => {
+    if (session !== 'authed' || !backendOnline) {
+      setScenarioNotice({
+        tone: 'simulated',
+        text: `${label}: backend unreachable, so only the on-screen preview changed. No rows were stored.`,
+      })
+      return
+    }
+
+    setScenarioBusy(true)
+    setScenarioNotice(null)
+    try {
+      const { readings, relayStates } = buildScenarioPayload(outlets, profile)
+      const result = await ingestScenario({
+        deviceId: 'dashboard-scenario',
+        readings,
+        relayStates,
+      })
+      await refreshFromBackend()
+
+      const events = result.eventsRaised.length
+        ? ` Policy engine raised: ${result.eventsRaised.join('; ')}.`
+        : ' No threshold crossing was raised for this batch.'
+      setScenarioNotice({
+        tone: 'live',
+        text: `${label}: ${result.readingsStored} readings stored, total ${Math.round(
+          result.totalWatts,
+        )} W.${events}`,
+      })
+    } catch (cause) {
+      setScenarioNotice({
+        tone: 'error',
+        text: `${label} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
+      })
+    } finally {
+      setScenarioBusy(false)
+    }
   }
+
+  const scenarioNormal = () => {
+    void runScenario(normalProfile(outlets), 'Normal operation')
+  }
+
+  const scenarioCapacityBlock = () => {
+    void runScenario(capacityBlockProfile(outlets), 'Capacity block')
+  }
+
+  const scenarioOverload = () => {
+    void runScenario(overloadProfile(outlets), 'Post-activation overload')
+  }
+
+  const scenarioSelective = () => {
+    void runScenario(selectiveProfile(outlets), 'Selective response')
+  }
+
+  const scenarioIdle = () => {
+    void runScenario(idleProfile(outlets), 'Idle shutdown')
+  }
+
 
   const requestActivationLocal = () => {
     const requested = outlets.find((outlet) => outlet.id === 6)
@@ -179,78 +248,6 @@ function App() {
     void runLive(() => activateOutlet(6), requestActivationLocal)
   }
 
-  const blockInsufficientCapacity = () => {
-    setOutlets((current) =>
-      current.map((outlet) => {
-        if (outlet.id === 1) return { ...outlet, watts: 520, status: 'Active' }
-        if (outlet.id === 2) return { ...outlet, watts: 500, status: 'Active' }
-        if (outlet.id === 3) return { ...outlet, watts: 420, status: 'Active' }
-        if (outlet.id === 4) return { ...outlet, watts: 330, status: 'Active' }
-        if (outlet.id === 5) return { ...outlet, watts: 150, status: 'Active' }
-        return { ...outlet, watts: 0, status: 'Restricted' }
-      }),
-    )
-    addEvent(
-      'Pre-activation restriction',
-      'A new low-priority outlet request was restricted because projected load would exceed the configured threshold.',
-      'warning',
-    )
-  }
-
-  const postActivationOverload = () => {
-    setOutlets((current) =>
-      current.map((outlet) => {
-        if (outlet.id === 6) return { ...outlet, watts: 460, status: 'Active' }
-        if (outlet.id === 5) return { ...outlet, watts: 160, status: 'Active' }
-        return outlet.status === 'Disconnected' ? { ...outlet, status: 'Standby' } : outlet
-      }),
-    )
-    addEvent(
-      'Post-activation verification failed',
-      'Measured outlet load exceeded the expected allowance after relay activation.',
-      'critical',
-    )
-  }
-
-  const selectiveResponseLocal = () => {
-    const lowPriority = outlets
-      .filter((outlet) => isEnergizedOutlet(outlet.status))
-      .sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority])
-      .slice(0, 2)
-      .map((outlet) => outlet.id)
-
-    setOutlets((current) =>
-      current.map((outlet) =>
-        lowPriority.includes(outlet.id)
-          ? { ...outlet, status: 'Disconnected', watts: 0 }
-          : outlet,
-      ),
-    )
-    addEvent(
-      'Selective load response applied',
-      'Low-priority outlets were disconnected first while high-priority outlets remained active when possible.',
-      'critical',
-    )
-  }
-
-  const selectiveResponse = () => {
-    void runLive(applySelectiveResponse, selectiveResponseLocal)
-  }
-
-  const idleShutdown = () => {
-    setOutlets((current) =>
-      current.map((outlet) =>
-        outlet.status === 'Standby' || outlet.watts <= 80
-          ? { ...outlet, status: 'Disconnected', watts: 0 }
-          : outlet,
-      ),
-    )
-    addEvent(
-      'Idle/standby policy enforced',
-      'Persistent low-load outlet activity was disconnected according to the configured idle threshold.',
-      'info',
-    )
-  }
 
   const replayIntro = () => {
     setIntroDone(false)
@@ -483,12 +480,14 @@ function App() {
 
                   <aside className="side-stack">
                     <ScenarioPanel
-                      onNormal={resetNormal}
+                      onNormal={scenarioNormal}
                       onActivate={requestActivation}
-                      onBlock={blockInsufficientCapacity}
-                      onOverload={postActivationOverload}
-                      onSelective={selectiveResponse}
-                      onIdle={idleShutdown}
+                      onBlock={scenarioCapacityBlock}
+                      onOverload={scenarioOverload}
+                      onSelective={scenarioSelective}
+                      onIdle={scenarioIdle}
+                      notice={scenarioNotice}
+                      busy={scenarioBusy}
                     />
                   </aside>
                 </section>
@@ -497,7 +496,11 @@ function App() {
               </>
             )}
 
+            {activeView === 'channels' && <ChannelInventoryView />}
+
             {activeView === 'telemetry' && <TelemetryView />}
+
+            {activeView === 'admin' && <PolicyAdminView />}
 
             {activeView === 'policies' && <PoliciesView />}
 

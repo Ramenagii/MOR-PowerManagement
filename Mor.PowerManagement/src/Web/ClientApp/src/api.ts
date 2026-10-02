@@ -34,6 +34,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 // Backend serializes JSON in camelCase with enums as numbers:
 // OutletPriority Low=1..Critical=4, OutletStatus Active=0..Disconnected=3,
 // EventSeverity Info=0..Critical=3, SystemState Normal=0..Critical=2.
+// Inverse of toPriority: the backend binds OutletPriority as its numeric value, so
+// the admin form's string has to go back as a number or the PUT silently no-ops
+// (FluentValidation ignores the unparseable member, Priority is not validated).
+const priorityValues: Record<Priority, number> = {
+  Low: 1,
+  Medium: 2,
+  High: 3,
+  Critical: 4,
+}
+
 function toPriority(value: number): Priority {
   switch (value) {
     case 4:
@@ -95,16 +105,29 @@ type BackendState = {
     warningThresholdWatts: number
     criticalThresholdWatts: number
     standbyThresholdWatts: number
+    // Returned by GetDashboardState so the admin form can round-trip every
+    // field UpdateThresholdsCommand accepts, rather than write blind.
+    standbyIdleMinutes: number
+    stabilizationDelayMs: number
   }
   recentEvents: BackendEvent[]
   deviceOnline: boolean
   deviceLastSeen: string | null
 }
 
+export type ThresholdSet = {
+  max: number
+  warning: number
+  critical: number
+  standby: number
+  standbyIdleMinutes: number
+  stabilizationDelayMs: number
+}
+
 export type DashboardSnapshot = {
   outlets: Outlet[]
   events: EventLog[]
-  thresholds: { max: number; warning: number; critical: number }
+  thresholds: ThresholdSet
   deviceOnline: boolean
   deviceLastSeen: string | null
 }
@@ -151,6 +174,11 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
       max: state.thresholds.maxCapacityWatts || MAX_CAPACITY,
       warning: state.thresholds.warningThresholdWatts || WARNING_THRESHOLD,
       critical: state.thresholds.criticalThresholdWatts || CRITICAL_THRESHOLD,
+      // Standby has no client-side fallback constant, so read it directly; the
+      // other three keep their offline defaults for the pre-login render.
+      standby: state.thresholds.standbyThresholdWatts || 80,
+      standbyIdleMinutes: state.thresholds.standbyIdleMinutes ?? 30,
+      stabilizationDelayMs: state.thresholds.stabilizationDelayMs ?? 500,
     },
     deviceOnline: state.deviceOnline ?? false,
     deviceLastSeen: state.deviceLastSeen ?? null,
@@ -182,6 +210,43 @@ export async function fetchPolicies(): Promise<PolicyItem[]> {
   }))
 }
 
+// ---------------------------------------------------------------------------
+// Administration (PUT /api/Dashboard/thresholds, PUT .../outlets/{id}/policy)
+// Both commands are partial: only the fields present are applied server-side,
+// so the admin forms can send one value at a time.
+// ---------------------------------------------------------------------------
+
+export async function updateThresholds(input: {
+  maxCapacityWatts?: number
+  warningThresholdWatts?: number
+  criticalThresholdWatts?: number
+  standbyThresholdWatts?: number
+  standbyIdleMinutes?: number
+  stabilizationDelayMs?: number
+}): Promise<void> {
+  await request('/Dashboard/thresholds', { method: 'PUT', body: JSON.stringify(input) })
+}
+
+export async function updateOutletPolicy(
+  id: number,
+  input: {
+    priority?: Priority
+    allowanceWatts?: number
+    schedule?: string
+    idleLimitMinutes?: number
+    clearIdleLimit?: boolean
+  },
+): Promise<void> {
+  await request(`/Dashboard/outlets/${id}/policy`, {
+    method: 'PUT',
+    body: JSON.stringify({
+      ...input,
+      // Numeric, not the display string. See priorityValues above.
+      ...(input.priority !== undefined ? { priority: priorityValues[input.priority] } : {}),
+    }),
+  })
+}
+
 export async function activateOutlet(id: number): Promise<void> {
   await request(`/Dashboard/outlets/${id}/activation`, { method: 'POST' })
 }
@@ -192,6 +257,78 @@ export async function disconnectOutlet(id: number): Promise<void> {
 
 export async function applySelectiveResponse(): Promise<void> {
   await request('/Dashboard/shedding/selective', { method: 'POST', body: JSON.stringify({ count: 2 }) })
+}
+
+// ---------------------------------------------------------------------------
+// Device telemetry ingest (POST /api/Device/telemetry)
+//
+// Used by the defense scenario controls so a demonstration writes REAL rows
+// into TelemetryReadings instead of only mutating React state. That is what
+// makes the Telemetry charts move in step with the control action.
+// ---------------------------------------------------------------------------
+
+/**
+ * Backend MeteringMode enum values, for reference when reading API payloads.
+ * NOTE: these are integers on the wire -- there is no JsonStringEnumConverter
+ * registered, so System.Text.Json binds enums from numbers. The scenario
+ * endpoint forces Simulated server-side and the client does not send it.
+ */
+export const METERING_MODE = {
+  /** Device has not reported a mode (pre-provenance firmware, or no config row). */
+  Unknown: 0,
+  /** SIMULATE_METERS = 1: the ESP32 synthesises every reading on-device. */
+  Simulated: 1,
+  /** SIMULATE_METERS = 0: a real PZEM-004T is on the common mains feed. */
+  Metered: 2,
+} as const
+
+export type MeteringMode = (typeof METERING_MODE)[keyof typeof METERING_MODE]
+
+export type TelemetrySampleInput = {
+  outletId: number
+  voltage: number
+  currentAmps: number
+  powerWatts: number
+  energyKwh: number
+}
+
+export type RelayStateInput = {
+  outletId: number
+  relayClosed: boolean
+}
+
+export type IngestResult = {
+  totalWatts: number
+  /** SystemState enum: Normal=0, Warning=1, Critical=2. */
+  state: number
+  readingsStored: number
+  eventsRaised: string[]
+}
+
+/**
+ * Posts a batch of readings for the defense-demo scenario controls.
+ *
+ * Targets /Dashboard/scenarios/ingest, NOT /Device/telemetry. The device route
+ * is gated on the X-Device-Key shared secret; the SPA must never hold that key,
+ * since anyone able to read the bundled JavaScript could then inject readings.
+ * The dashboard route uses the normal cookie auth and forces meteringMode to
+ * Simulated server-side, so a demo batch cannot relabel itself as measured.
+ *
+ * The backend persists the rows, refreshes live outlet state, and evaluates
+ * threshold crossings and fault lockout -- so any event this produces is a
+ * genuine consequence of the policy engine, not a string invented in the
+ * browser.
+ */
+export async function ingestScenario(input: {
+  deviceId?: string
+  faultFlag?: boolean
+  readings: TelemetrySampleInput[]
+  relayStates: RelayStateInput[]
+}): Promise<IngestResult> {
+  return request<IngestResult>('/Dashboard/scenarios/ingest', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 // Identity cookie endpoints (surfaced under /api/Users/*).

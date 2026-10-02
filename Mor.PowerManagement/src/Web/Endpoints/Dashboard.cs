@@ -1,5 +1,6 @@
 using Mor.PowerManagement.Application.Power.Commands.ApplySelectiveResponse;
 using Mor.PowerManagement.Application.Power.Commands.DisconnectOutlet;
+using Mor.PowerManagement.Application.Power.Commands.IngestTelemetry;
 using Mor.PowerManagement.Application.Power.Commands.RequestOutletActivation;
 using Mor.PowerManagement.Application.Power.Commands.UpdateOutletPolicy;
 using Mor.PowerManagement.Application.Power.Commands.UpdateThresholds;
@@ -27,6 +28,7 @@ public class Dashboard : IEndpointGroup
         groupBuilder.MapPost(ApplySelectiveResponse, "shedding/selective");
         groupBuilder.MapPut(UpdateOutletPolicy, "outlets/{id}/policy");
         groupBuilder.MapPut(UpdateThresholds, "thresholds");
+        groupBuilder.MapPost(IngestScenario, "scenarios/ingest");
     }
 
     [EndpointSummary("Get dashboard state")]
@@ -169,5 +171,38 @@ public class Dashboard : IEndpointGroup
         await sender.Send(command);
 
         return TypedResults.NoContent();
+    }
+
+    /// <summary>
+    /// Defense-demo scenario ingest. Stores a telemetry batch through the same
+    /// IngestTelemetry command the ESP32 uses, so the policy engine evaluates it
+    /// and the resulting events are genuine rather than written by the browser.
+    ///
+    /// This exists because /api/Device/telemetry is gated on the X-Device-Key
+    /// shared secret, which the SPA must not hold: anyone who could read the
+    /// bundled JavaScript could then inject readings. This route uses the normal
+    /// dashboard cookie instead, so the demo works on a host that has
+    /// Device:ApiKey configured without ever shipping that key to the client.
+    ///
+    /// meteringMode is deliberately forced to Simulated. A demo batch is
+    /// synthesised, and letting the caller assert otherwise would let a
+    /// demonstration relabel itself as measured data.
+    /// </summary>
+    [EndpointSummary("Ingest a defense-demo telemetry batch")]
+    [EndpointDescription(
+        "Stores a scenario telemetry batch and returns the policy engine's own result: rows stored, " +
+        "aggregate watts, resulting system state and the events it raised. Metering mode is forced to " +
+        "Simulated because the batch is synthesised.")]
+    public static async Task<Results<Ok<IngestTelemetryResult>, BadRequest>> IngestScenario(
+        ISender sender,
+        IngestTelemetryCommand command)
+    {
+        var result = await sender.Send(command with
+        {
+            DeviceId = command.DeviceId ?? "dashboard-scenario",
+            MeteringMode = Domain.Enums.MeteringMode.Simulated,
+        });
+
+        return TypedResults.Ok(result);
     }
 }

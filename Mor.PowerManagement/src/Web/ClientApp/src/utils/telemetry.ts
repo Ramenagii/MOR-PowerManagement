@@ -154,6 +154,84 @@ export function seriesStats(values: Array<number | null>): {
 }
 
 /**
+ * Full descriptive statistics over a nullable series, for the inventory stat strips
+ * (min / mean / max / sigma). Same null discipline as seriesStats: a gap is skipped,
+ * never coerced to 0, so an open relay does not drag the mean down.
+ *
+ * stddev is the sample standard deviation (n-1). With a single sample there is no
+ * spread to report, so sigma is null rather than 0 — 0 would read as "perfectly
+ * steady", which is a different claim from "not enough data".
+ */
+export function describeSeries(values: Array<number | null>): {
+  count: number
+  min: number | null
+  max: number | null
+  mean: number | null
+  stddev: number | null
+} {
+  let min: number | null = null
+  let max: number | null = null
+  let sum = 0
+  let count = 0
+
+  for (const value of values) {
+    if (value === null || !Number.isFinite(value)) continue
+    if (min === null || value < min) min = value
+    if (max === null || value > max) max = value
+    sum += value
+    count += 1
+  }
+
+  if (count === 0) return { count: 0, min: null, max: null, mean: null, stddev: null }
+
+  const mean = sum / count
+  if (count === 1) return { count, min, max, mean, stddev: null }
+
+  // Two-pass variance (mean already known) rather than sum-of-squares, which loses
+  // precision when the values sit far from zero — volts are the case that bites.
+  let acc = 0
+  for (const value of values) {
+    if (value === null || !Number.isFinite(value)) continue
+    const delta = value - mean
+    acc += delta * delta
+  }
+
+  return { count, min, max, mean, stddev: Math.sqrt(acc / (count - 1)) }
+}
+
+/**
+ * Bucket a nullable series into `binCount` equal-width bins for the load histogram.
+ * Nulls are ignored (they are gaps, not zero-load samples). Returns bin lower edges
+ * plus counts, so the caller can label an axis without re-deriving the scale.
+ */
+export function histogram(
+  values: Array<number | null>,
+  binCount = 12,
+): { min: number; max: number; counts: number[] } | null {
+  const present = values.filter((v): v is number => v !== null && Number.isFinite(v))
+  if (present.length === 0) return null
+
+  const min = Math.min(...present)
+  const max = Math.max(...present)
+  const bins = Math.max(1, Math.floor(binCount))
+
+  // A flat series (a nominal 5 V rail) has no width to divide; everything lands in
+  // the single bin rather than producing NaN edges.
+  if (max === min) return { min, max, counts: [present.length] }
+
+  const width = (max - min) / bins
+  const counts = new Array<number>(bins).fill(0)
+
+  for (const value of present) {
+    // Clamp the last bin so a value exactly at max does not fall outside the array.
+    const index = Math.min(bins - 1, Math.floor((value - min) / width))
+    counts[index] += 1
+  }
+
+  return { min, max, counts }
+}
+
+/**
  * Split a nullable series into one path string per contiguous run of non-null
  * values. This is the correctness-critical helper: a skipped null terminates the
  * current run, so a relay-open period renders as a break in the line rather than
