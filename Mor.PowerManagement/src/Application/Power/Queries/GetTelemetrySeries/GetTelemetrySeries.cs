@@ -256,7 +256,11 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         var axis = new Dictionary<long, int>(axisCount);
         for (var i = 0; i < axisCount; i++)
         {
-            axis[(alignedFrom + TimeSpan.FromSeconds((long)bucketSeconds * i)).Ticks] = i;
+            // UtcTicks on both sides of the pivot: alignedFrom is BinEpoch-based
+            // (offset 0) and Postgres returns timestamptz as offset 0, but Ticks
+            // silently disagrees with UtcTicks for any other offset and every row
+            // would miss the axis and be dropped from sampleCount.
+            axis[(alignedFrom + TimeSpan.FromSeconds((long)bucketSeconds * i)).UtcTicks] = i;
         }
 
         var byId = meta.ToDictionary(
@@ -284,7 +288,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
             // Energy is a monotonic counter, so first/last by timestamp is the
             // window delta. Tracked globally rather than per channel: the device
             // reports one energy register and copies it across channels.
-            if (!axis.TryGetValue(row.Timestamp.Ticks, out var i))
+            if (!axis.TryGetValue(row.Timestamp.UtcTicks, out var i))
             {
                 continue;
             }
@@ -390,8 +394,20 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     // Floor a timestamp onto the fixed epoch's bucket grid. Bucket seconds always
     // divide a second, so second-resolution ticks are exact and no timezone or
     // DST arithmetic ever enters (E9).
+    //
+    // The subtraction of BinEpoch.Ticks is load-bearing, not decoration.
+    // DateTimeOffset.Ticks counts from 0001-01-01; date_bin's origin is
+    // BinEpoch (2001-01-01). Flooring the raw tick count and adding it *to*
+    // BinEpoch therefore lands ~2025 ticks past the epoch — the year 4026 — and
+    // every WHERE range built from it matches zero rows. UtcTicks, not Ticks, so
+    // a non-UTC offset cannot shift the grid either.
     private static DateTimeOffset DateBin(DateTimeOffset value, int bucketSeconds)
-        => BinEpoch.AddTicks(value.Ticks - (value.Ticks % (TimeSpan.TicksPerSecond * bucketSeconds)));
+    {
+        var stride = TimeSpan.TicksPerSecond * bucketSeconds;
+        var sinceEpoch = value.UtcTicks - BinEpoch.Ticks;
+
+        return BinEpoch.AddTicks(sinceEpoch - (sinceEpoch % stride));
+    }
 
     private static double Round(double value, int digits)
         => Math.Round(value, digits, MidpointRounding.AwayFromZero);
