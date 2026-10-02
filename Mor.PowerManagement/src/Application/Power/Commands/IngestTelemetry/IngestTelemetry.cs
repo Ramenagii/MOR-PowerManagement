@@ -32,6 +32,10 @@ public record IngestTelemetryCommand : IRequest<IngestTelemetryResult>
     // S_fault: sensor or communication health flag from the ESP32.
     public bool FaultFlag { get; init; }
 
+    // Provenance of the readings in this batch. Optional so older firmware that
+    // omits it keeps working (U10) — absent simply leaves the stored mode alone.
+    public MeteringMode? MeteringMode { get; init; }
+
     public List<TelemetrySample> Readings { get; init; } = new();
 
     public List<RelayStateReport> RelayStates { get; init; } = new();
@@ -77,6 +81,14 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         var config = await _context.PowerSystemConfigs
             .FirstOrDefaultAsync(cancellationToken)
             ?? new PowerSystemConfig();
+
+        // Provenance is device-sourced (D8): it is only ever written from the
+        // device's own report, never assumed here.
+        if (request.MeteringMode is { } meteringMode)
+        {
+            config.MeteringMode = meteringMode;
+            config.MeteringModeUpdatedAt = now;
+        }
 
         var outlets = await _context.Outlets.ToListAsync(cancellationToken);
         var byId = outlets.ToDictionary(o => o.Id);

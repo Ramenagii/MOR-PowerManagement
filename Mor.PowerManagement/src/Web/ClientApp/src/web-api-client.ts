@@ -68,6 +68,70 @@ export class DashboardClient {
     }
 
     /**
+     * Get telemetry series
+     * @param window (optional) 
+     * @param channels (optional) 
+     * @return OK
+     */
+    getTelemetry(window: string | undefined, channels: string | undefined): Promise<TelemetrySeriesVm> {
+        let url_ = this.baseUrl + "/api/Dashboard/telemetry?";
+        if (window === null)
+            throw new globalThis.Error("The parameter 'window' cannot be null.");
+        else if (window !== undefined)
+            url_ += "window=" + encodeURIComponent("" + window) + "&";
+        if (channels === null)
+            throw new globalThis.Error("The parameter 'channels' cannot be null.");
+        else if (channels !== undefined)
+            url_ += "channels=" + encodeURIComponent("" + channels) + "&";
+        url_ = url_.replace(/[?&]$/, "");
+
+        let options_: RequestInit = {
+            method: "GET",
+            headers: {
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processGetTelemetry(_response);
+        });
+    }
+
+    protected processGetTelemetry(response: Response): Promise<TelemetrySeriesVm> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result200 = TelemetrySeriesVm.fromJS(resultData200);
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            let result400: any = null;
+            let resultData400 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+                result400 = resultData400 !== undefined ? resultData400 : null as any;
+    
+            return throwException("Bad Request", status, _responseText, _headers, result400);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<TelemetrySeriesVm>(null as any);
+    }
+
+    /**
      * Get control policies
      * @return OK
      */
@@ -2393,6 +2457,7 @@ export interface IInfoResponse {
 export class IngestTelemetryCommand implements IIngestTelemetryCommand {
     deviceId?: string | undefined;
     faultFlag?: boolean;
+    meteringMode?: number | undefined;
     readings?: TelemetrySample[];
     relayStates?: RelayStateReport[];
 
@@ -2415,6 +2480,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
             }
             this.deviceId = _data["deviceId"];
             this.faultFlag = _data["faultFlag"];
+            this.meteringMode = _data["meteringMode"];
             if (Array.isArray(_data["readings"])) {
                 this.readings = [] as any;
                 for (let item of _data["readings"])
@@ -2443,6 +2509,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
         }
         data["deviceId"] = this.deviceId;
         data["faultFlag"] = this.faultFlag;
+        data["meteringMode"] = this.meteringMode;
         if (Array.isArray(this.readings)) {
             data["readings"] = [];
             for (let item of this.readings)
@@ -2460,6 +2527,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
 export interface IIngestTelemetryCommand {
     deviceId?: string | undefined;
     faultFlag?: boolean;
+    meteringMode?: number | undefined;
     readings?: TelemetrySample[];
     relayStates?: RelayStateReport[];
 
@@ -3196,6 +3264,132 @@ export interface ISelectiveResponseResult {
     [key: string]: any;
 }
 
+export class TelemetryChannelDto implements ITelemetryChannelDto {
+    outletId!: number;
+    name!: string;
+    relayChannel!: string;
+    ratedVoltageVolts!: number;
+    provenance!: string;
+    provenanceNote!: string;
+    sampleCount!: number;
+    volts!: (number | undefined)[];
+    amps!: (number | undefined)[];
+    watts!: (number | undefined)[];
+    peakWatts!: (number | undefined)[];
+
+    [key: string]: any;
+
+    constructor(data?: ITelemetryChannelDto) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.volts = [];
+            this.amps = [];
+            this.watts = [];
+            this.peakWatts = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.outletId = _data["outletId"];
+            this.name = _data["name"];
+            this.relayChannel = _data["relayChannel"];
+            this.ratedVoltageVolts = _data["ratedVoltageVolts"];
+            this.provenance = _data["provenance"];
+            this.provenanceNote = _data["provenanceNote"];
+            this.sampleCount = _data["sampleCount"];
+            if (Array.isArray(_data["volts"])) {
+                this.volts = [] as any;
+                for (let item of _data["volts"])
+                    this.volts!.push(item);
+            }
+            if (Array.isArray(_data["amps"])) {
+                this.amps = [] as any;
+                for (let item of _data["amps"])
+                    this.amps!.push(item);
+            }
+            if (Array.isArray(_data["watts"])) {
+                this.watts = [] as any;
+                for (let item of _data["watts"])
+                    this.watts!.push(item);
+            }
+            if (Array.isArray(_data["peakWatts"])) {
+                this.peakWatts = [] as any;
+                for (let item of _data["peakWatts"])
+                    this.peakWatts!.push(item);
+            }
+        }
+    }
+
+    static fromJS(data: any): TelemetryChannelDto {
+        data = typeof data === 'object' ? data : {};
+        let result = new TelemetryChannelDto();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["outletId"] = this.outletId;
+        data["name"] = this.name;
+        data["relayChannel"] = this.relayChannel;
+        data["ratedVoltageVolts"] = this.ratedVoltageVolts;
+        data["provenance"] = this.provenance;
+        data["provenanceNote"] = this.provenanceNote;
+        data["sampleCount"] = this.sampleCount;
+        if (Array.isArray(this.volts)) {
+            data["volts"] = [];
+            for (let item of this.volts)
+                data["volts"].push(item);
+        }
+        if (Array.isArray(this.amps)) {
+            data["amps"] = [];
+            for (let item of this.amps)
+                data["amps"].push(item);
+        }
+        if (Array.isArray(this.watts)) {
+            data["watts"] = [];
+            for (let item of this.watts)
+                data["watts"].push(item);
+        }
+        if (Array.isArray(this.peakWatts)) {
+            data["peakWatts"] = [];
+            for (let item of this.peakWatts)
+                data["peakWatts"].push(item);
+        }
+        return data;
+    }
+}
+
+export interface ITelemetryChannelDto {
+    outletId: number;
+    name: string;
+    relayChannel: string;
+    ratedVoltageVolts: number;
+    provenance: string;
+    provenanceNote: string;
+    sampleCount: number;
+    volts: (number | undefined)[];
+    amps: (number | undefined)[];
+    watts: (number | undefined)[];
+    peakWatts: (number | undefined)[];
+
+    [key: string]: any;
+}
+
 export class TelemetrySample implements ITelemetrySample {
     outletId?: number;
     voltage?: number;
@@ -3256,6 +3450,194 @@ export interface ITelemetrySample {
     currentAmps?: number;
     powerWatts?: number;
     energyKwh?: number;
+
+    [key: string]: any;
+}
+
+export class TelemetrySeriesVm implements ITelemetrySeriesVm {
+    from!: Date;
+    to!: Date;
+    window!: string;
+    bucketSeconds!: number;
+    resolution!: string;
+    windowLabel!: string;
+    bucketCount!: number;
+    rawSampleCount!: number;
+    truncated!: boolean;
+    meteringMode!: string;
+    generatedAt!: Date;
+    latestSampleAt!: Date | undefined;
+    timestamps!: Date[];
+    channels!: TelemetryChannelDto[];
+    totals!: TelemetryTotalsDto;
+
+    [key: string]: any;
+
+    constructor(data?: ITelemetrySeriesVm) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.timestamps = [];
+            this.channels = [];
+            this.totals = new TelemetryTotalsDto();
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.from = _data["from"] ? new Date(_data["from"].toString()) : undefined as any;
+            this.to = _data["to"] ? new Date(_data["to"].toString()) : undefined as any;
+            this.window = _data["window"];
+            this.bucketSeconds = _data["bucketSeconds"];
+            this.resolution = _data["resolution"];
+            this.windowLabel = _data["windowLabel"];
+            this.bucketCount = _data["bucketCount"];
+            this.rawSampleCount = _data["rawSampleCount"];
+            this.truncated = _data["truncated"];
+            this.meteringMode = _data["meteringMode"];
+            this.generatedAt = _data["generatedAt"] ? new Date(_data["generatedAt"].toString()) : undefined as any;
+            this.latestSampleAt = _data["latestSampleAt"] ? new Date(_data["latestSampleAt"].toString()) : undefined as any;
+            if (Array.isArray(_data["timestamps"])) {
+                this.timestamps = [] as any;
+                for (let item of _data["timestamps"])
+                    this.timestamps!.push(new Date(item));
+            }
+            if (Array.isArray(_data["channels"])) {
+                this.channels = [] as any;
+                for (let item of _data["channels"])
+                    this.channels!.push(TelemetryChannelDto.fromJS(item));
+            }
+            this.totals = _data["totals"] ? TelemetryTotalsDto.fromJS(_data["totals"]) : new TelemetryTotalsDto();
+        }
+    }
+
+    static fromJS(data: any): TelemetrySeriesVm {
+        data = typeof data === 'object' ? data : {};
+        let result = new TelemetrySeriesVm();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["from"] = this.from ? this.from.toISOString() : undefined as any;
+        data["to"] = this.to ? this.to.toISOString() : undefined as any;
+        data["window"] = this.window;
+        data["bucketSeconds"] = this.bucketSeconds;
+        data["resolution"] = this.resolution;
+        data["windowLabel"] = this.windowLabel;
+        data["bucketCount"] = this.bucketCount;
+        data["rawSampleCount"] = this.rawSampleCount;
+        data["truncated"] = this.truncated;
+        data["meteringMode"] = this.meteringMode;
+        data["generatedAt"] = this.generatedAt ? this.generatedAt.toISOString() : undefined as any;
+        data["latestSampleAt"] = this.latestSampleAt ? this.latestSampleAt.toISOString() : undefined as any;
+        if (Array.isArray(this.timestamps)) {
+            data["timestamps"] = [];
+            for (let item of this.timestamps)
+                data["timestamps"].push(item.toISOString());
+        }
+        if (Array.isArray(this.channels)) {
+            data["channels"] = [];
+            for (let item of this.channels)
+                data["channels"].push(item ? item.toJSON() : undefined as any);
+        }
+        data["totals"] = this.totals ? this.totals.toJSON() : undefined as any;
+        return data;
+    }
+}
+
+export interface ITelemetrySeriesVm {
+    from: Date;
+    to: Date;
+    window: string;
+    bucketSeconds: number;
+    resolution: string;
+    windowLabel: string;
+    bucketCount: number;
+    rawSampleCount: number;
+    truncated: boolean;
+    meteringMode: string;
+    generatedAt: Date;
+    latestSampleAt: Date | undefined;
+    timestamps: Date[];
+    channels: TelemetryChannelDto[];
+    totals: TelemetryTotalsDto;
+
+    [key: string]: any;
+}
+
+export class TelemetryTotalsDto implements ITelemetryTotalsDto {
+    watts!: (number | undefined)[];
+    energyKwhDelta!: number | undefined;
+
+    [key: string]: any;
+
+    constructor(data?: ITelemetryTotalsDto) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.watts = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            if (Array.isArray(_data["watts"])) {
+                this.watts = [] as any;
+                for (let item of _data["watts"])
+                    this.watts!.push(item);
+            }
+            this.energyKwhDelta = _data["energyKwhDelta"];
+        }
+    }
+
+    static fromJS(data: any): TelemetryTotalsDto {
+        data = typeof data === 'object' ? data : {};
+        let result = new TelemetryTotalsDto();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        if (Array.isArray(this.watts)) {
+            data["watts"] = [];
+            for (let item of this.watts)
+                data["watts"].push(item);
+        }
+        data["energyKwhDelta"] = this.energyKwhDelta;
+        return data;
+    }
+}
+
+export interface ITelemetryTotalsDto {
+    watts: (number | undefined)[];
+    energyKwhDelta: number | undefined;
 
     [key: string]: any;
 }

@@ -51,6 +51,12 @@
 // 1 = synthesize mains readings (no PZEM needed), 0 = read the real PZEM.
 #define SIMULATE_METERS 1
 
+// Provenance reported to the backend with every telemetry batch (D8). The
+// backend labels the dashboard charts from this instead of hardcoding a claim,
+// so the UI stays honest in both bench and metered states. The value posted is
+// derived from SIMULATE_METERS: 1 = Simulated, 2 = Metered.
+#define REPORT_METERING_MODE
+
 // ---- Relay outputs, one per outlet channel ----
 // Order: 8x220V (CH1-8), 1x110V via step-down (CH9), 4xUSB 5V (CH10-13).
 // Safe ESP32-S3 GPIOs avoiding strapping (0,3,45,46), USB (19,20) and SPI flash.

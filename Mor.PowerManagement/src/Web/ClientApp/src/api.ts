@@ -210,3 +210,66 @@ export async function login(email: string, password: string): Promise<void> {
 export async function logout(): Promise<void> {
   await request('/Users/logout', { method: 'POST', body: '{}' })
 }
+
+// ---------------------------------------------------------------------------
+// Telemetry series (GET /api/Dashboard/telemetry)
+// ---------------------------------------------------------------------------
+
+export type TelemetryWindow = '15m' | '1h' | '6h' | '24h' | '7d'
+
+export type TelemetryProvenance =
+  | 'Measured'
+  | 'DerivedNominal'
+  | 'DerivedLoadShare'
+  | 'Simulated'
+  | 'Unknown'
+
+export type TelemetryChannel = {
+  outletId: number
+  name: string
+  relayChannel: string
+  ratedVoltageVolts: number
+  provenance: TelemetryProvenance
+  provenanceNote: string
+  sampleCount: number
+  volts: Array<number | null>
+  amps: Array<number | null>
+  watts: Array<number | null>
+  peakWatts: Array<number | null>
+}
+
+export type TelemetrySeries = {
+  from: string
+  to: string
+  window: TelemetryWindow
+  bucketSeconds: number
+  resolution: string
+  windowLabel: string
+  bucketCount: number
+  rawSampleCount: number
+  truncated: boolean
+  meteringMode: string
+  generatedAt: string
+  latestSampleAt: string | null
+  timestamps: string[]
+  channels: TelemetryChannel[]
+  totals: { watts: Array<number | null>; energyKwhDelta: number | null }
+}
+
+const ALL_CHANNELS = 13
+
+// `channels` is omitted when nothing is filtered, so the server returns all 13.
+// Any other subset is sent as a sorted, comma-joined id list.
+function telemetryQuery(window: TelemetryWindow, channels?: number[]): string {
+  const base = `?window=${encodeURIComponent(window)}`
+  if (!channels || channels.length === 0 || channels.length === ALL_CHANNELS) return base
+  return `${base}&channels=${[...channels].sort((a, b) => a - b).join(',')}`
+}
+
+export async function fetchTelemetrySeries(
+  window: TelemetryWindow,
+  channels?: number[],
+  signal?: AbortSignal,
+): Promise<TelemetrySeries> {
+  return request<TelemetrySeries>(`/Dashboard/telemetry${telemetryQuery(window, channels)}`, { signal })
+}

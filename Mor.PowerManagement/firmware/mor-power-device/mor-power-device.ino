@@ -400,6 +400,12 @@ bool postTelemetry() {
   doc["faultFlag"] = sFault;
   doc["missedPosts"] = missedPosts;
 
+#ifdef REPORT_METERING_MODE
+  // Provenance for the values in this batch: 1 = Simulated (SIMULATE_METERS),
+  // 2 = Metered (a real PZEM-004T sits on the common mains feed).
+  doc["meteringMode"] = SIMULATE_METERS ? 1 : 2;
+#endif
+
   JsonArray readings = doc["readings"].to<JsonArray>();
   JsonArray relays = doc["relayStates"].to<JsonArray>();
   for (int i = 0; i < OUTLET_COUNT; i++) {

@@ -79,7 +79,7 @@ const fallbackPolicies: PolicyItem[] = [
 const contextVariables = [
   ['P_limit', 'Configured operating limit for the prototype extension'],
   ['P_total', 'Aggregate measured load from all outlet channels'],
-  ['P_branch_i', 'Per-outlet measured load from the assigned PZEM and CT'],
+  ['P_branch_i', 'Per-outlet load, derived as an allowance-weighted share of the single mains PZEM'],
   ['O_priority_i', 'Outlet priority index used for selective response order'],
   ['O_relay_i', 'Relay state reported by the ESP32 output channel'],
   ['S_fault', 'Sensor or communication health flag'],

@@ -1,5 +1,7 @@
 namespace Mor.PowerManagement.Domain.Entities;
 
+using Mor.PowerManagement.Domain.Enums;
+
 // Singleton row holding the system thresholds (P_limit and friends).
 public class PowerSystemConfig : BaseAuditableEntity
 {
@@ -17,4 +19,13 @@ public class PowerSystemConfig : BaseAuditableEntity
 
     // Post-activation stabilization delay before verification (POL-04).
     public int StabilizationDelayMs { get; set; } = 500;
+
+    // Whether the reported readings are measured or synthesised. Written by
+    // IngestTelemetry from the device's own meteringMode field; Unknown means the
+    // device has not reported yet, which the UI states as "unknown" rather than
+    // guessing either way.
+    public MeteringMode MeteringMode { get; set; } = MeteringMode.Unknown;
+
+    // When the device last reported a metering mode.
+    public DateTimeOffset? MeteringModeUpdatedAt { get; set; }
 }

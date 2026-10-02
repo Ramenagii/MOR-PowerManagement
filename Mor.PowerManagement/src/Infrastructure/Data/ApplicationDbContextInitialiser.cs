@@ -146,6 +146,12 @@ public class ApplicationDbContextInitialiser
                 StandbyThresholdWatts = 80,
                 StandbyIdleMinutes = 30,
                 StabilizationDelayMs = 500,
+                // Fresh install with no device history yet: the repo's bench
+                // state is SIMULATE_METERS = 1, so seed Simulated. Existing rows
+                // are left alone below — the device's own report is the only
+                // other writer, and it must never be clobbered on boot (E19).
+                MeteringMode = MeteringMode.Simulated,
+                MeteringModeUpdatedAt = DateTimeOffset.UtcNow,
             });
         }
         else

@@ -1325,6 +1325,336 @@ h3 {
   line-height: 1.45;
 }
 
+/* ---------------------------------------------------------------------------
+   Telemetry
+   Appended before the media queries so the existing breakpoints can override.
+   --------------------------------------------------------------------------- */
+
+.page-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.section-meta {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+/* Standard clip technique — NOT display:none, so the numbers stay in the
+   accessibility tree for the chart's screen-reader data table. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.provenance-banner {
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.provenance-banner.simulated {
+  background: var(--yellow-soft);
+  color: var(--yellow-ink);
+}
+
+.provenance-banner.measured {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.provenance-banner.unknown {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.provenance-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.provenance-tag.measured {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.provenance-tag.derived {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.provenance-tag.simulated {
+  background: var(--yellow-soft);
+  color: var(--yellow-ink);
+}
+
+.telemetry-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.window-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.window-seg button {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  padding: 7px 11px;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.window-seg button:last-child {
+  border-right: 0;
+}
+
+.window-seg button.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.channel-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.channel-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 4px 9px 4px 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.channel-chip .chip-bar {
+  display: block;
+  width: 3px;
+  height: 12px;
+  border-radius: 2px;
+}
+
+.channel-chip.is-off {
+  opacity: 0.38;
+}
+
+.channel-chip.all {
+  padding-left: 9px;
+  font-family: inherit;
+}
+
+.channel-chip.all.is-on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stale-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+.stale-pill.fresh {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.stale-pill.delayed {
+  background: var(--yellow-soft);
+  color: var(--yellow-ink);
+}
+
+.stale-pill.stale {
+  background: #fbe6e3;
+  color: #a0342a;
+}
+
+.telemetry-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Stale data stays on screen at reduced contrast. Blanking live data is worse
+   than showing it with an honest age label. */
+.telemetry-charts.is-stale {
+  opacity: 0.6;
+}
+
+.chart-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 18px;
+}
+
+.chart-figure {
+  position: relative;
+  margin: 0;
+}
+
+.chart-figure figcaption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chart-unit {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.chart-wrap {
+  position: relative;
+  /* Read back out by TimeSeriesChart (getComputedStyle) so the breakpoints
+     below own the chart height instead of a JS breakpoint that would have to be
+     kept in sync by hand. */
+  --chart-h: 240px;
+}
+
+.chart-wrap svg {
+  display: block;
+  touch-action: pan-y;
+}
+
+.chart-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  font-size: 12px;
+  text-align: center;
+  padding: 0 16px;
+}
+
+.chart-caption {
+  margin: 10px 0 0;
+  color: var(--faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  max-width: 240px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 11px;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(32, 28, 22, 0.12);
+}
+
+.chart-tooltip.flip {
+  left: auto;
+  right: 6px;
+}
+
+.chart-tooltip-time {
+  margin: 0 0 4px;
+  color: var(--muted);
+}
+
+.chart-tooltip dl {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chart-tooltip dl > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.chart-tooltip dt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+}
+
+.chart-tooltip dd {
+  margin: 0;
+  color: var(--ink);
+}
+
+.legend-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px 12px;
+  margin-bottom: 14px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.legend-swatch {
+  flex: 0 0 auto;
+  display: block;
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  border: 1px solid var(--border-strong);
+}
+
 @media (max-width: 1180px) {
   .overview-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1344,6 +1674,10 @@ h3 {
   }
 
   .outlet-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .legend-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1378,6 +1712,14 @@ h3 {
   .detail-grid.three,
   .hardware-layout {
     grid-template-columns: 1fr;
+  }
+
+  .chart-panel {
+    padding: 15px;
+  }
+
+  .legend-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1497,6 +1839,43 @@ h3 {
     grid-template-columns: 1fr;
     gap: 4px;
   }
+
+  .telemetry-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  /* Only the chip strip scrolls. The chart never does — a horizontally
+     scrolling chart at 390 px is unusable. */
+  .channel-chips {
+    display: flex;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .channel-chip {
+    flex: 0 0 auto;
+  }
+
+  .legend-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Bottom-sheet tooltip: a floating tooltip on a 390 px screen covers the
+     very data it describes. */
+  .chart-tooltip {
+    position: sticky;
+    bottom: 8px;
+    left: 8px;
+    right: 8px;
+    max-width: none;
+  }
+
+  .chart-tooltip.flip {
+    left: 8px;
+    right: 8px;
+  }
 }
 
 @media (max-width: 420px) {
@@ -1594,6 +1973,18 @@ h3 {
 
   .loadwise-brand.intro {
     transform: translateY(0);
+  }
+
+  .chart-tooltip {
+    font-size: 11px;
+  }
+
+  .legend-swatch {
+    width: 12px;
+  }
+
+  .chart-wrap {
+    --chart-h: 190px;
   }
 }
 

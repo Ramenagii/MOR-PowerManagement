@@ -5,6 +5,7 @@ using Mor.PowerManagement.Application.Power.Commands.UpdateOutletPolicy;
 using Mor.PowerManagement.Application.Power.Commands.UpdateThresholds;
 using Mor.PowerManagement.Application.Power.Queries.GetDashboardState;
 using Mor.PowerManagement.Application.Power.Queries.GetPolicies;
+using Mor.PowerManagement.Application.Power.Queries.GetTelemetrySeries;
 using Microsoft.AspNetCore.Http.HttpResults;
 
 namespace Mor.PowerManagement.Web.Endpoints;
@@ -12,11 +13,14 @@ namespace Mor.PowerManagement.Web.Endpoints;
 // Dashboard surface used by the React SPA (cookie auth, like the Todo endpoints).
 public class Dashboard : IEndpointGroup
 {
+    private const int MaxChannels = 13;
+
     public static void Map(RouteGroupBuilder groupBuilder)
     {
         groupBuilder.RequireAuthorization();
 
         groupBuilder.MapGet(GetState, "state");
+        groupBuilder.MapGet(GetTelemetry, "telemetry");
         groupBuilder.MapGet(GetPolicies, "policies");
         groupBuilder.MapPost(RequestActivation, "outlets/{id}/activation");
         groupBuilder.MapPost(DisconnectOutlet, "outlets/{id}/disconnection");
@@ -32,6 +36,83 @@ public class Dashboard : IEndpointGroup
         var state = await sender.Send(new GetDashboardStateQuery());
 
         return TypedResults.Ok(state);
+    }
+
+    [EndpointSummary("Get telemetry series")]
+    [EndpointDescription(
+        "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), " +
+        "aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a " +
+        "provenance label: only CH1-CH8 voltage is ever metered, from the single mains PZEM-004T on the common " +
+        "feed; per-channel current and power are derived by distributing the mains total across energized " +
+        "channels weighted by allowance. Empty buckets are returned as null, never zero.")]
+    // BadRequest<string> rather than bare BadRequest: the 400 body names the
+    // valid values so a bad request is self-explanatory.
+    public static async Task<Results<Ok<TelemetrySeriesVm>, BadRequest<string>>> GetTelemetry(
+        ISender sender, string? window, string? channels)
+    {
+        // Validated before dispatch so a bad window surfaces as a plain 400
+        // rather than a ValidationException through the exception handler.
+        if (!GetTelemetrySeriesQuery.TryParseWindow(window, out var parsedWindow))
+        {
+            return TypedResults.BadRequest($"window must be one of: {GetTelemetrySeriesQuery.ValidWindowValues}.");
+        }
+
+        IReadOnlyList<int> outletIds = Array.Empty<int>();
+
+        if (!string.IsNullOrEmpty(channels))
+        {
+            if (!TryParseChannels(channels, out outletIds, out var channelError))
+            {
+                return TypedResults.BadRequest(channelError);
+            }
+        }
+
+        var series = await sender.Send(new GetTelemetrySeriesQuery
+        {
+            Window = parsedWindow,
+            OutletIds = outletIds,
+        });
+
+        return TypedResults.Ok(series);
+    }
+
+    // Accepts whitespace, duplicates and any order (E5); rejects anything
+    // non-numeric, out of the 1..13 rig range, or longer than the rig.
+    private static bool TryParseChannels(string value, out IReadOnlyList<int> ids, out string error)
+    {
+        ids = Array.Empty<int>();
+        error = string.Empty;
+
+        var parts = value.Split(',');
+        var parsed = new List<int>(parts.Length);
+
+        foreach (var part in parts)
+        {
+            var trimmed = part.Trim();
+
+            if (!int.TryParse(trimmed, out var id))
+            {
+                error = $"channels must be a comma-separated list of outlet ids 1..{MaxChannels}.";
+                return false;
+            }
+
+            if (id < 1 || id > MaxChannels)
+            {
+                error = $"channels must be a comma-separated list of outlet ids 1..{MaxChannels}.";
+                return false;
+            }
+
+            parsed.Add(id);
+        }
+
+        if (parsed.Count == 0)
+        {
+            error = $"channels must name at least one outlet id in 1..{MaxChannels}.";
+            return false;
+        }
+
+        ids = parsed.Distinct().OrderBy(id => id).ToList();
+        return true;
     }
 
     [EndpointSummary("Get control policies")]

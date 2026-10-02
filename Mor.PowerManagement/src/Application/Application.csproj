@@ -13,6 +13,11 @@
     <PackageReference Include="Microsoft.Build.Tasks.Core" />
     <PackageReference Include="Microsoft.Build.Utilities.Core" />
     <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <!-- EF Core 10 split the relational stack out of the base package. The
+         telemetry series aggregates server-side via Database.SqlQuery<T>, which
+         lives in Relational. Already in the solution's graph via the Npgsql
+         provider and EFCore.Design, so this adds no new package download. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
   </ItemGroup>
 

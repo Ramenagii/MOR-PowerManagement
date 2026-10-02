@@ -57,6 +57,10 @@ public static class DependencyInjection
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddTransient<IIdentityService, IdentityService>();
+
+        // Bounds TelemetryReadings growth. Opportunistic, not scheduled: the job
+        // only ticks while the host is awake.
+        builder.Services.AddHostedService<TelemetryRetentionService>();
     }
 
     private static string NormalizePostgresConnectionString(string raw)

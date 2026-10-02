@@ -19,6 +19,7 @@ import { MetricCard } from './components/MetricCard'
 import { OutletCard } from './components/OutletCard'
 import { PoliciesView } from './components/PoliciesView'
 import { ScenarioPanel } from './components/ScenarioPanel'
+import { TelemetryView } from './components/TelemetryView'
 import { ViewMenu } from './components/ViewMenu'
 import {
   baseOutlets,
@@ -495,6 +496,8 @@ function App() {
                 <EventLogPanel events={events} />
               </>
             )}
+
+            {activeView === 'telemetry' && <TelemetryView />}
 
             {activeView === 'policies' && <PoliciesView />}
 
