@@ -38,12 +38,26 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<ApplicationDbContextInitialiser>();
 
+        // MapIdentityApi signs the user in under the "Identity.Bearer" scheme and
+        // issues a .AspNetCore.Identity.Bearer cookie, so authorization has to
+        // authenticate against that same scheme - matching the official
+        // AddIdentityApiEndpoints template. Two symptoms of this being wrong:
+        // POST /api/Users/login threw "No sign-in authentication handler is
+        // registered for the scheme 'Identity.Bearer'" (500), and once a handler
+        // was registered the cookie was issued but RequireAuthorization() read
+        // Identity.Application and rejected it (401).
         builder.Services.AddAuthentication(options =>
             {
                 options.DefaultScheme = IdentityConstants.ApplicationScheme;
-                options.DefaultSignInScheme = IdentityConstants.ExternalScheme;
+                options.DefaultSignInScheme = IdentityConstants.ApplicationScheme;
+                options.DefaultAuthenticateScheme = IdentityConstants.BearerScheme;
             })
             .AddIdentityCookies();
+
+        // AddIdentityCookies() returns IdentityCookiesBuilder, so the bearer-named
+        // scheme has to be registered through a separate AuthenticationBuilder.
+        builder.Services.AddAuthentication()
+            .AddCookie(IdentityConstants.BearerScheme);
 
         builder.Services.AddAuthorizationBuilder();
 
