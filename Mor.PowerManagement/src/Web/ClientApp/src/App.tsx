@@ -281,11 +281,17 @@ function App() {
     }
 
     setOutlets((current) =>
-      current.map((item) =>
-        item.id === id
-          ? { ...item, status: 'Active', watts: Math.max(90, Math.round(item.allowance * 0.72)) }
-          : item,
-      ),
+      current.map((item) => {
+        if (item.id !== id) return item
+        // Mirrors the backend activation estimate: the 90W floor applies only
+        // to mains channels, never to the 110V or 5V rails.
+        const estimate = Math.round(item.allowance * 0.72)
+        return {
+          ...item,
+          status: 'Active',
+          watts: item.volts >= 220 ? Math.max(90, estimate) : estimate,
+        }
+      }),
     )
     addEvent('Manual relay action', `${outlet.name} was activated after capacity assessment.`, 'success')
   }

@@ -5,8 +5,10 @@
 // ---------------------------------------------------------------------------
 // MOR power-management prototype — ESP32 edge controller.
 // Edit the values below for your bench, then compile and flash with:
-//   arduino-cli compile --fqbn esp32:esp32:esp32 firmware/mor-power-device
-//   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32 firmware/mor-power-device
+//   arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+//   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+// The board is an ESP32-S3 (WCH CH343 USB-serial). Using esp32:esp32:esp32
+// compiles but esptool refuses the flash with "This chip is ESP32-S3".
 // ---------------------------------------------------------------------------
 
 #define OUTLET_COUNT 13
@@ -35,6 +37,9 @@
 // ---- Timing ----
 #define TELEMETRY_INTERVAL_MS 5000UL
 #define CONFIG_INTERVAL_MS 15000UL
+// Serial per-channel snapshot. Deliberately independent of the telemetry
+// interval so the rig stays observable with no backend reachable.
+#define SNAPSHOT_INTERVAL_MS 5000UL
 
 // ---- PZEM-004T v3.0 bus ----
 // 13-channel rig: single mains PZEM (address 1) on the common feed.

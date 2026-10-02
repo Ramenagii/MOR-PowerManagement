@@ -42,13 +42,19 @@ struct ChannelState {
 ChannelState channels[OUTLET_COUNT];
 
 // Synced policy table (backend is the authority).
-// Defaults match the 13-channel rig: 8x500W + 300W + 4x25W, P_limit 3600W.
+// Defaults match the 13-channel rig: 8x500W + 300W + 4x10W, P_limit 3600W.
+// CH10-13 are USB-A 5V/2.1A ports, so 10W is the honest ceiling per port
+// (5V x 2.1A). A larger allowance would authorise a load the port cannot serve.
 float cfgLimit = 3600;        // P_limit
 float cfgWarning = 3240;
 float cfgStandby = 80;
 int cfgStabilizationMs = 500;
 int prioRank[OUTLET_COUNT] = { 0, 1, 1, 2, 2, 3, 3, 3, 2, 3, 3, 3, 3 };
-float allowanceW[OUTLET_COUNT] = { 500, 500, 500, 500, 500, 500, 500, 500, 300, 25, 25, 25, 25 };
+float allowanceW[OUTLET_COUNT] = { 500, 500, 500, 500, 500, 500, 500, 500, 300, 10, 10, 10, 10 };
+// Nominal volts at each channel's own output. CH1-8 sit on the mains bus and
+// match the PZEM reading; CH9 is fed by the step-down transformer and CH10-13
+// by the 5V buck rail, so reporting the mains reading for those would be wrong.
+float ratedVolts[OUTLET_COUNT] = { 220, 220, 220, 220, 220, 220, 220, 220, 110, 5, 5, 5, 5 };
 bool desiredEnergized[OUTLET_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false };
 bool configSynced = false;
 
@@ -62,6 +68,7 @@ unsigned long missedPosts = 0;
 bool sFault = false;
 unsigned long lastTelemetryAt = 0;
 unsigned long lastConfigAt = 0;
+unsigned long lastSnapshotAt = 0;
 
 // ---- Multi-WiFi store (NVS "morwifi"): up to WIFI_SLOTS networks. ----
 Preferences nvsWifi;
@@ -164,14 +171,12 @@ void readMeters() {
     if (channels[i].relayClosed || desiredEnergized[i]) simDenom += allowanceW[i];
   }
   float simTotal = simDenom * 0.72;  // mirrors the backend activation estimate
-  float simV = 220.0f + sin(millis() / 9000.0f) * 2.0f;
-  float simC = simDenom > 0 ? simTotal / simV : 0;
   simEnergy += simTotal * (200.0f / 3600000.0f);  // ~200ms loop slice
   for (int i = 0; i < OUTLET_COUNT; i++) {
-    channels[i].voltage = simV;
+    channels[i].voltage = ratedVolts[i];
     if (channels[i].relayClosed || desiredEnergized[i]) {
-      channels[i].current = simDenom > 0 ? simC * (allowanceW[i] / simDenom) : 0;
       channels[i].power = simDenom > 0 ? simTotal * (allowanceW[i] / simDenom) : 0;
+      channels[i].current = channels[i].voltage > 0 ? channels[i].power / channels[i].voltage : 0;
     } else {
       channels[i].current = 0;
       channels[i].power = 0;
@@ -182,11 +187,12 @@ void readMeters() {
   return;
 #endif
   float v = mainsMeter.voltage();
-  float c = mainsMeter.current();
   float p = mainsMeter.power();
   float e = mainsMeter.energy();
 
-  if (isnan(v) || isnan(c) || isnan(p)) {
+  // Current is no longer sampled: per-channel amps are derived from each
+  // channel's own volts, so only the values actually consumed are validated.
+  if (isnan(v) || isnan(p)) {
     // POL-01 hardware fault isolation (single mains meter unreadable).
     channels[0].faultStreak++;
     if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
@@ -199,15 +205,22 @@ void readMeters() {
   channels[0].faultStreak = 0;
 
   // Distribute the mains total across energized channels weighted by allowance.
+  // Current is then derived per channel from its own volts, so the step-down
+  // (CH9, 110V) and the buck rail (CH10-13, 5V) report amps consistent with
+  // the power they are carrying instead of a scaled mains current.
   float denom = 0;
   for (int i = 0; i < OUTLET_COUNT; i++) {
     if (channels[i].relayClosed || desiredEnergized[i]) denom += allowanceW[i];
   }
   for (int i = 0; i < OUTLET_COUNT; i++) {
-    channels[i].voltage = v;
+    if (ratedVolts[i] > 0 && fabsf(ratedVolts[i] - 220.0f) < 1.0f) {
+      channels[i].voltage = v;  // mains-bus channels report the measured value
+    } else {
+      channels[i].voltage = ratedVolts[i];  // derived rails report nominal
+    }
     if (channels[i].relayClosed || desiredEnergized[i]) {
-      channels[i].current = denom > 0 ? c * (allowanceW[i] / denom) : 0;
       channels[i].power = denom > 0 ? p * (allowanceW[i] / denom) : 0;
+      channels[i].current = channels[i].voltage > 0 ? channels[i].power / channels[i].voltage : 0;
     } else {
       channels[i].current = 0;
       channels[i].power = 0;
@@ -293,6 +306,7 @@ void savePolicyTable() {
   for (int i = 0; i < OUTLET_COUNT; i++) prio[i] = (uint8_t)prioRank[i];
   nvsPolicy.putBytes("prio", prio, OUTLET_COUNT);
   nvsPolicy.putBytes("allow", allowanceW, sizeof(allowanceW));
+  nvsPolicy.putBytes("volts", ratedVolts, sizeof(ratedVolts));
   uint16_t mask = 0;
   for (int i = 0; i < OUTLET_COUNT; i++) {
     if (desiredEnergized[i]) mask |= (uint16_t)(1u << i);
@@ -319,6 +333,12 @@ bool loadPolicyTable() {
   float allow[OUTLET_COUNT];
   if (nvsPolicy.getBytes("allow", allow, sizeof(allow)) == sizeof(allow)) {
     memcpy(allowanceW, allow, sizeof(allow));
+  }
+  // Absent in tables written before rated volts were tracked; keep the
+  // compiled rig defaults in that case rather than zeroing the channels.
+  float volts[OUTLET_COUNT];
+  if (nvsPolicy.getBytes("volts", volts, sizeof(volts)) == sizeof(volts)) {
+    memcpy(ratedVolts, volts, sizeof(volts));
   }
   uint16_t mask = nvsPolicy.getUShort("desired", 0);
   for (int i = 0; i < OUTLET_COUNT; i++) desiredEnergized[i] = (mask & (1u << i)) != 0;
@@ -362,6 +382,7 @@ bool syncConfig() {
     if (ch < 0 || ch >= OUTLET_COUNT) continue;
     prioRank[ch] = o["priority"] | 1;
     allowanceW[ch] = o["allowanceWatts"] | 0.0f;
+    ratedVolts[ch] = o["ratedVoltageVolts"] | ratedVolts[ch];
     int desired = o["desiredStatus"] | 3;
     desiredEnergized[ch] = (desired == DESIRED_ACTIVE || desired == DESIRED_STANDBY);
   }
@@ -417,15 +438,24 @@ bool postTelemetry() {
   }
   Serial.printf("telemetry: HTTP %d, total=%.0f W%s\n",
                 code, totalLoad(), sFault ? " FAULT" : "");
-  // Per-channel snapshot: C = relay closed, o = relay open.
-  // CH1-8 = 220V outlets, CH9 = 110V outlet, CH10-13 = USB sockets.
-  Serial.print("channels:");
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    Serial.printf(" %d:%s%.0fW", i + 1, channels[i].relayClosed ? "C" : "o", channels[i].power);
-  }
-  Serial.println();
   http.end();
   return ok;
+}
+
+// Per-channel snapshot: C = relay closed, o = relay open.
+// CH1-8 = 220V outlets, CH9 = 110V outlet, CH10-13 = USB sockets.
+// Volts is the channel's own rail, not the mains bus reading: CH9 shows 110V
+// and CH10-13 show 5V, so a mis-rated channel is visible without a meter.
+// Driven from loop() rather than postTelemetry() so the bench stays
+// observable when the backend is unreachable - a device that only reports
+// while online is unverifiable exactly when something has gone wrong.
+void printChannelSnapshot() {
+  Serial.print("channels:");
+  for (int i = 0; i < OUTLET_COUNT; i++) {
+    Serial.printf(" %d:%s%.0fW/%.0fV", i + 1, channels[i].relayClosed ? "C" : "o",
+                  channels[i].power, channels[i].voltage);
+  }
+  Serial.println();
 }
 
 void setup() {
@@ -501,6 +531,11 @@ void loop() {
       lastTelemetryAt = now;
       postTelemetry();
     }
+  }
+
+  if (now - lastSnapshotAt > SNAPSHOT_INTERVAL_MS) {
+    lastSnapshotAt = now;
+    printChannelSnapshot();
   }
 
 #ifdef LED_BUILTIN

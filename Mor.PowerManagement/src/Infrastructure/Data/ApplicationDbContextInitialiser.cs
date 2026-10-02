@@ -169,10 +169,10 @@ public class ApplicationDbContextInitialiser
             ("Outlet 7", "General-use device B", "Relay CH7", OutletPriority.Low, 500, 220, "Authorized window", 10, OutletStatus.Disconnected, 0),
             ("Outlet 8", "General-use device C", "Relay CH8", OutletPriority.Low, 500, 220, "Authorized window", 10, OutletStatus.Disconnected, 0),
             ("Outlet 9 (110V)", "110V instrument via step-down", "Relay CH9", OutletPriority.Medium, 300, 110, "Lab sessions", 15, OutletStatus.Disconnected, 0),
-            ("USB 1", "USB charging 5V", "Relay CH10", OutletPriority.Low, 25, 5, "Class hours", null, OutletStatus.Standby, 12),
-            ("USB 2", "USB charging 5V", "Relay CH11", OutletPriority.Low, 25, 5, "Class hours", null, OutletStatus.Disconnected, 0),
-            ("USB 3", "USB charging 5V", "Relay CH12", OutletPriority.Low, 25, 5, "Class hours", null, OutletStatus.Disconnected, 0),
-            ("USB 4", "USB charging 5V", "Relay CH13", OutletPriority.Low, 25, 5, "Class hours", null, OutletStatus.Disconnected, 0),
+            ("USB 1", "USB charging 5V", "Relay CH10", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
+            ("USB 2", "USB charging 5V", "Relay CH11", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
+            ("USB 3", "USB charging 5V", "Relay CH12", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
+            ("USB 4", "USB charging 5V", "Relay CH13", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
         };
 
         // Idempotent rig sync: add missing channels, refresh policy fields on
