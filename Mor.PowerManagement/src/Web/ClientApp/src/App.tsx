@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
-import { Activity, Gauge, PlugZap, ScanLine, ShieldCheck } from 'lucide-react'
+import { Gauge, PlugZap, ScanLine, ShieldCheck } from 'lucide-react'
 import {
   ApiError,
   activateOutlet,
@@ -13,7 +13,6 @@ import {
 import { EventLogPanel } from './components/EventLogPanel'
 import { ChannelInventoryView } from './components/ChannelInventoryView'
 import { HardwareView } from './components/HardwareView'
-import { LoadwiseBrand } from './components/LoadwiseBrand'
 import { LoadingScreen } from './components/LoadingScreen'
 import { LoginGate } from './components/LoginGate'
 import { MetricCard } from './components/MetricCard'
@@ -22,7 +21,7 @@ import { PoliciesView } from './components/PoliciesView'
 import { PolicyAdminView } from './components/PolicyAdminView'
 import { ScenarioPanel } from './components/ScenarioPanel'
 import { TelemetryView } from './components/TelemetryView'
-import { ViewMenu } from './components/ViewMenu'
+import { AppTopBar } from './components/AppTopBar'
 import {
   baseOutlets,
   CRITICAL_THRESHOLD,
@@ -53,6 +52,9 @@ function App() {
     critical: CRITICAL_THRESHOLD,
   })
   const [session, setSession] = useState<Session>('checking')
+  // Shown in the top bar avatar and the footer. checkSession() already returns
+  // the signed-in address, so this costs nothing extra.
+  const [userEmail, setUserEmail] = useState<string | null>(null)
   const [backendOnline, setBackendOnline] = useState(false)
   const [deviceOnline, setDeviceOnline] = useState(false)
   const [introDone, setIntroDone] = useState(false)
@@ -80,8 +82,9 @@ function App() {
   useEffect(() => {
     let cancelled = false
     checkSession()
-      .then(() => {
+      .then((email) => {
         if (cancelled) return
+        setUserEmail(email)
         setSession('authed')
         void refreshFromBackend().catch(() => setBackendOnline(false))
       })
@@ -347,57 +350,44 @@ function App() {
         animate={introDone ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
         transition={{ duration: 0.56, ease: [0.22, 1, 0.36, 1] }}
       >
-        <header className="topbar">
-          <div className="topbar-identity">
-            <AnimatePresence>
-              {introDone && (
-                <motion.div
-                  className="topbar-logo-slot"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <LoadwiseBrand variant="header" />
-                </motion.div>
-              )}
-            </AnimatePresence>
-            <div>
-              <p className="eyebrow">Shared Laboratory Power Management</p>
-              <h1>Power Management Console</h1>
-            </div>
-          </div>
-          <div className="topbar-actions">
-            <span className={`system-pill ${backendOnline ? 'normal' : 'warning'}`}>
-              {connectionLabel}
-            </span>
-            <span
-              className={`system-pill ${deviceOnline ? 'normal' : 'warning'}`}
-              title={deviceOnline ? 'ESP32 posted telemetry in the last 30 seconds' : 'No ESP32 telemetry in the last 30 seconds'}
-            >
-              {deviceOnline ? 'ESP32 online' : 'ESP32 offline'}
-            </span>
-            <button type="button" className="replay-button" onClick={replayIntro}>
-              Replay intro
+        {/*
+          The redesign replaces the old identity topbar + hamburger drawer with a
+          single sticky nav bar. The connection and ESP32 status it used to show
+          now live in that bar, so nothing was dropped.
+        */}
+        <AppTopBar
+          activeView={activeView}
+          onChange={setActiveView}
+          systemState={currentState}
+          deviceOnline={deviceOnline}
+          userEmail={userEmail}
+        />
+
+        {session === 'offline' && (
+          <div className="design-main">
+            <button type="button" className="btn btn-primary" onClick={() => setSession('login')}>
+              Sign in
             </button>
-            {session === 'offline' && (
-              <button type="button" className="replay-button" onClick={() => setSession('login')}>
-                Sign in
+          </div>
+        )}
+
+        {session === 'authed' && (
+          <div className="design-footer">
+            <div className="design-footer-left">
+              <span>{userEmail ?? 'signed in'}</span>
+              <span>{connectionLabel}</span>
+              <span>{deviceOnline ? 'ESP32 online' : 'ESP32 offline'}</span>
+            </div>
+            <div className="design-footer-left">
+              <button type="button" className="btn" onClick={replayIntro}>
+                Replay intro
               </button>
-            )}
-            {session === 'authed' && (
-              <button type="button" className="replay-button" onClick={handleLogout}>
+              <button type="button" className="btn" onClick={handleLogout}>
                 Sign out
               </button>
-            )}
-            <div className={`system-pill ${currentState.toLowerCase()}`}>
-              <Activity size={18} />
-              {currentState}
             </div>
           </div>
-        </header>
-
-        <ViewMenu activeView={activeView} onChange={setActiveView} />
+        )}
 
         <AnimatePresence mode="wait" initial={false}>
           <motion.div

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Activity, AlertTriangle, Gauge, Radio, RefreshCw, Zap } from 'lucide-react'
+import { AlertTriangle, RefreshCw } from 'lucide-react'
 import {
   ApiError,
   fetchDashboardState,
@@ -22,7 +22,14 @@ import {
 } from '../data/telemetry'
 import type { Outlet } from '../types/dashboard'
 import { describeSeries, formatValue, histogram, stalenessState } from '../utils/telemetry'
-import { MetricCard } from './MetricCard'
+import {
+  RAIL_FILTERS,
+  priorityTagClass,
+  railClass,
+  railLabel,
+  railOf,
+  type RailFilter,
+} from './policyAdmin'
 
 /**
  * Channel Inventory -- the sensor-facing half of the redesign (roadmap M2).
@@ -109,12 +116,6 @@ function joinChannels(outlets: Outlet[], series: TelemetrySeries | null): Channe
   })
 }
 
-function railLabel(volts: number): string {
-  if (volts >= 200) return '220 V mains'
-  if (volts >= 100) return '110 V step-down'
-  return `${volts} V USB`
-}
-
 /**
  * formatValue, but null-tolerant. A channel with no sample in the window must read
  * as a dash, not as "0.0" — conflating a gap with zero load is exactly the error
@@ -129,6 +130,7 @@ export function ChannelInventoryView() {
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
   const [series, setSeries] = useState<TelemetrySeries | null>(null)
   const [status, setStatus] = useState<Status>('loading')
+  const [railFilter, setRailFilter] = useState<RailFilter>('all')
   const [error, setError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   // Drives the relative-time pill only; never triggers a refetch.
@@ -234,6 +236,13 @@ export function ChannelInventoryView() {
 
   const readings = joinChannels(snapshot.outlets, series)
   const byId = new Map(snapshot.outlets.map((o) => [o.id, o]))
+  // Rail filter is applied at render time only: it is a view concern, so the
+  // telemetry fetch stays independent of it and the badge counts below always
+  // describe the whole rig rather than the filtered subset.
+  const visibleReadings =
+    railFilter === 'all'
+      ? readings
+      : readings.filter((r) => railOf(r.channel.ratedVoltageVolts) === railFilter)
   const energizedCount = snapshot.outlets.filter((o) => o.status === 'Active').length
   const totalWatts = snapshot.outlets.reduce((sum, outlet) => sum + (outlet.watts || 0), 0)
   const capacity = snapshot.thresholds.max
@@ -243,21 +252,33 @@ export function ChannelInventoryView() {
   const freshness = stalenessState(series?.latestSampleAt ?? null, now, snapshot.deviceOnline)
 
   return (
-    <section className="view-stack" aria-label="Channel Inventory">
-      <div className="page-heading">
+    <section className="design-main" aria-label="Channel Inventory">
+      <nav className="design-breadcrumb" aria-label="Breadcrumb">
+        <span>Dashboard</span>
+        <span aria-hidden="true">/</span>
+        <strong>Channels</strong>
+      </nav>
+
+      <div className="design-page-head">
         <div>
-          <p className="eyebrow">Sensor inventory</p>
-          <h2>All metering channels</h2>
+          <h1 className="design-page-title">
+            Channel Inventory &amp; Sensor Matrix
+            <span className="design-live-badge">Live Stream</span>
+          </h1>
+          <p className="design-page-sub">
+            {readings.length} monitored channels across 220V AC, 110V AC and 5V DC rails
+          </p>
         </div>
-        <div className="page-heading-actions">
+        <div className="design-head-actions">
           <span className={`stale-pill ${freshness.tone}`}>{freshness.label}</span>
           <button
             type="button"
-            className="icon-button"
-            aria-label="Refresh inventory"
+            className="btn"
             onClick={() => void load(true)}
+            disabled={refreshing}
           >
             <RefreshCw size={16} className={refreshing ? 'spin' : undefined} />
+            {refreshing ? 'Refreshing...' : 'Refresh Telemetry'}
           </button>
         </div>
       </div>
@@ -270,40 +291,87 @@ export function ChannelInventoryView() {
         </div>
       </div>
 
-      <section className="overview-grid" aria-label="Inventory summary">
-        <MetricCard
-          icon={<Zap />}
-          label="Total draw"
-          value={`${Math.round(totalWatts)} W`}
-          note={`${capacity} W configured capacity`}
-        />
-        <MetricCard
-          icon={<Gauge />}
-          label="Capacity used"
-          value={`${loadPercent.toFixed(1)}%`}
-          note={`${Math.max(0, capacity - totalWatts).toFixed(0)} W remaining`}
-        />
-        <MetricCard
-          icon={<Radio />}
-          label="Energized"
-          value={`${energizedCount}/${readings.length}`}
-          note="Active relay channels"
-        />
-        <MetricCard
-          icon={<Activity />}
-          label="Window"
-          value={series?.windowLabel ?? '—'}
-          note={
-            series
-              ? `${series.bucketCount} buckets · ${series.rawSampleCount} raw samples`
-              : 'No telemetry yet'
-          }
-        />
+      {/* Four-up stat strip. Every value is read from the API: capacity,
+          warning and critical come from PowerSystemConfig, so these cannot
+          drift from what the policy engine actually enforces. */}
+      <section className="stat-strip" aria-label="Inventory summary">
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Total Active Load</span>
+            <span className={`tag ${loadPercent >= 100 ? 'tag-red' : loadPercent >= 85 ? 'tag-amber' : 'tag-primary'}`}>
+              {`${loadPercent.toFixed(0)}% LOAD`}
+            </span>
+          </div>
+          <p className="stat-value">
+            {Math.round(totalWatts).toLocaleString()}
+            <span className="stat-unit">W</span>
+          </p>
+          <p className="stat-foot">
+            {`Cap ${capacity.toLocaleString()} W  ·  Headroom ${Math.max(0, Math.round(capacity - totalWatts)).toLocaleString()} W`}
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Warning Threshold</span>
+          </div>
+          <p className="stat-value">
+            {Math.round(snapshot.thresholds.warning).toLocaleString()}
+            <span className="stat-unit">W</span>
+          </p>
+          <p className="stat-foot">
+            {`${capacity > 0 ? Math.round((snapshot.thresholds.warning / capacity) * 100) : 0}% of capacity`}
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Critical Threshold</span>
+          </div>
+          <p className="stat-value">
+            {Math.round(snapshot.thresholds.critical).toLocaleString()}
+            <span className="stat-unit">W</span>
+          </p>
+          <p className="stat-foot">
+            {`${capacity > 0 ? Math.round((snapshot.thresholds.critical / capacity) * 100) : 0}% of capacity`}
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Active Relays</span>
+            <span className={`tag ${snapshot.deviceOnline ? 'tag-green' : 'tag-amber'}`}>
+              {snapshot.deviceOnline ? 'ONLINE' : 'OFFLINE'}
+            </span>
+          </div>
+          <p className="stat-value">
+            {energizedCount}
+            <span className="stat-unit">/ {readings.length} Energized</span>
+          </p>
+          <p className="stat-foot">{`Window ${series?.windowLabel ?? '—'} · ${series?.rawSampleCount ?? 0} raw rows`}</p>
+        </article>
       </section>
 
+      {/* Rail filter. The rig is three physical rails, so filtering by rail is
+          the one grouping an operator actually uses. */}
+      <div className="design-toolbar">
+        <div className="chip-group" role="group" aria-label="Filter by rail">
+          {RAIL_FILTERS.map((filter) => (
+            <button
+              key={filter.id}
+              type="button"
+              className={`chip ${railFilter === filter.id ? 'is-active' : ''}`}
+              aria-pressed={railFilter === filter.id}
+              onClick={() => setRailFilter(filter.id)}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="channel-grid">
-        {readings.map((reading) => {
+        {visibleReadings.map((reading) => {
           const outlet = byId.get(reading.channel.outletId)
           const accent = channelColor(reading.channel.outletId)
           const stats = describeSeries(reading.channel.watts)
@@ -322,18 +390,34 @@ export function ChannelInventoryView() {
               className={`channel-card ${outlet?.status.toLowerCase() ?? 'disconnected'}`}
             >
               <header className="channel-card-header">
-                <div>
+                <div className="channel-card-title">
                   <span className="channel-id" style={{ color: accent }}>
                     {`CH${String(reading.channel.outletId).padStart(2, '0')}`}
                   </span>
-                  <h3>{outlet?.name ?? reading.channel.name}</h3>
+                  {/*
+                    Rail badge replaces the design's "PZEM-04T" chip. There is one
+                    PZEM on the common mains feed, so showing a per-channel meter
+                    here would be a hardware claim the build does not support.
+                  */}
+                  <span className={`channel-rail ${railClass(reading.channel.ratedVoltageVolts)}`}>
+                    {railLabel(reading.channel.ratedVoltageVolts)}
+                  </span>
                 </div>
-                <span className={`status-badge ${outlet?.status.toLowerCase() ?? 'disconnected'}`}>
-                  {outlet?.status ?? 'Unknown'}
+                {/* Priority uses the enum the backend actually stores
+                    (Low/Medium/High/Critical), not the mockup's P0-P3 labels. */}
+                <span
+                  className={`tag ${priorityTagClass(outlet?.priority)}`}
+                  title="Shed order: Low priority is shed first"
+                >
+                  {outlet?.priority ?? 'Unknown'}
                 </span>
               </header>
 
-              <p className="channel-rail">{railLabel(reading.channel.ratedVoltageVolts)}</p>
+              <h3 className="channel-card-name">{outlet?.name ?? reading.channel.name}</h3>
+
+              <span className={`status-badge ${outlet?.status.toLowerCase() ?? 'disconnected'}`}>
+                {outlet?.status ?? 'Unknown'}
+              </span>
 
               <dl className="channel-readings">
                 <div>

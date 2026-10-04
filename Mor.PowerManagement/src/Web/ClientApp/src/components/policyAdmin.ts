@@ -74,3 +74,48 @@ export function thresholdDiff(form: ThresholdsForm, base: ThresholdsForm): Recor
   }
   return diff
 }
+
+/**
+ * Rail presentation helpers, shared by Channel Inventory and Policy Admin so
+ * the two screens cannot disagree about which physical rail a channel is on.
+ */
+export type RailFilter = 'all' | '220' | '110' | '5'
+
+export const RAIL_FILTERS: Array<{ id: RailFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: '220', label: '220V Mains' },
+  { id: '110', label: '110V Step-down' },
+  { id: '5', label: '5V USB' },
+]
+
+export function railOf(volts: number): Exclude<RailFilter, 'all'> {
+  if (volts >= 200) return '220'
+  if (volts >= 100) return '110'
+  return '5'
+}
+
+/** CSS modifier so the rail badge is colour-coded per rail. */
+export function railClass(volts: number): string {
+  const rail = railOf(volts)
+  return rail === '220' ? 'rail-220' : rail === '110' ? 'rail-110' : 'rail-5'
+}
+
+/** Short human label, e.g. "220 V mains". */
+export function railLabel(volts: number): string {
+  const rail = railOf(volts)
+  return rail === '220' ? '220 V mains' : rail === '110' ? '110 V step-down' : `${volts} V USB`
+}
+
+/** Priority pill colour. Low is shed first, so it reads as the urgent one. */
+export function priorityTagClass(priority: Priority | undefined): string {
+  switch (priority) {
+    case 'Critical':
+      return 'tag-blue'
+    case 'High':
+      return 'tag-green'
+    case 'Medium':
+      return 'tag-amber'
+    default:
+      return 'tag-red'
+  }
+}

@@ -1,28 +1,76 @@
 :root {
-  color: #252321;
-  background: #f7f6f3;
+  color: #1b1b1c;
+  background: #fcf9f8;
   font-family:
-    "Helvetica Neue", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    Inter, "Helvetica Neue", "SF Pro Display", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  --canvas: #f7f6f3;
+
+  /* ---------------------------------------------------------------------
+   * Design tokens ported from the Stitch "Ant Design" theme.
+   * These are the literal values from the generated tailwind.config, kept as
+   * plain custom properties so the project stays free of a Tailwind runtime
+   * (deliberate: e9e0301 avoided adding a component library so the Docker
+   * build shape and deploy cost stay unchanged).
+   * ------------------------------------------------------------------- */
   --surface: #ffffff;
-  --surface-muted: #fbfbfa;
-  --border: #e8e5df;
-  --border-strong: #d8d3c9;
-  --ink: #252321;
-  --muted: #78746d;
-  --faint: #a8a29a;
-  --accent: #0677ad;
-  --accent-soft: #edf7fb;
+  --surface-page: #fcf9f8;
+  --surface-low: #f6f3f2;
+  --surface-container: #f0eded;
+  --surface-container-high: #eae7e7;
+  --surface-highest: #e5e2e1;
+
+  --primary: #0057c2;
+  --primary-container: #006ef2;
+  --primary-fixed: #d9e2ff;
+  --on-primary: #ffffff;
+
+  --secondary: #266d00;
+  --secondary-container: #85fa51;
+  --on-secondary: #ffffff;
+
+  --error: #ba1a1a;
+  --error-container: #ffdad6;
+
+  --ink: #1b1b1c;
+  --ink-muted: #414755;
+  --ink-outline: #727786;
+  --ink-outline-variant: #c1c6d7;
+
+  --tertiary: #7d5400;
+  --tertiary-container: #9d6a00;
+
+  /* Legacy aliases. Older rules still reference these names; pointing them at
+     the new palette keeps every pre-existing component visually consistent
+     with the redesign instead of leaving two themes side by side. */
+  --canvas: #fcf9f8;
+  --surface-muted: #f6f3f2;
+  --border: #f0eded;
+  --border-strong: #e5e2e1;
+  --muted: #414755;
+  --faint: #727786;
+  --accent: #0057c2;
+  --accent-soft: #d9e2ff;
   --blue-soft: #e8f1f6;
-  --blue-ink: #315d76;
-  --yellow-soft: #fbf3db;
-  --yellow-ink: #7f5c18;
-  --red-soft: #fdebec;
-  --red-ink: #8f302f;
-  --radius: 8px;
+  --blue-ink: #001a43;
+  --yellow-soft: #ffddb0;
+  --yellow-ink: #281800;
+  --red-soft: #ffdad6;
+  --red-ink: #93000a;
+
+  --radius-sm: 2px;
+  --radius: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --page-margin: 1.5rem;
 }
 
 * {
@@ -2334,4 +2382,669 @@ svg.spin {
 .scenario-grid button:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+/* ===========================================================================
+   Redesign layer (Stitch "Ant Design" port)
+   Applied after the legacy rules above so the new component shapes win without
+   having to rewrite every pre-existing selector. Structure mirrors the design:
+   a top nav bar, a four-up stat strip, a 3-up card grid, and a dense table.
+   =========================================================================== */
+
+body {
+  background: var(--surface-page);
+  color: var(--ink);
+}
+
+.app-shell {
+  padding: 0;
+}
+
+/* ---- Top navigation bar ---------------------------------------------------- */
+.app-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  height: 60px;
+  padding: 0 var(--page-margin);
+  background: var(--surface);
+  border-bottom: 1px solid var(--surface-container);
+}
+
+.app-topbar-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+}
+
+.app-topbar-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.app-topbar-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+.app-topbar-version {
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.app-topbar-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-lg);
+  height: 100%;
+  margin-left: var(--space-md);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.app-topbar-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.app-topbar-tab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 150ms ease;
+}
+
+.app-topbar-tab:hover {
+  color: var(--primary);
+}
+
+.app-topbar-tab.is-active {
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.app-topbar-tab.is-active::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 2px;
+  background: var(--primary);
+}
+
+.app-topbar-spacer {
+  flex: 1 1 auto;
+}
+
+.app-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 0 0 auto;
+}
+
+/* Green "System Normal" style status pill from the design header. */
+.app-state-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius);
+  background: var(--surface-low);
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.app-state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--secondary);
+}
+
+.app-state-pill.warning .app-state-dot {
+  background: var(--tertiary-container);
+}
+
+.app-state-pill.critical .app-state-dot {
+  background: var(--error);
+}
+
+.app-trip-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--error);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--error);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.app-trip-button:hover {
+  background: var(--error-container);
+}
+
+.app-avatar {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+/* ---- Page frame ----------------------------------------------------------- */
+.design-main {
+  padding: var(--page-margin);
+  padding-top: calc(var(--page-margin) + 44px);
+  min-height: calc(100vh - 48px);
+}
+
+.design-breadcrumb {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+  color: var(--ink-muted);
+  font-size: 13px;
+}
+
+.design-breadcrumb strong {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.design-page-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.design-page-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: 0;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.design-page-sub {
+  margin: 2px 0 0;
+  color: var(--ink-muted);
+  font-size: 14px;
+}
+
+.design-live-badge {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.design-head-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+/* ---- Buttons -------------------------------------------------------------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 14px;
+  border: 1px solid var(--surface-container-high);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 150ms ease, color 150ms ease, background 150ms ease;
+}
+
+.btn:hover {
+  color: var(--primary);
+  border-color: var(--ink-outline-variant);
+}
+
+.btn-primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+
+.btn-primary:hover {
+  background: var(--primary-container);
+  border-color: var(--primary-container);
+  color: var(--on-primary);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---- Four-up stat strip --------------------------------------------------- */
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+.stat-card {
+  padding: var(--space-md);
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
+.stat-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.stat-value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 28px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.stat-unit {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink-muted);
+}
+
+.stat-foot {
+  margin-top: 10px;
+  color: var(--ink-outline);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Small tag used inside a stat label or card header. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-container);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.tag-primary { background: var(--primary-fixed); color: var(--primary); }
+.tag-green { background: #e4f7d8; color: var(--secondary); }
+.tag-amber { background: var(--tertiary-container); color: #281800; }
+.tag-red { background: var(--error-container); color: var(--error); }
+.tag-blue { background: var(--primary-fixed); color: var(--primary); }
+/* ---- Toolbar (filter chips + sort) ---------------------------------------- */
+.design-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.chip-group {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius);
+  background: var(--surface-low);
+}
+
+.chip {
+  padding: 5px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.chip:hover { color: var(--ink); }
+
+.chip.is-active {
+  background: var(--surface);
+  color: var(--primary);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 8%);
+}
+
+/* ---- Channel card grid (3-up, per the design) ----------------------------- */
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: var(--space-md);
+}
+
+.channel-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.channel-card:hover {
+  border-color: var(--ink-outline-variant);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 10%);
+}
+
+.channel-card.restricted { border-color: #f0b4b0; }
+.channel-card.disconnected { opacity: 0.82; }
+
+.channel-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
+.channel-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.channel-id {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--primary);
+}
+
+.channel-rail {
+  padding: 1px 7px;
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius-sm);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.channel-rail.rail-220 { background: #eaf1fd; border-color: #c3d8f7; color: var(--primary); }
+.channel-rail.rail-110 { background: #fdf1dd; border-color: #f0d3a3; color: #7a4f00; }
+.channel-rail.rail-5 { background: #e4f7d8; border-color: #bfe6a8; color: var(--secondary); }
+
+.channel-card-name {
+  margin: 4px 0 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+/* The V/A/W readout block: mono numerals on a muted inset, as in the design. */
+.channel-readings {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  padding: 1px;
+  border-radius: var(--radius);
+  background: var(--surface-container);
+  overflow: hidden;
+}
+
+.channel-readings > div {
+  padding: 8px 6px;
+  background: var(--surface-low);
+  text-align: center;
+}
+
+.channel-readings dt {
+  color: var(--ink-outline);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.channel-readings dd {
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.channel-readings dd .unit {
+  margin-left: 1px;
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.channel-allowance {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 12px;
+}
+
+.channel-allowance b {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mini-meter {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-container);
+  overflow: hidden;
+}
+
+.mini-meter > div {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--primary);
+}
+
+.channel-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-xs);
+  margin: 0;
+  padding: var(--space-sm) 0;
+  border-top: 1px solid var(--surface-container);
+  border-bottom: 1px solid var(--surface-container);
+}
+
+.channel-stats div { text-align: center; }
+
+.channel-stats dt {
+  color: var(--ink-outline);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.channel-stats dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.channel-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 34px;
+}
+
+.histogram-bar {
+  flex: 1 1 0;
+  min-width: 2px;
+  border-radius: 1px 1px 0 0;
+  background: var(--primary-fixed);
+}
+
+.channel-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  color: var(--ink-outline);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.channel-coverage { color: var(--ink-outline); }
+
+/* ---- Footer status bar --------------------------------------------------- */
+.design-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  height: 48px;
+  padding: 0 var(--page-margin);
+  border-top: 1px solid var(--surface-container);
+  background: var(--surface);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.design-footer-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+}
+/* Redesign override: the Policy Admin table is now eight columns (Voltage and
+   State were added, matching the design's dense policy grid). CSS Grid rather
+   than flex so the editable inputs line up down each column. */
+.policy-table {
+  display: block;
+  border: 1px solid var(--surface-container);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.policy-row {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 2fr) 70px minmax(120px, 1.1fr) 116px
+    minmax(110px, 1.1fr) 96px 88px minmax(140px, auto);
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 9px var(--space-md);
+  border: 0;
+  border-bottom: 1px solid var(--surface-container);
+  border-radius: 0;
+}
+
+.policy-row:last-child { border-bottom: 0; }
+.policy-row:hover:not(.policy-head) { background: var(--surface-low); }
+.policy-row.dirty { background: #fffaf0; border-bottom-color: #ecd9a4; }
+.policy-row.dirty:hover { background: #fff5e0; }
+
+.policy-head {
+  position: sticky;
+  top: 60px;
+  z-index: 5;
+  background: var(--surface-low) !important;
+  color: var(--ink-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.policy-channel { font-size: 12px; }
+.policy-channel strong { color: var(--primary); font-size: 12px; }
+
+.policy-row input,
+.policy-row select {
+  margin: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--surface-container-high);
+  border-radius: var(--radius);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.policy-actions { gap: var(--space-xs); }
+
+/* Table scrolls horizontally on narrow screens rather than squashing inputs. */
+@media (max-width: 900px) {
+  .policy-table { overflow-x: auto; }
+  .policy-row { min-width: 900px; }
 }

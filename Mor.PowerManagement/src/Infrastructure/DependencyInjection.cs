@@ -38,19 +38,28 @@ public static class DependencyInjection
 
         builder.Services.AddScoped<ApplicationDbContextInitialiser>();
 
-        // MapIdentityApi signs the user in under the "Identity.Bearer" scheme and
-        // issues a .AspNetCore.Identity.Bearer cookie, so authorization has to
-        // authenticate against that same scheme - matching the official
-        // AddIdentityApiEndpoints template. Two symptoms of this being wrong:
-        // POST /api/Users/login threw "No sign-in authentication handler is
-        // registered for the scheme 'Identity.Bearer'" (500), and once a handler
-        // was registered the cookie was issued but RequireAuthorization() read
-        // Identity.Application and rejected it (401).
+        // Sign-in and authenticate MUST name the same scheme, or every
+        // RequireAuthorization() endpoint rejects a perfectly valid cookie.
+        //
+        // With useCookies=true the sign-in below issues
+        // .AspNetCore.Identity.Application (verified against a running host).
+        // Setting DefaultAuthenticateScheme to the Bearer scheme here looked
+        // reasonable but made authorization read .AspNetCore.Identity.Bearer,
+        // which nothing ever issues -- so login returned 200, the cookie was
+        // set, and every subsequent call to /Dashboard/* still returned 401.
+        // The dashboard could therefore never load data and silently fell back
+        // to its hardcoded offline roster, which is why the rig appeared to
+        // have six outlets instead of thirteen.
+        //
+        // Both defaults are Application so sign-in and authorization agree.
+        // The bearer-named cookie handler stays registered because
+        // MapIdentityApi references it for its non-cookie flows.
         builder.Services.AddAuthentication(options =>
             {
                 options.DefaultScheme = IdentityConstants.ApplicationScheme;
                 options.DefaultSignInScheme = IdentityConstants.ApplicationScheme;
-                options.DefaultAuthenticateScheme = IdentityConstants.BearerScheme;
+                options.DefaultAuthenticateScheme = IdentityConstants.ApplicationScheme;
+                options.DefaultChallengeScheme = IdentityConstants.ApplicationScheme;
             })
             .AddIdentityCookies();
 

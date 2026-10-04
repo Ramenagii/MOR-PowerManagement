@@ -232,7 +232,7 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Policies loaded for six outlets with dedicated PZEM meters, CTs, and relay channels.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Policies loaded for 13 channels (8x220V mains, 1x110V step-down, 4x5V USB), metered by a single mains PZEM-004T v3.0 on the common feed.", Severity = EventSeverity.Info },
                 new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below warning threshold.", Severity = EventSeverity.Success });
         }
 

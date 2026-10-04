@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, RotateCcw, Save, SlidersHorizontal, X } from 'lucide-react'
+import { CheckCircle2, RotateCcw, Save, X } from 'lucide-react'
 import { ApiError, fetchDashboardState, updateOutletPolicy, updateThresholds } from '../api'
 import type { Outlet, Priority } from '../types/dashboard'
-import { MetricCard } from './MetricCard'
 import {
   PRIORITIES,
   PRIORITY_RANK,
   draftFrom,
+  railClass,
   sameDraft,
   thresholdDiff,
   type OutletDraft,
@@ -206,38 +206,66 @@ export function PolicyAdminView() {
   const dirtyCount = dirtyOutletIds.size
   const shedOrder = rows.filter((o) => o.priority === 'Low').length
   return (
-    <section className="view-stack" aria-label="Policy Administration">
-      <div className="page-heading">
+    <section className="design-main" aria-label="Policy Administration">
+      <nav className="design-breadcrumb" aria-label="Breadcrumb">
+        <span>Dashboard</span>
+        <span aria-hidden="true">/</span>
+        <strong>Policy Admin</strong>
+      </nav>
+
+      <div className="design-page-head">
         <div>
-          <p className="eyebrow">Administration</p>
-          <h2>Thresholds and outlet policy</h2>
+          <h1 className="design-page-title">
+            Policy &amp; Threshold Admin
+            <span className="tag tag-green">SYNCED</span>
+          </h1>
+          <p className="design-page-sub">
+            Granular power caps, load-shedding priority tiers and hardware protection limits.
+          </p>
         </div>
-        <SlidersHorizontal size={22} />
       </div>
 
-      <section className="overview-grid" aria-label="Configuration summary">
-        <MetricCard
-          icon={<SlidersHorizontal />}
-          label="Capacity (P_limit)"
-          value={`${thresholdForm.max} W`}
-          note={`Warning ${thresholdForm.warning} W / Critical ${thresholdForm.critical} W`}
-        />
-        <MetricCard
-          icon={<AlertTriangle />}
-          label="Unsaved edits"
-          value={`${(thresholdDirty ? 1 : 0) + dirtyCount}`}
-          note={
-            thresholdDirty || dirtyCount > 0
+      <section className="stat-strip" aria-label="Configuration summary">
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Capacity (P_limit)</span>
+            <span className="tag tag-primary">MAX</span>
+          </div>
+          <p className="stat-value">
+            {Math.round(thresholdForm.max).toLocaleString()}
+            <span className="stat-unit">W</span>
+          </p>
+          <p className="stat-foot">
+            {`Warning ${Math.round(thresholdForm.warning).toLocaleString()} W  ·  Critical ${Math.round(thresholdForm.critical).toLocaleString()} W`}
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>Unsaved edits</span>
+            <span className={`tag ${(thresholdDirty ? 1 : 0) + dirtyCount > 0 ? 'tag-amber' : 'tag-green'}`}>
+              {(thresholdDirty ? 1 : 0) + dirtyCount > 0 ? 'DIRTY' : 'SYNCED'}
+            </span>
+          </div>
+          <p className="stat-value">{(thresholdDirty ? 1 : 0) + dirtyCount}</p>
+          <p className="stat-foot">
+            {thresholdDirty || dirtyCount > 0
               ? 'Not yet written to the database'
-              : 'In sync with the stored configuration'
-          }
-        />
-        <MetricCard
-          icon={<X />}
-          label="First to shed"
-          value={`${shedOrder} low-priority`}
-          note="POL-05 sheds these before medium priority"
-        />
+              : 'In sync with the stored configuration'}
+          </p>
+        </article>
+
+        <article className="stat-card">
+          <div className="stat-label">
+            <span>First to shed</span>
+            <span className="tag tag-red">POL-05</span>
+          </div>
+          <p className="stat-value">
+            {shedOrder}
+            <span className="stat-unit">low-priority</span>
+          </p>
+          <p className="stat-foot">Shed before medium priority under POL-05 / POL-06</p>
+        </article>
       </section>
 
       <section className="panel wide-panel">
@@ -248,12 +276,12 @@ export function PolicyAdminView() {
           </div>
           <button
             type="button"
-            className="icon-button"
+            className="btn btn-primary"
             onClick={() => void saveThresholds()}
             disabled={!thresholdDirty || thresholdState === 'saving'}
           >
             <Save size={16} />
-            {thresholdState === 'saving' ? 'Saving...' : 'Save thresholds'}
+            {thresholdState === 'saving' ? 'Saving...' : 'Save All Policies'}
           </button>
         </div>
 
@@ -366,11 +394,13 @@ export function PolicyAdminView() {
         <div className="policy-table" role="table" aria-label="Outlet policy">
           <div className="policy-row policy-head" role="row">
             <span role="columnheader">Channel</span>
-            <span role="columnheader">Priority</span>
-            <span role="columnheader">Allowance (W)</span>
+            <span role="columnheader">Voltage</span>
+            <span role="columnheader">Priority Tier</span>
+            <span role="columnheader">Cap Limit (W)</span>
             <span role="columnheader">Schedule</span>
-            <span role="columnheader">Idle limit</span>
-            <span role="columnheader">Actions</span>
+            <span role="columnheader">Idle Limit</span>
+            <span role="columnheader">State</span>
+            <span role="columnheader">Action</span>
           </div>
 
           {rows.map((outlet) => {
@@ -384,6 +414,17 @@ export function PolicyAdminView() {
                 <span role="cell" className="policy-channel">
                   <strong>{`CH${String(outlet.id).padStart(2, '0')}`}</strong>
                   <span>{outlet.name}</span>
+                </span>
+
+                {/* Voltage badge: makes the three rails visible at a glance,
+                    which is how the design distinguishes 220V/110V/5V rows. */}
+                <span role="cell">
+                  <span
+                    className={`channel-rail ${railClass(outlet.volts)}`}
+                    title={`${outlet.volts} V rail`}
+                  >
+                    {outlet.volts}V
+                  </span>
                 </span>
 
                 <span role="cell">
@@ -438,6 +479,31 @@ export function PolicyAdminView() {
                       )
                     }
                   />
+                </span>
+
+                {/* Save state per row. The design shows a "Synced" pill; here it
+                    reports the actual outcome of the last write attempt rather
+                    than an assumed state. */}
+                <span role="cell">
+                  <span
+                    className={`tag ${
+                      state === 'saved'
+                        ? 'tag-green'
+                        : state === 'error'
+                          ? 'tag-red'
+                          : dirty
+                            ? 'tag-amber'
+                            : 'tag-green'
+                    }`}
+                  >
+                    {state === 'saving'
+                      ? 'SAVING'
+                      : state === 'error'
+                        ? 'REJECTED'
+                        : dirty
+                          ? 'DIRTY'
+                          : 'SYNCED'}
+                  </span>
                 </span>
 
                 <span role="cell" className="policy-actions">
