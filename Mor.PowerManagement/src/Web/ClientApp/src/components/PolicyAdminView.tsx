@@ -123,7 +123,7 @@ export function PolicyAdminView() {
       setThresholdState('error')
       setThresholdMessage(
         cause instanceof ApiError
-          ? `Rejected (${cause.status}). Warning must stay below critical, and all values must be positive.`
+          ? `Rejected (${cause.status}). Warning must stay below critical; capacity, warning and critical must be positive.`
           : String(cause),
       )
     }
