@@ -765,15 +765,38 @@ chain with no mains and no meter hardware attached.
 Where the source and the real hardware disagree. **These are documented, not
 fixed** - this guide does not edit the firmware.
 
-### M1 - `METER_ZMPT101B` is wrong for a ZMCT103C  ⚠ LIVE, blocking
+### M1 - `METER_ZMPT101B` is wrong for a ZMCT103C  ✅ RESOLVED
 
 | | |
 |---|---|
-| **Code says** | `METER_ZMPT101B` - a **voltage + current PAIR** on two ADC pins (`ZMPT_VOLT_PIN 1`, `ZMPT_CURR_PIN 2`), via a breakout module with integrated burden and LM358 buffer (`config.h:55,64,76-77,90-91`) |
+| **Was** | `METER_ZMPT101B` - a **voltage + current PAIR** on two ADC pins (`ZMPT_VOLT_PIN 1`, `ZMPT_CURR_PIN 2`), via a breakout module with integrated burden and LM358 buffer |
 | **Hardware is** | A **ZMCT103C** - a **current transformer only**, one AC output, bare component requiring an external burden, coupling cap and 1.65 V bias (§5) |
-| **Impact** | `p = vRms * aRms` (`.ino:278`) is meaningless - there is no voltage. Worse, a silent voltage channel trips `sFault` after 3 failures and **opens all 13 relays** (`.ino:267-274`), shutting the rig down. |
-| **Mitigation now** | Keep `METER_SOURCE` at its default `METER_SIMULATE` (`config.h:67-69`). This is the safe setting. |
-| **Fix** | Code change: single-ADC-pin current read, remove the voltage-silent → fault rule. Out of scope here. |
+| **Impact** | `p = vRms * aRms` is meaningless - there is no voltage. Worse, a silent voltage channel tripped `sFault` after 3 failures and **opened all 13 relays**, shutting the rig down. |
+
+**Now fixed.** `METER_ZMCT103C` (`= 3`) reads a **single** ADC pin with the correct
+maths: RMS from the peak-to-peak excursion about a **measured** bias (not a
+hardcoded constant, so drift and a half-built front end surface as errors rather
+than plausible numbers). Constants live in `config.h` under
+`ZMCT_CT_RATIO`, `ZMCT_BURDEN_OHMS`, `ZMCT_POWER_FACTOR`, `ZMCT_CAL`,
+`ZMCT_SAMPLE_COUNT`, `ZMCT_NOISE_FLOOR`, `ZMCT_BIAS_COUNTS`, `ZMCT_BIAS_TOLERANCE`
+and `ZMCT_MV_FULL_SCALE`.
+
+Two behaviours worth knowing:
+
+- **A genuine "no load" is not a fault.** An empty CT sitting at its bias returns
+  `true` with `0 A`, so it is still published. Only an implausible **bias**
+  (outside ±700 counts of 2048) trips `POL-01`, which is the right trigger: a
+  missing divider, an open coupling cap or an unpowered buffer all land there.
+- **The serial snapshot prints `bias=<n>/2048 pp=<n>`.** `bias` is the single
+  most useful number while commissioning — near 2048 means the front end is alive;
+  near 0 or 4095 means it is not wired. Check it *before* switching to mains.
+
+`METER_SOURCE` remains `METER_SIMULATE`. That is deliberate: a ZMCT build with
+nothing on the pin fails its front-end check, trips `POL-01` after three windows
+and opens all 13 relays. Correct fail-safe behaviour, but it takes the rig down —
+so switch only once the chain is proven.
+
+Verified: compiles clean for `esp32:esp32:esp32s3` (1,036,249 bytes / 79%).
 
 ### M2 - `SWITCH_PINS` - RESOLVED
 

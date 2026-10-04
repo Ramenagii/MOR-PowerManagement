@@ -377,6 +377,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     {
         MeteringMode.Simulated => "Simulated",
         MeteringMode.Metered => Math.Abs(ratedVolts - 220) < 1 ? "Measured" : "DerivedNominal",
+        MeteringMode.EstimatedFromCurrent => "EstimatedFromCurrent",
         _ => "Unknown",
     };
 
@@ -388,6 +389,8 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
             "Volts read from the single mains PZEM-004T v3.0 on the common feed. Current and power are derived by distributing the mains total across energized channels weighted by allowance.",
         MeteringMode.Metered =>
             $"Volt is this channel's {ratedVolts} V nominal rating - it is not individually metered. Current and power are derived by distributing the mains total across energized channels weighted by allowance.",
+        MeteringMode.EstimatedFromCurrent =>
+            $"Measured CURRENT only, from a ZMCT103C CT on the common feed. A current transformer has no voltage output, so the {ratedVolts} V shown is this channel's nominal rating and watts are ESTIMATED as V_nominal x I x an assumed power factor. Neither V nor W is individually measured - real power needs a PZEM-004T.",
         _ => "The device has not reported a metering mode yet, so this channel's provenance is unknown.",
     };
 

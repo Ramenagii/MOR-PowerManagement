@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <Arduino.h>
 
 // ---------------------------------------------------------------------------
-// MOR power-management prototype — ESP32 edge controller.
+// MOR power-management prototype â€” ESP32 edge controller.
 // Edit the values below for your bench, then compile and flash with:
 //   arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 //   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
@@ -87,9 +87,19 @@
 #define METER_SIMULATE 0
 #define METER_ZMPT101B 1
 #define METER_PZEM004T 2
+// ZMCT103C current transformer. Measures CURRENT ONLY -- a CT has no voltage
+// output. Volts stay at each channel's nominal rating and watts are estimated
+// as V_nominal x I x ZMCT_POWER_FACTOR. Reports EstimatedFromCurrent (=3), NOT
+// Metered (=2), so the UI cannot imply real power was measured.
+#define METER_ZMCT103C 3
 
 #ifndef METER_SOURCE
-#define METER_SOURCE METER_SIMULATE
+// ZMCT103C on the common feed. Switch to this only once GPIO2 shows a bias
+// near 2048 counts (~1.65 V) with a meter or in the serial snapshot. If the pin
+// is floating the front-end check fails, POL-01 trips after three windows and
+// opens all 13 relays -- correct fail-safe behaviour, but it will take the rig
+// down, so keep the serial monitor open before powering up.
+#define METER_SOURCE METER_ZMCT103C
 #endif
 
 // Placeholder for bench tests without hardware wired:
@@ -128,6 +138,73 @@
 // sits at its DC bias when the primary carries no current, so a tiny excursion
 // is an idle channel, not a reading of zero that should still be published.
 #define ZMPT_NOISE_FLOOR 12
+
+// ---- ZMCT103C current transformer (expansion board) ------------------------
+// A ZMCT103C is a CURRENT transformer. It has no voltage output and needs no
+// power supply of its own -- it generates its signal from the current in its
+// primary. This is the difference that matters: the ZMPT101B path above is
+// WRONG for this part, because it assumes a voltage+current pair on two pins.
+//
+// REQUIRED SIGNAL CHAIN (see docs/WIRING.md section 5):
+//   CT secondary -> burden resistor -> 1uF AC coupling cap -> 100k/100k bias
+//   divider at 1.65 V -> rail-to-rail op-amp buffer -> this pin
+//
+// The coupling cap is not optional. A bias divider placed straight on a CT
+// secondary creates a DC path through the burden, which biases the magnetic
+// core into saturation and collapses the output into a plausible-looking lie.
+//
+// The bias MUST be referenced to the board's 3V3 pin, never to VIN/5V. The ADC
+// input is 3.3 V maximum; referencing 5 V destroys the GPIO.
+
+// GPIO2 (ADC1_CHANNEL_1) is the recommended pin: it was the documented current
+// role on the ZMPT path, so the pairing is unchanged. GPIO1 is held spare.
+#define ZMCT_PIN 2
+
+// VERIFY against the marking on your part. ZMCT103C variants ship as 1000:1,
+// 2000:1 and 3000:1; a wrong ratio scales every reading by that factor.
+#define ZMCT_CT_RATIO 1000.0f
+
+// Burden resistor across the CT secondary, in ohms. This converts secondary
+// current to the voltage the ADC sees: V_peak = I_primary / ratio * burden.
+// With 1000:1 and 100 ohm, 10 A primary -> 10 mA -> 1.0 V peak (2 V p-p),
+// sitting at 1.65 +/- 1.0 V. Clips at roughly 14 A; lower this if your rig
+// exceeds that.
+#define ZMCT_BURDEN_OHMS 100.0f
+
+// Assumed power factor for the ESTIMATED wattage. Without a PZEM there is no
+// phase information, so watts are apparent-power-derived, not real power.
+// 1.0 assumes a purely resistive load (heater, kettle); ~0.9 is typical for
+// electronics. This is the single biggest source of error in estimated watts.
+#define ZMCT_POWER_FACTOR 0.9f
+
+// Multiplier on the uncalibrated RMS. Leave at 1.0 until the front end is built,
+// then tune against a clamp meter on a known load.
+#define ZMCT_CAL 1.0f
+
+// Samples per RMS window. The ESP32-S3 ADC is far slower than mains, so this
+// buys resolution rather than bandwidth: 2048 samples spans many cycles of a
+// 50/60 Hz waveform.
+#define ZMCT_SAMPLE_COUNT 2048
+
+// Peak-to-peak ADC counts below which the CT is treated as carrying no current.
+// The pin sits at its bias when the primary is unloaded; a small excursion is
+// "no load", not a small reading.
+#define ZMCT_NOISE_FLOOR 20
+
+// Expected DC bias, in ADC counts at 12-bit with ADC_11db attenuation.
+// Mid-supply (1.65 V) lands near 2048. Deliberately wide: this is a gross
+// "is the front end wired and biased at all" check, not a precision trim. A
+// reading far from this range means the divider is missing, the cap is open, or
+// the buffer is not powered -- in every case the current figure is meaningless
+// and must not be published.
+#define ZMCT_BIAS_COUNTS 2048
+#define ZMCT_BIAS_TOLERANCE 700
+
+// Millimetres to millivolts for the ADC full scale at 11 dB attenuation. The
+// ESP32-S3 is not a true 3.3 V input here: the usable range is roughly 0-3.1 V,
+// and the top of the range is non-linear. Sizing the bias network against a
+// nominal 3.3 V causes clipping that looks like AC distortion.
+#define ZMCT_MV_FULL_SCALE 3100.0f
 
 // ---- PZEM-004T v3.0 bus --------------------------------------------------
 // 13-channel rig: single mains PZEM (address 1) on the common feed.

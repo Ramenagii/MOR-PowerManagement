@@ -86,6 +86,79 @@ bool zmptRms(uint8_t pin, float calibration, float &rms, uint16_t &peakToPeak) {
 
 #endif  // METER_SOURCE == METER_ZMPT101B
 
+#if METER_SOURCE == METER_ZMCT103C
+// Last window's diagnostics, published in the serial snapshot so a bench
+// session can be debugged without a logic analyser.
+float zmctLastVoltsRms = 0;
+uint16_t zmctLastPp = 0;
+uint16_t zmctLastBias = 0;
+bool zmctFrontEndOk = false;
+
+/**
+ * Read primary current from the ZMCT103C.
+ *
+ * The CT produces a bipolar AC waveform centred on the 1.65 V bias divider.
+ * RMS therefore has to come from the peak-to-peak excursion, never from the
+ * absolute ADC value -- reading the pin against ground reports the bias as
+ * ~1.65 V of DC and is meaningless.
+ *
+ * The bias is measured per window rather than assumed. A fixed constant would
+ * drift with temperature and supply, and a half-supplied or unbuffered front
+ * end would silently produce a plausible-looking number instead of an error.
+ *
+ * Returns false only when the front end is not believable. A genuine "no load"
+ * is NOT a failure -- it returns true with 0 A, because an empty CT sitting at
+ * its bias is a legitimate reading and must still be published.
+ */
+bool zmctReadAmps(float &amps, float &voltsRms) {
+  int lo = 4095;
+  int hi = 0;
+  uint32_t sum = 0;
+
+  for (int i = 0; i < ZMCT_SAMPLE_COUNT; i++) {
+    int raw = analogRead(ZMCT_PIN);
+    if (raw < lo) lo = raw;
+    if (raw > hi) hi = raw;
+    sum += (uint32_t)raw;
+  }
+
+  const uint16_t pp = (uint16_t)(hi - lo);
+  const uint16_t bias = (uint16_t)(sum / ZMCT_SAMPLE_COUNT);
+
+  zmctLastPp = pp;
+  zmctLastBias = bias;
+  zmctLastVoltsRms = 0;  // stays 0 on the failure / no-load paths below
+
+  // Gross front-end sanity check, before any maths is derived from the signal.
+  // Missing divider, open coupling cap or unpowered buffer all land here.
+  const int biasErr = (int)bias - ZMCT_BIAS_COUNTS;
+  zmctFrontEndOk = (biasErr <= ZMCT_BIAS_TOLERANCE) && (biasErr >= -ZMCT_BIAS_TOLERANCE);
+  if (!zmctFrontEndOk) {
+    amps = 0.0f;
+    voltsRms = 0.0f;
+    return false;
+  }
+
+  if (pp < ZMCT_NOISE_FLOOR) {
+    amps = 0.0f;      // CT is carrying no current: legitimate, not a fault
+    voltsRms = 0.0f;
+    return true;
+  }
+
+  // Peak-to-peak -> peak -> RMS. The CT waveform is sinusoidal, so the 1/sqrt(2)
+  // form factor applies; the 2 on peak-to-peak is the half-wave amplitude.
+  const float countsToVolts = ZMCT_MV_FULL_SCALE / 4095.0f;
+  const float peak = (pp / 2.0f) * countsToVolts;
+  voltsRms = peak * 0.70710678f * ZMCT_CAL;
+  zmctLastVoltsRms = voltsRms;
+
+  // Secondary RMS current through the burden, stepped back up by the ratio.
+  const float secondaryAmps = voltsRms / ZMCT_BURDEN_OHMS;
+  amps = secondaryAmps * ZMCT_CT_RATIO;
+  return true;
+}
+#endif  // METER_SOURCE == METER_ZMCT103C
+
 struct ChannelState {
   float voltage = 0;
   float current = 0;
@@ -279,6 +352,36 @@ void readMeters() {
   e = mainsMeter.energy();  // PZEM stays as the energy counter until it is replaced
   lastZmptPp = vpp;
   lastZmptAp = app;
+#elif METER_SOURCE == METER_ZMCT103C
+  // ZMCT103C on the common feed: CURRENT ONLY.
+  //
+  // A current transformer has no voltage output, so `v` is deliberately NOT a
+  // measurement. It stays at the nominal mains rating and is used only to turn
+  // the measured amps into estimated watts. Reporting a fabricated voltage as
+  // though it were measured is the specific dishonesty this branch avoids.
+  float aRms, senseRms;
+  bool aOk = zmctReadAmps(aRms, senseRms);
+
+  if (!aOk) {
+    // Front end not believable (bias off mid-supply, divider missing, cap open
+    // or buffer unpowered). Publishing the resulting amps would be worse than
+    // reporting nothing, so treat it as POL-01 hardware isolation.
+    channels[0].faultStreak++;
+    if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
+      sFault = true;
+      Serial.printf("POL-01: S_fault TRUE (ZMCT103C front end implausible, bias=%u counts)\n",
+                    zmctLastBias);
+    }
+    return;
+  }
+
+  channels[0].faultStreak = 0;
+  // Reuse the configured nominal for the mains bus rather than inventing a
+  // constant, so Policy Admin stays the single source of truth for rail volts.
+  v = ratedVolts[0] > 0 ? ratedVolts[0] : 220.0f;   // nominal rail, NOT measured
+  p = v * aRms * ZMCT_POWER_FACTOR;                 // ESTIMATED watts
+  e = mainsMeter.energy();                // no energy counter on a CT
+  if (isnan(p) || p < 0) p = 0;
 #else
   v = mainsMeter.voltage();
   p = mainsMeter.power();
@@ -588,9 +691,20 @@ bool postTelemetry() {
   doc["missedPosts"] = missedPosts;
 
 #ifdef REPORT_METERING_MODE
-  // Provenance for the values in this batch: 1 = Simulated (SIMULATE_METERS),
-  // 2 = Metered (a real PZEM-004T sits on the common mains feed).
-  doc["meteringMode"] = SIMULATE_METERS ? 1 : 2;
+  // Provenance for the values in this batch:
+  //   1 = Simulated        - synthesised on the ESP32 (SIMULATE_METERS)
+  //   2 = Metered          - a real PZEM-004T measures V, I and energy
+  //   3 = EstimatedFromCurrent - ZMCT103C CT: current measured, volts nominal,
+  //                         watts estimated at an assumed power factor
+  // The backend renders these differently, so posting 2 from a CT build would
+  // make the UI claim measured volts and watts that were never measured.
+#if SIMULATE_METERS
+  doc["meteringMode"] = 1;
+#elif METER_SOURCE == METER_ZMCT103C
+  doc["meteringMode"] = 3;
+#else
+  doc["meteringMode"] = 2;
+#endif
 #endif
 
   JsonArray readings = doc["readings"].to<JsonArray>();
@@ -656,6 +770,14 @@ void printChannelSnapshot() {
   Serial.printf("zmpt: v_pp=%u i_pp=%u%s\n", lastZmptPp, lastZmptAp,
                 sFault ? " FAULT" : "");
 #endif
+#if METER_SOURCE == METER_ZMCT103C
+  // The bias is the single most useful number when commissioning: a front end
+  // that reads ~2048 counts is alive, one that reads 0 or 4095 is not wired.
+  // pp then confirms the CT path separately from the bias network.
+  Serial.printf("zmct: bias=%u/%u pp=%u v_rms=%.3fV%s\n",
+                zmctLastBias, ZMCT_BIAS_COUNTS, zmctLastPp, zmctLastVoltsRms,
+                zmctFrontEndOk ? "" : " FRONT-END-IMPLAUSIBLE");
+#endif
 }
 
 void setup() {
@@ -678,6 +800,19 @@ void setup() {
   analogSetPinAttenuation(ZMPT_VOLT_PIN, ADC_11db);
   analogSetPinAttenuation(ZMPT_CURR_PIN, ADC_11db);
   Serial.printf("meter: ZMPT101B on ADC1 (V=GPIO%d, I=GPIO%d)\n", ZMPT_VOLT_PIN, ZMPT_CURR_PIN);
+#elif METER_SOURCE == METER_ZMCT103C
+  // 12-bit samples on ADC1. ADC2 cannot be read while Wi-Fi is associated, and
+  // this device is always associated, so ADC1 is not a preference here.
+  analogReadResolution(12);
+  analogSetPinAttenuation(ZMCT_PIN, ADC_11db);
+  pinMode(ZMCT_PIN, INPUT);
+  Serial.printf("meter: ZMCT103C on ADC1 (I=GPIO%d, ratio=%.0f:1, burden=%.0f ohm)\n",
+                ZMCT_PIN, ZMCT_CT_RATIO, ZMCT_BURDEN_OHMS);
+  Serial.println("  NOTE: current only. Volts are the nominal rail rating and watts are");
+  Serial.printf("  ESTIMATED as V_nominal x I x %.2f. Real power needs a PZEM-004T.\n",
+                ZMCT_POWER_FACTOR);
+  Serial.printf("  Front-end check: bias must sit near %u +/- %d counts (~1.65 V).\n",
+                ZMCT_BIAS_COUNTS, ZMCT_BIAS_TOLERANCE);
 #elif METER_SOURCE == METER_PZEM004T
   Serial.printf("meter: PZEM-004T v3.0 on UART (RX=GPIO%d, TX=GPIO%d)\n", PZEM_RX_PIN, PZEM_TX_PIN);
 #else
