@@ -89,6 +89,42 @@ Expected to be a single row. `UpdateThresholdsCommand` creates one if absent.
 admin form can round-trip them; before that the form could write a value it
 could never read back.
 
+#### Live threshold values, and where they come from
+
+**The database row is authoritative at runtime. The C# entity defaults are not.**
+`PowerSystemConfig` declares fallback defaults (2200 / 1800 / 2000 / 80), but
+those only apply when **no** row exists. Once a row exists — written by the
+seeder on first boot, or edited later through Policy Admin — the row wins, and
+the entity defaults are never consulted again.
+
+Current deployed values, read from `GET /api/Dashboard/state`:
+
+| Field | Live value | Share of capacity |
+|---|---|---|
+| `MaxCapacityWatts` | 4000 W | 100 % (P_limit) |
+| `WarningThresholdWatts` | 3240 W | 81 % |
+| `CriticalThresholdWatts` | 3600 W | 90 % (drives POL-03 / POL-04) |
+| `StandbyThresholdWatts` | 80 W | POL-08 branch threshold |
+| `StandbyIdleMinutes` | 30 min | POL-08 idle duration |
+| `StabilizationDelayMs` | 500 ms | post-activation delay |
+
+So any prose quoting "2200 W" or "2500 W" is wrong. The dashboard reads these
+from the API rather than hardcoding them, which is why the Policy Admin stat
+strip and the Channel Inventory capacity figures track an edit immediately.
+
+To verify on a running host:
+
+```powershell
+curl.exe -s -H "Cookie: .AspNetCore.Identity.Application=<cookie>" \
+  http://localhost:5299/api/Dashboard/state | ConvertFrom-Json | Select-Object -Expand thresholds
+```
+
+**Who can change them.** `PUT /api/Dashboard/thresholds` (any signed-in user —
+there is no role check on the Dashboard group) and the ESP32, which pulls them
+via `GET /api/Device/config` every `CONFIG_INTERVAL_MS` (15 s) and caches them
+in NVS. A policy edit therefore reaches the relays within ~15 s, and persists
+across a network drop.
+
 ### 1.4 `PowerEvents` — the audit trail
 
 | Column | Type | Notes |
@@ -176,6 +212,54 @@ configured, which is what allows local and defense-demo use without a secret.
 header. The dashboard therefore uses `/Dashboard/scenarios/ingest` instead and
 never holds the key — shipping it in the bundle would let anyone who can read
 the JavaScript inject readings.
+
+### 3.3 Policy enforcement — where each rule actually runs
+
+Documented because "which component enforces POL-xx" is a defensibility
+question, and the honest answer is not uniform.
+
+| Rule | ESP32 (on-device) | Backend | Notes |
+|---|---|---|---|
+| POL-01 fault isolation | Yes | Yes | Both trip `S_fault` / open all relays. |
+| POL-02 pre-activation allow | Yes | Yes | |
+| POL-03 pre-activation deny | Yes | Yes | |
+| POL-04 post-activation shed | Yes | Yes | Uses `StabilizationDelayMs` (500 ms) as the settle window. |
+| POL-05 / POL-06 shed by priority | Yes | Yes | Server endpoint `/Dashboard/shedding/selective`. |
+| POL-07 priority preservation | Yes (via candidate ordering) | Yes | |
+| **POL-08 standby / idle** | **Yes** | **Detection only** | See below. |
+
+**POL-08 was previously enforced nowhere.** The firmware fetched
+`standbyThresholdWatts` into `cfgStandby` and persisted it to NVS but never
+evaluated it, and `LoadResponseEvaluator.DetectIdleCandidates` on the server had
+no callers — dead code. The rule therefore existed as a policy row in the
+database and a card in the Policies view, with nothing behind it.
+
+It is now implemented on-device. A channel that is energized, not already shed
+for capacity, and drawing at or below `StandbyThresholdWatts` has its idle timer
+started; once that timer exceeds the channel's `IdleLimitMinutes` — or the
+global `StandbyIdleMinutes` when the channel's own value is null — the relay is
+opened and `POL-08` is logged to serial.
+
+`null` `IdleLimitMinutes` means **exempt**, so it is stored as `-1` rather than
+`0`: conflating the two would either shed deliberately-exempt channels or never
+shed the ones that should be. A per-channel limit of `0` disables the timer for
+that channel only.
+
+Both inputs are persisted in NVS (`sbIdle`, `idleLim`) so the rule survives a
+reboot with no network. On restore from a table written before this existed, the
+compiled `-1` exempt defaults are kept — the safe direction, because an
+unenforced standby rule only wastes power whereas a wrongly-enforced one would
+shed channels the operator had exempted.
+
+**Why the device rather than the server:** the ESP32 is the only component that
+can act without a network round-trip, which is what the "enforces the last
+synced policy when the network drops" property requires. Pol-08 is inherently a
+*time-based* rule — it needs a timer running for 30 minutes — so delegating it to
+a request/response backend would mean holding state across requests for no gain.
+
+**Known gap:** `DetectIdleCandidates` remains uncalled on the server. It is
+harmless dead code and may be wired to a future auto-shed endpoint, but it must
+not be described as an active control.
 
 ---
 

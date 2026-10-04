@@ -68,6 +68,18 @@ Boot proof on serial @115200:
 - Demo accounts (seeded, lockout disabled): `administrator@localhost` /
   `Administrator1!`, `demo@localhost` / `Demo1234!`.
 
+### Telemetry retention
+
+- `Telemetry:RetentionDays` (default **3**) controls how much raw telemetry is
+  kept. `TelemetryRetentionService` prunes older samples in 50,000-row batches,
+  on a 15-minute `PeriodicTimer`, first tick 15 min after start (never at
+  startup, so it cannot race `InitialiseDatabaseAsync` on a cold start).
+- Why it exists: the rig posts 13 channels every 5 s = 224,640 rows/day, about
+  34 MB/day and ~1 GB/month. Neon free tier allows 0.5 GB. Three days is ~103 MB.
+- Override with the `Telemetry__RetentionDays` environment variable.
+- Set `Telemetry:RetentionDays` to 0 to prune everything on every tick — useful
+  for reclaiming space after a demo, destructive by design.
+
 ## 5. Deployment stages
 
 - **Stage 0 — PC demo (done).** `dotnet run --urls http://0.0.0.0:5211`,
@@ -95,7 +107,10 @@ Boot proof on serial @115200:
   2. Env vars on the host: `ASPNETCORE_ENVIRONMENT=Production`,
      `ConnectionStrings__Mor.PowerManagementDb=<Neon URL>`,
      `Device__ApiKey=<shared secret>`. First boot auto-migrates Neon.
-  3. Note the public URL, e.g. `https://mor-power.onrender.com`.
+  3. Note the public URL. The deployed host is
+      `https://mor-powermanagement.onrender.com` (matches `BACKEND_HOST` in
+      `firmware/mor-power-device/config.h`); the earlier
+      `https://mor-power.onrender.com` placeholder was never a real host.
   4. Firmware for public backend: `BACKEND_HOST` = host domain (no
      `https://`), `BACKEND_PORT 443`, `BACKEND_USE_TLS 1`,
      `DEVICE_API_KEY` = same secret, reflash. Real certs are verified by
@@ -122,3 +137,15 @@ Boot proof on serial @115200:
   (`Mor.PowerManagementDb` contains dots); unit suites pass (Domain 6/6,
   Application 8/8, ClientApp 5/5).
 - Wi-Fi credentials live in `config.h` — keep the repo private.
+- **Telemetry retention is opportunistic, not scheduled.** `TelemetryRetentionService`
+  is an in-process `BackgroundService`. On a Render free-tier host that sleeps
+  after ~15 min idle, neither the retention job nor the ESP32's 5 s telemetry POST
+  can run, so the rig's real history accumulates only in ~15-minute bursts.
+  Pruning happens whenever the host is awake. Do not claim guaranteed retention.
+- The 7-day telemetry window therefore usually returns less than 7 days: the
+  storage bound above and the sleep behaviour both bite. The seeded demo data
+  (`scripts/seed-telemetry.sql`) is what makes a full window look populated.
+- Demo data is synthetic. `scripts/seed-telemetry.sql` generates clearly-shaped
+  but fabricated readings (class-hours gaps, one deliberate outage, flat nominal
+  rails) so the gap-vs-zero rendering and the provenance captions can be shown
+  without hardware. It is not sensor data and must never be presented as such.

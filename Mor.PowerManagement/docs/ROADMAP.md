@@ -230,13 +230,17 @@ transcripts.
 
 ## 6. Known housekeeping (untouched)
 
-- `docs/ARCHITECTURE.md:110` still lists the placeholder
-  `https://mor-power.onrender.com`. The real host is
-  `mor-powermanagement.onrender.com`, from
-  `firmware/mor-power-device/config.h:28`.
-- Doc/code mismatches: channel count (doc says 6 outlets + 1x110 V + 2 USB = 9;
+- ~~`docs/ARCHITECTURE.md:110` still lists the placeholder
+  `https://mor-power.onrender.com`.~~ **Fixed** — now names the real host,
+  `mor-powermanagement.onrender.com`.
+- ~~Doc/code mismatches: channel count (doc says 6 outlets + 1x110 V + 2 USB = 9;
   code has 13), power limit (2,500 W vs implemented), rule IDs (FR-01..FR-08 vs
-  POL-01..POL-08), Wi-Fi setup (the `MOR-Setup` captive portal was removed).
+  POL-01..POL-08), Wi-Fi setup (the `MOR-Setup` captive portal was removed).~~
+  **Partly resolved.** Channel count is now correct at 13 everywhere (the 6 that
+  appeared in the client was the offline fallback, surfaced by the auth bug and
+  since fixed). Rule IDs and the power limit are now documented from the live
+  `PowerSystemConfigs` row rather than a hardcoded number. The `MOR-Setup`
+  captive-portal reference still needs removing — it was never in the firmware.
 - `opencode.db` is 7.8 GB and is implicated in session crashes.
 - `mor-power-management-dashboard` is a gitlink with no `.gitmodules`.
 - ~40 test projects show as unstaged deletions in the working tree. They were

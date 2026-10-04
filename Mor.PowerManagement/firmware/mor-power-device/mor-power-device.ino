@@ -337,6 +337,63 @@ int pickShedCandidate() {
   return pick;
 }
 
+// Per-channel idle timer for POL-08. `idleSinceMs[i]` is the millis() value at
+// which the channel was first observed at or below the standby threshold; 0
+// means "not currently idle". A per-channel limit overrides the global
+// StandbyIdleMinutes; -1 means the channel is exempt.
+int idleLimitMinutes[OUTLET_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+unsigned long idleSinceMs[OUTLET_COUNT] = { 0 };
+int cfgStandbyIdleMinutes = 30;
+
+/**
+ * POL-08 standby load management.
+ *
+ * A channel that is energized but drawing at or below the standby threshold is
+ * "idle". After its idle limit elapses the relay is opened.
+ *
+ * Why this runs on the device rather than only on the server: the policy table
+ * is the firmware's contract with the backend, and POL-08 is the only rule in
+ * POL-01..POL-08 that had no local implementation at all -- cfgStandby was
+ * fetched and persisted but never evaluated. Server-side,
+ * LoadResponseEvaluator.DetectIdleCandidates exists but had no callers, so the
+ * rule was enforced nowhere. The ESP32 is also the component that can act
+ * without a network round-trip, which is what the "runs the last synced policy
+ * when the network drops" property requires.
+ */
+void enforceStandbyPolicy(unsigned long now) {
+  for (int i = 0; i < OUTLET_COUNT; i++) {
+    // Only energized channels can be idle-but-connected.
+    if (!channels[i].relayClosed) {
+      idleSinceMs[i] = 0;
+      continue;
+    }
+
+    // A fault lockout opens relays itself; do not second-guess it here.
+    if (sFault || channels[i].localShed) continue;
+
+    if (channels[i].power > cfgStandby) {
+      idleSinceMs[i] = 0;  // back above the threshold: restart the timer
+      continue;
+    }
+
+    const int limit = idleLimitMinutes[i] >= 0 ? idleLimitMinutes[i] : cfgStandbyIdleMinutes;
+    if (limit <= 0) continue;  // 0 disables the timer for this channel
+
+    if (idleSinceMs[i] == 0) {
+      idleSinceMs[i] = now;  // first sample below threshold starts the clock
+      continue;
+    }
+
+    const unsigned long elapsed = now - idleSinceMs[i];
+    if (elapsed >= (unsigned long)limit * 60UL * 1000UL) {
+      channels[i].relayClosed = false;
+      idleSinceMs[i] = 0;
+      Serial.printf("POL-08: channel %d idle at %.0f W for %d min, standby shed\n",
+                    i + 1, channels[i].power, limit);
+    }
+  }
+}
+
 void evaluateLocalPolicies() {
   if (sFault) return;
 
@@ -355,6 +412,10 @@ void evaluateLocalPolicies() {
   if (total <= cfgWarning) {
     for (int i = 0; i < OUTLET_COUNT; i++) channels[i].localShed = false;
   }
+
+  // POL-08 runs after the capacity rules: a shed for overload is not an idle
+  // shed, and applying both to one channel would report the wrong reason.
+  enforceStandbyPolicy(millis());
 }
 
 void handleManualSwitch(int i) {
@@ -397,6 +458,15 @@ void savePolicyTable() {
   nvsPolicy.putFloat("warn", cfgWarning);
   nvsPolicy.putFloat("standby", cfgStandby);
   nvsPolicy.putInt("stabMs", cfgStabilizationMs);
+  // POL-08 inputs. Persisted so the standby rule survives a reboot with no
+  // network: a device that forgot its idle duration would either shed channels
+  // immediately or never shed them at all.
+  nvsPolicy.putInt("sbIdle", cfgStandbyIdleMinutes);
+  {
+    int16_t idleArr[OUTLET_COUNT];
+    for (int i = 0; i < OUTLET_COUNT; i++) idleArr[i] = (int16_t)idleLimitMinutes[i];
+    nvsPolicy.putBytes("idleLim", idleArr, sizeof(idleArr));
+  }
   uint8_t prio[OUTLET_COUNT];
   for (int i = 0; i < OUTLET_COUNT; i++) prio[i] = (uint8_t)prioRank[i];
   nvsPolicy.putBytes("prio", prio, OUTLET_COUNT);
@@ -421,6 +491,17 @@ bool loadPolicyTable() {
   cfgWarning = nvsPolicy.getFloat("warn", cfgWarning);
   cfgStandby = nvsPolicy.getFloat("standby", cfgStandby);
   cfgStabilizationMs = nvsPolicy.getInt("stabMs", cfgStabilizationMs);
+  cfgStandbyIdleMinutes = nvsPolicy.getInt("sbIdle", cfgStandbyIdleMinutes);
+  // Absent in tables written before POL-08 was implemented; leaving the
+  // compiled -1 (exempt) defaults in place is the safe direction, since an
+  // un-enforced standby rule only wastes power while a wrongly-enforced one
+  // would shed channels the operator had deliberately exempted.
+  {
+    int16_t idleArr[OUTLET_COUNT];
+    if (nvsPolicy.getBytes("idleLim", idleArr, sizeof(idleArr)) == sizeof(idleArr)) {
+      for (int i = 0; i < OUTLET_COUNT; i++) idleLimitMinutes[i] = idleArr[i];
+    }
+  }
   uint8_t prio[OUTLET_COUNT];
   if (nvsPolicy.getBytes("prio", prio, OUTLET_COUNT) == OUTLET_COUNT) {
     for (int i = 0; i < OUTLET_COUNT; i++) prioRank[i] = prio[i];
@@ -470,6 +551,9 @@ bool syncConfig() {
   cfgWarning = doc["warningThresholdWatts"] | cfgWarning;
   cfgStandby = doc["standbyThresholdWatts"] | cfgStandby;
   cfgStabilizationMs = doc["stabilizationDelayMs"] | cfgStabilizationMs;
+  // POL-08 idle duration. Without this the local standby rule had no timer to
+  // run on and would have had to fall back to a compiled-in guess.
+  cfgStandbyIdleMinutes = doc["standbyIdleMinutes"] | cfgStandbyIdleMinutes;
 
   JsonArray outlets = doc["outlets"];
   for (JsonObject o : outlets) {
@@ -478,6 +562,14 @@ bool syncConfig() {
     prioRank[ch] = o["priority"] | 1;
     allowanceW[ch] = o["allowanceWatts"] | 0.0f;
     ratedVolts[ch] = o["ratedVoltageVolts"] | ratedVolts[ch];
+    // idleLimitMinutes is nullable: null means the channel is EXEMPT from the
+    // POL-08 standby shutdown, which is why -1 is the exempt marker rather than
+    // 0. Reading it as 0 would silently exempt or enforce the wrong channels.
+    if (o["idleLimitMinutes"].isNull()) {
+      idleLimitMinutes[ch] = -1;
+    } else {
+      idleLimitMinutes[ch] = o["idleLimitMinutes"] | -1;
+    }
     int desired = o["desiredStatus"] | 3;
     desiredEnergized[ch] = (desired == DESIRED_ACTIVE || desired == DESIRED_STANDBY);
   }
