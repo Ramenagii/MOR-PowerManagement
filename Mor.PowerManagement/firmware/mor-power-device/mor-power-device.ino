@@ -1,13 +1,22 @@
-// MOR power-management prototype — ESP32 edge controller.
+// MOR power-management prototype — ESP32-S3 edge controller.
 //
 // Each loop iteration the firmware:
-//   1. reads one mains PZEM-004T v3.0 (Modbus address 1) and estimates
-//      per-channel watts from the mains total,
+//   1. reads ONE mains meter and estimates per-channel watts from that total,
+//      weighted by each channel's allowance,
 //   2. evaluates the ECA policy table locally (POL-01..POL-08 twins),
 //   3. drives thirteen relay channels (8x220V + 1x110V + 4xUSB),
 //   4. POSTs telemetry to the backend and periodically re-syncs config.
 //
-// The backend (ASP.NET Core + Neon) is the system of record; the ESP32 keeps
+// Meter front end is selected by METER_SOURCE in config.h:
+//   METER_SIMULATE  synthesised, no hardware (the current default)
+//   METER_ZMPT101B  expansion board, isolated V+I pair on ADC1
+//   METER_PZEM004T  PZEM-004T v3.0 over UART
+// All three feed the same downstream path, so swapping in the PZEM later is a
+// one-constant change and not a rewrite.
+//
+// The backend (ASP.NET Core + Neon) is the system of record. Policy edits made
+// in the dashboard reach the hardware through GET /api/Device/config, which the
+// firmware polls every CONFIG_INTERVAL_MS and writes to NVS; the ESP32 keeps
 // running the last synced policy table when the network drops.
 
 #include <WiFi.h>
@@ -26,6 +35,56 @@
 // Single mains meter for the 13-channel rig (common feed, address 1).
 // Per-channel power is estimated from the mains total weighted by allowance.
 PZEM004Tv30 mainsMeter(Serial2, PZEM_RX_PIN, PZEM_TX_PIN, 0x01);
+
+// Latest raw mains reading, whichever front end produced it.
+// A value of -1 means "this meter did not produce a reading", which the policy
+// layer treats as a sensor fault rather than as a zero-load measurement.
+struct MainsReading {
+  float volts = -1.0f;
+  float amps = -1.0f;
+  float watts = -1.0f;
+};
+
+#if METER_SOURCE == METER_ZMPT101B
+
+/**
+ * RMS from a ZMPT101B OUT pin.
+ *
+ * The output is a small AC waveform riding on roughly 1.5 V of DC bias, so the
+ * ADC reading against ground is meaningless as an AC measurement. The correct
+ * method is to sample a window, take the peak-to-peak excursion, halve it for
+ * the peak amplitude, and multiply by 1/sqrt(2) for RMS:
+ *
+ *     Vrms = (pp / 2) * (Vref / full_scale) * 0.7071 * calibration
+ *
+ * `ok` is false when the excursion is below the noise floor, which is how an
+ * unconnected or de-energised sensor presents itself. Reporting that as 0.0 A
+ * would be indistinguishable from a real zero-load reading.
+ */
+bool zmptRms(uint8_t pin, float calibration, float &rms, uint16_t &peakToPeak) {
+  int lo = 4095;
+  int hi = 0;
+
+  for (int i = 0; i < ZMPT_SAMPLE_COUNT; i++) {
+    int raw = analogRead(pin);
+    if (raw < lo) lo = raw;
+    if (raw > hi) hi = raw;
+  }
+
+  peakToPeak = (uint16_t)(hi - lo);
+  if (peakToPeak < ZMPT_NOISE_FLOOR) {
+    rms = 0.0f;
+    return false;
+  }
+
+  const float vref = 3.3f;
+  const float fullScale = 4095.0f;
+  const float peak = (peakToPeak / 2.0f) * (vref / fullScale);
+  rms = peak * 0.70710678f * calibration;
+  return true;
+}
+
+#endif  // METER_SOURCE == METER_ZMPT101B
 
 struct ChannelState {
   float voltage = 0;
@@ -66,6 +125,11 @@ const uint32_t POLICY_MAGIC = 0x4D4F5232;  // "MOR2": 16-bit desired mask for 13
 unsigned long missedPosts = 0;
 
 bool sFault = false;
+// Peak-to-peak excursion from the last ZMPT101B window, kept for the serial
+// snapshot so a dead sensor is visible as a number rather than inferred from a
+// suspicious 0.0 A reading.
+uint16_t lastZmptPp = 0;
+uint16_t lastZmptAp = 0;
 unsigned long lastTelemetryAt = 0;
 unsigned long lastConfigAt = 0;
 unsigned long lastSnapshotAt = 0;
@@ -186,9 +250,39 @@ void readMeters() {
   channels[0].faultStreak = 0;
   return;
 #endif
-  float v = mainsMeter.voltage();
-  float p = mainsMeter.power();
-  float e = mainsMeter.energy();
+  float v;
+  float p;
+  float e;
+#if METER_SOURCE == METER_ZMPT101B
+  // ZMPT101B expansion board: one isolated voltage pair and one current pair on
+  // the common mains feed. Peak-to-peak over a sampling window gives RMS, so the
+  // DC bias the module sits at is removed by construction.
+  float vRms, aRms;
+  uint16_t vpp, app;
+  bool vOk = zmptRms(ZMPT_VOLT_PIN, ZMPT_VOLT_CAL, vRms, vpp);
+  bool aOk = zmptRms(ZMPT_CURR_PIN, ZMPT_CURR_CAL, aRms, app);
+
+  // A silent current channel means no load, which is legitimate. A silent
+  // voltage channel means the sensor is not reporting at all, which is a fault.
+  if (!vOk) {
+    channels[0].faultStreak++;
+    if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
+      sFault = true;
+      Serial.println("POL-01: S_fault TRUE (ZMPT101B voltage channel silent), all relays opened");
+    }
+    return;
+  }
+
+  channels[0].faultStreak = 0;
+  v = vRms;
+  p = aOk ? vRms * aRms : 0.0f;
+  e = mainsMeter.energy();  // PZEM stays as the energy counter until it is replaced
+  lastZmptPp = vpp;
+  lastZmptAp = app;
+#else
+  v = mainsMeter.voltage();
+  p = mainsMeter.power();
+  e = mainsMeter.energy();
 
   // Current is no longer sampled: per-channel amps are derived from each
   // channel's own volts, so only the values actually consumed are validated.
@@ -201,6 +295,7 @@ void readMeters() {
     }
     return;
   }
+#endif
 
   channels[0].faultStreak = 0;
 
@@ -462,6 +557,13 @@ void printChannelSnapshot() {
                   channels[i].power, channels[i].voltage);
   }
   Serial.println();
+#if METER_SOURCE == METER_ZMPT101B
+  // Publishing the raw excursion alongside the derived RMS is what makes a
+  // dead sensor diagnosable: pp near zero with 0 A is a wiring problem, not a
+  // quiet channel.
+  Serial.printf("zmpt: v_pp=%u i_pp=%u%s\n", lastZmptPp, lastZmptAp,
+                sFault ? " FAULT" : "");
+#endif
 }
 
 void setup() {
@@ -477,8 +579,17 @@ void setup() {
 #endif
 
   Serial.println("\nMOR power-management prototype starting");
-#if SIMULATE_METERS
-  Serial.println("SIM mode: synthetic mains readings (no PZEM wired)");
+#if METER_SOURCE == METER_ZMPT101B
+  // 12-bit samples on ADC1. ADC1 is used deliberately: ADC2 is driven by the
+  // Wi-Fi radio on this chip and cannot be read while associated.
+  analogReadResolution(12);
+  analogSetPinAttenuation(ZMPT_VOLT_PIN, ADC_11db);
+  analogSetPinAttenuation(ZMPT_CURR_PIN, ADC_11db);
+  Serial.printf("meter: ZMPT101B on ADC1 (V=GPIO%d, I=GPIO%d)\n", ZMPT_VOLT_PIN, ZMPT_CURR_PIN);
+#elif METER_SOURCE == METER_PZEM004T
+  Serial.printf("meter: PZEM-004T v3.0 on UART (RX=GPIO%d, TX=GPIO%d)\n", PZEM_RX_PIN, PZEM_TX_PIN);
+#else
+  Serial.println("SIM mode: synthetic mains readings (no sensor wired)");
 #endif
 
   if (loadPolicyTable()) {
