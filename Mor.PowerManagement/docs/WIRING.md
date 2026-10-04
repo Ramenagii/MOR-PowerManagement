@@ -678,6 +678,26 @@ qualifying it.
 Also note the device POST and the browser poll are **not synchronised**, so the
 UI is up to one full cycle behind the device at all times.
 
+### 8.4 First-contact behaviour: expect `HTTP -11`
+
+Observed on first boot against the Render deployment: telemetry and config sync
+both returned **`HTTP -11`** for the first ~30 s, then began returning `200`
+without any intervention.
+
+`-11` is Arduino `HTTPClient::connectionFailed()`. The cause here is **Render's
+free-tier cold start** — the instance is spun down when idle and takes tens of
+seconds to boot, so the first TLS connections from the device time out before
+the app is listening. DNS and TCP 443 are both fine throughout.
+
+Nothing is wrong with the device, the certificate, or the API key. The firmware
+retries on its own intervals (`TELEMETRY_INTERVAL_MS` 5000, `CONFIG_INTERVAL_MS`
+15000) and recovers once the host is awake.
+
+**So: a cold-start `-11` burst on boot is expected and self-clearing.** It is
+only a fault if `-11` persists continuously, which points at DNS/Wi-Fi rather
+than the host. Note the device joins Wi-Fi before this point, so an `-11` storm
+actually *confirms* the radio worked.
+
 ---
 
 ## 9. Bring-up checklist

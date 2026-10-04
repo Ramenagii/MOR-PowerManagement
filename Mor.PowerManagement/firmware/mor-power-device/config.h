@@ -6,20 +6,24 @@
 // MOR power-management prototype — ESP32 edge controller.
 // Edit the values below for your bench, then compile and flash with:
 //   arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-//   arduino-cli upload -p COM11 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+//   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 //
 // Board: ESP32-S3 rev v0.2, QFN56, 40 MHz crystal, 8 MB embedded PSRAM
-// (AP_3v3), on COM11 as VID_303A&PID_1001. Two consequences worth knowing:
+// (AP_3v3), MAC 3c:0f:02:cf:80:18.
 //
-//  * COM11 is the chip's NATIVE USB (USB-Serial/JTAG), not a CH343/CP210x
-//    USB-UART bridge. esptool reaches download mode over it without holding
-//    BOOT, so the upload above needs no manual button press.
+// The board exposes TWO USB paths and Windows assigns them different ports:
+//   COM10 - CH343 USB-UART bridge (VID_1A86&PID_55D3). UART0, works with any
+//           firmware, and is what the Serial Monitor should use.
+//   COM11 - chip-native USB / USB-Serial-JTAG (VID_303A&PID_1001). Disappears
+//           from Windows whenever the USB peripheral is powered down, which an
+//           esptool "Hard resetting via RTS pin" reliably triggers. If the port
+//           vanishes mid-session, unplug and replug the cable to get it back.
+// Detect with `arduino-cli board list` before each upload; do not trust a
+// hardcoded port. On CH343 the chip auto-resets into the bootloader, so no BOOT
+// press is needed.
+//
 //  * Do NOT use the esp32:esp32:esp32 FQBN. It compiles, but esptool then
 //    refuses the flash with "This chip is ESP32-S3".
-//
-// The port is assigned by Windows and will change when you unplug/replug or
-// move USB sockets. Re-detect it with `arduino-cli board list` before uploading
-// rather than trusting COM11 blindly.
 //
 // NOTE: the build does not currently enable the 8 MB PSRAM (the stock esp32s3
 // profile reports a 327,680-byte heap). Nothing here needs it yet; enable a
@@ -36,6 +40,11 @@
 //
 // WIFI_PASS is deliberately left empty so no secret is committed. Fill it in
 // locally before the first flash, or provision it on-device at first boot.
+//
+// LOCAL SECRET: the bench password is filled in locally and this file is left
+// UNCOMMITTED on purpose. Do not `git add config.h` with the password in it --
+// see the note in .git/info/exclude. Strip the value back to "" before any
+// commit or push.
 #define WIFI_SSID "GHHK715A-2.4"
 #define WIFI_PASS ""
 
