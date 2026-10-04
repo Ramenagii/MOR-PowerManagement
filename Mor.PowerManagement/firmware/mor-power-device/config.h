@@ -14,9 +14,14 @@
 #define OUTLET_COUNT 13
 
 // ---- Wi-Fi ----
-// Credentials live in NVS flash (written on first setup), so the repo never
-// holds a real password. These are first-boot seeds only.
-#define WIFI_SSID ""
+// Credentials are stored in NVS flash (written on first setup via
+// WIFI_SLOTS), so the repo never has to hold a real password. The values below
+// are first-boot SEEDS ONLY: if a matching SSID is already saved in NVS, the
+// stored password wins and these are ignored.
+//
+// WIFI_PASS is deliberately left empty so no secret is committed. Fill it in
+// locally before the first flash, or provision it on-device at first boot.
+#define WIFI_SSID "GHHK715A-2.4"
 #define WIFI_PASS ""
 
 // Saved-network store: up to WIFI_SLOTS SSID/password pairs in NVS.
@@ -119,7 +124,14 @@ static const uint8_t RELAY_PINS[OUTLET_COUNT] = { 4, 5, 6, 7, 8, 9, 10, 11, 12, 
 #define RELAY_CLOSED_LEVEL HIGH
 
 // ---- Manual switch inputs, raw rocker/switch caps (0 = not wired) ----
-static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0, 0, 0 };
+// 0 means "no switch on this channel": handleManualSwitch() returns early on a
+// zero pin, so an unwired channel is inert rather than reading a floating
+// input. The prototype has NO rocker switches fitted -- the full-width literal
+// is deliberate so every channel is explicitly documented as unwired, rather
+// than a short initialiser leaving the intent ambiguous.
+static const uint8_t SWITCH_PINS[OUTLET_COUNT] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+};
 
 // ---- Local autonomy ----
 #define LOCAL_AUTO_SHED true
