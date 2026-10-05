@@ -24,7 +24,14 @@ public record DeviceConfigVm(
     double StandbyThresholdWatts,
     int StandbyIdleMinutes,
     int StabilizationDelayMs,
-    IReadOnlyList<DeviceOutletPolicyDto> Outlets);
+    IReadOnlyList<DeviceOutletPolicyDto> Outlets,
+    // Meter calibration, pushed to the device so the ZMCT103C front end can be
+    // re-trimmed from the dashboard rather than by reflashing. All four are
+    // properties of the hardware actually fitted.
+    double ZmctCtRatio,
+    double ZmctBurdenOhms,
+    double ZmctPowerFactor,
+    double ZmctGain);
 
 public class GetDeviceConfigQueryHandler : IRequestHandler<GetDeviceConfigQuery, DeviceConfigVm>
 {
@@ -54,6 +61,10 @@ public class GetDeviceConfigQueryHandler : IRequestHandler<GetDeviceConfigQuery,
             config.StandbyThresholdWatts,
             config.StandbyIdleMinutes,
             config.StabilizationDelayMs,
-            outlets);
+            outlets,
+            config.ZmctCtRatio,
+            config.ZmctBurdenOhms,
+            config.ZmctPowerFactor,
+            config.ZmctGain);
     }
 }

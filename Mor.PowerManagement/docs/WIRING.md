@@ -1,4 +1,4 @@
-# WIRING.md ‚Äî MOR Power-Management Expansion Board
+# WIRING.md ó MOR Power-Management Expansion Board
 
 Physical connection guide for the 13-channel ESP32-S3 relay expansion board,
 from wiring through to the GUI dashboard.
@@ -19,7 +19,7 @@ flash ("This chip is ESP32-S3").
 
 ---
 
-## 1. ‚ö†Ô∏è SAFETY WARNING ‚Äî READ BEFORE MAKING ANY CONNECTION
+## 1. ?? SAFETY WARNING ó READ BEFORE MAKING ANY CONNECTION
 
 > ### 8 of the 13 channels switch 220 V mains.
 >
@@ -38,7 +38,7 @@ flash ("This chip is ESP32-S3").
    load and the inrush of the attached appliances (relay modules are commonly
    rated 10 A but real loads switch far less usefully). Confirm the relay
    board's **isolation** between coil side and contact side and its
-   **coil-current rating** (see ¬ß7) *before* applying power. An opto-isolated
+   **coil-current rating** (see ß7) *before* applying power. An opto-isolated
    module is the minimum for mains switching; do not assume isolation because a
    board is in an opaque case.
 3. **Never bridge the ESP32 GND to mains earth.** Not as a "reference", not as
@@ -47,20 +47,20 @@ flash ("This chip is ESP32-S3").
    back to your laptop - at mains potential. If your design appears to need it,
    the design is wrong.
 4. **Mains switching and the 5 V USB rails must not be tied to the 3.3 V
-   rail** (see ¬ß7). Keep the power domains separate and share only the relay
+   rail** (see ß7). Keep the power domains separate and share only the relay
    coil-side ground as described.
 5. **Confirm coil-current rating before energising.** Driving 13 coils from
    ESP32 GPIO directly will exceed the pin's drive current and, in the worst
-   case, damage the SoC. Use a driver stage (¬ß7).
+   case, damage the SoC. Use a driver stage (ß7).
 6. **Work with the upstream breaker in reach, every time.** First
    energisation of a mains board should have someone else watching the
    breaker.
-7. **‚ö†Ô∏è The bench mains supply must be fused and RCD/GFCI-protected.** This is a
-   bring-up requirement for this rig, not a "real deployment" detail ‚Äî a 13-
+7. **?? The bench mains supply must be fused and RCD/GFCI-protected.** This is a
+   bring-up requirement for this rig, not a "real deployment" detail ó a 13-
    channel bench board is a multi-outlet load. Do not energise it from an
    unfused extension lead or a circuit with no RCD/GFCI. This is the
-   "protective device rating" referred to in ¬ß9 Stage D4.
-8. **‚ö†Ô∏è Disconnect USB and power down the ESP32 before touching any mains
+   "protective device rating" referred to in ß9 Stage D4.
+8. **?? Disconnect USB and power down the ESP32 before touching any mains
    conductor.** Unplug the USB cable and switch off the logic supply *before*
    handling live conductors, not merely before plugging the board in. This is
    stronger than item 3 alone: item 3 notes the USB cable could sit at mains
@@ -73,7 +73,7 @@ regulations - none of which are the subject of this document.
 
 ---
 
-## 2. Pin assignment ‚Äî the full map
+## 2. Pin assignment ó the full map
 
 ### 2.1 Relay outputs
 
@@ -111,7 +111,7 @@ drives, regardless of what those numbers say.
 
 **Note the ADC1 overlap.** CH1-CH8 occupy **GPIO4-GPIO11**, of which
 **GPIO4-GPIO10 are also ADC1 channels** (GPIO11 is not). So 7 of ADC1's 10
-channels are consumed by relays. See ¬ß4.
+channels are consumed by relays. See ß4.
 
 ---
 ### 2.2 `RELAY_CLOSED_LEVEL HIGH` - what it means for wiring
@@ -150,15 +150,15 @@ So the polarity chain is a **direct match** to the existing constant: GPIO HIGH
 means coil energised means contact closed, exactly as `RELAY_CLOSED_LEVEL HIGH`
 assumes. No sign change is needed anywhere.
 
-‚ö† **Do not "correct" `RELAY_CLOSED_LEVEL` to `LOW` on the grounds that the
+? **Do not "correct" `RELAY_CLOSED_LEVEL` to `LOW` on the grounds that the
 ULN2803 is described as a driver stage.** That would be actively dangerous:
 `setup()` writes `!RELAY_CLOSED_LEVEL` to every relay pin at boot
 (`.ino:666`), so flipping the constant writes **HIGH** at boot, energising all
 13 coils with **every outlet live** before the firmware does anything else.
-Leave the constant at `HIGH` (¬ß7.2).
+Leave the constant at `HIGH` (ß7.2).
 
 Full driver-stage guidance - coil supply sizing, common-ground rules and the
-fail-state check - is in ¬ß7.2.
+fail-state check - is in ß7.2.
 
 ### 2.4 Manual switch inputs - NOT WIRED on this prototype
 
@@ -182,18 +182,18 @@ static const uint8_t SWITCH_PINS[OUTLET_COUNT] = {
   floating pin.
 - **GPIO0 must never be used for a switch input** even if the array is filled in
   naively: it is a strapping pin, and an `INPUT_PULLUP` would drive it HIGH at
-  boot (¬ß3).
+  boot (ß3).
 - Consequence: **POL-02 (pre-activation assessment), POL-03 (deny over-limit
   activation) and POL-04 (post-activation verification) cannot be exercised
-  manually.** ‚ö† These are **server-side** policies (`Device.cs`,
+  manually.** ? These are **server-side** policies (`Device.cs`,
   `docs/SCHEMA.md`). The config sync carries only the resulting **desired
   status** per outlet; the device never re-derives the decision. So activating from
   the dashboard reaches the device as a desired-status bit, and the local
   `handleManualSwitch()` copy of POL-02/03/04 (`.ino:421-452`) is unreachable
   while `SWITCH_PINS` is all zeros.
 - To add switches: change `SWITCH_PINS` in `config.h`, using only non-strapping,
-  non-USB, non-flash GPIOs (¬ß3). Wiring alone does nothing. Note there are no
-  free ADC1 pins left to trade (¬ß4), so any added switch must also avoid
+  non-USB, non-flash GPIOs (ß3). Wiring alone does nothing. Note there are no
+  free ADC1 pins left to trade (ß4), so any added switch must also avoid
   GPIO1/GPIO2 if a meter is to be fitted.
 
 > **Historical note (resolved).** This array previously read
@@ -209,7 +209,7 @@ strapping (0,3,45,46), USB (19,20) and SPI flash") and `config.h:85`.
 
 | GPIO(s) | Category | Why it must stay free |
 |---|---|---|
-| **0** | Strapping (boot mode) | Sampled at reset to select boot mode. Also the `SWITCH_PINS` sentinel for "unwired" (¬ß2.3). |
+| **0** | Strapping (boot mode) | Sampled at reset to select boot mode. Also the `SWITCH_PINS` sentinel for "unwired" (ß2.3). |
 | **3** | Strapping (boot mode) | Sampled at reset. It is ADC1-capable but unusable for analog *because* it is strapping - this is a genuine exclusion, not a reservation. |
 | **19, 20** | USB D-/D+ | Native USB. Attaching a relay load or ADC front end here interferes with USB-COM and can prevent enumeration. |
 | **45, 46** | Strapping (VDET/VPP boot config) | Sampled at reset; external drive can change the boot configuration, including supply-voltage selection. |
@@ -236,7 +236,7 @@ means the *signal itself* participates in boot selection:
 For an analog input the problem is worse than marginal, because a bias divider or
 burden network *is* a deliberate DC pull. Choosing your bias network silently
 chooses a boot-critical level. Avoid these pins entirely.
-## 4. ADC pin budget ‚Äî the binding constraint
+## 4. ADC pin budget ó the binding constraint
 
 This is the section that decides what can actually be measured. The pin choice
 is forced by the ADC, not by preference; `config.h:82-89` says so explicitly.
@@ -281,14 +281,14 @@ Both are ADC1 and both are non-strapping, so either is electrically sound. If
 you do fit a ZMCT103C, wire it to **GPIO2** and **record in the lab notebook
 that GPIO1 is intentionally unused**.
 
-‚ö†Ô∏è **GPIO1 is spare, not "held in reserve for a voltage reference."** A
-CT-only build has **no voltage measurement capability at all** (¬ß5.1), so there
+?? **GPIO1 is spare, not "held in reserve for a voltage reference."** A
+CT-only build has **no voltage measurement capability at all** (ß5.1), so there
 is nothing for GPIO1 to measure. It would only become useful with a genuine
 voltage-sensing front end.
 
-‚ö†Ô∏è **The code path is still blocked.** The firmware as written does **not** read
+?? **The code path is still blocked.** The firmware as written does **not** read
 a CT on GPIO2: `METER_ZMPT101B` assumes a voltage+current **pair** and will trip
-`sFault` on the silent voltage channel, opening all 13 relays. See **¬ß5.5** and
+`sFault` on the silent voltage channel, opening all 13 relays. See **ß5.5** and
 mismatch **M1** before wiring this pin.
 
 **Adding more CTs is not possible on this pin map.** The thesis plan calls for
@@ -296,56 +296,89 @@ multiple ZMCT103C units (one per branch); that is infeasible with GPIO1/GPIO2
 alone and requires an external multi-channel ADC (e.g. an ADS1115 over I2C) or
 moving relays off ADC1 pins. Both are design changes, not wiring changes.
 
-## 5. Meter ‚Äî ZMCT103C current transformer (honest description)
+## 5. Meter ó ZMCT103C current transformer (honest description)
 
 ### 5.1 What the sensor actually is
 
 The real sensor on this build is a **ZMCT103C current transformer**. It is
-**not** a ZMPT101B, despite what the firmware names suggest (¬ß5.5).
+**not** a ZMPT101B, despite what the firmware names suggest (ß5.5).
 
 | Property | Value |
 |---|---|
 | Type | **Current transformer only.** It cannot measure voltage. There is no voltage output to read. |
-| Ratio | Typically **1000:1** - ‚ö† **verify against your exact part's datasheet.** ZMCT103B and ZMCT103C variants exist with different ratios. Read the ratio off your part and use that number. |
+| Ratio | Typically **1000:1** - ? **verify against your exact part's datasheet.** ZMCT103B and ZMCT103C variants exist with different ratios. Read the ratio off your part and use that number. |
 | Output | **Bipolar AC** current on the secondary winding. No DC component; cannot be read against ground directly. |
 | Isolation | Galvanic isolation between primary (mains) and secondary - this is why it is safe to use at all. |
-| Board | A bare ZMCT103C is a two-terminal, two-winding transformer. It is **not** a breakout module with an op-amp buffer. You must build the signal chain yourself (¬ß5.2). |
+| Board | A bare ZMCT103C is a two-terminal, two-winding transformer. It is **not** a breakout module with an op-amp buffer. You must build the signal chain yourself (ß5.2). |
 
 ### 5.2 Required signal chain
 
+Built for **easy adjustment** ó every value that describes the hardware is
+editable from the dashboard, so re-trimming never needs a reflash or a
+re-solder.
+
 ```
- mains conductor (through CT primary)
-        |
-        v
-   +-----------+
-   |  ZMCT103C |   secondary: bipolar AC current, no DC offset
-   +-----+-----+
-         |
-         v
-   [burden resistor]     e.g. 100 ohm  <- REQUIRED. Converts secondary
-         |                current to a voltage. Without it the secondary
-         v                is a near-short and you get no usable signal.
-   AC waveform (centred on 0 V, AC only)
-         |
-         v
-   [AC coupling capacitor]  series cap, e.g. 100 nF-1 uF. Blocks DC so the
-         |                   next stage sees AC only. Without it the ADC input
-         v                   is driven negative on the negative half-cycle.
-   AC waveform, ~0 V mean
-         |
-         v
-   [1.65 V bias divider]     two equal resistors (e.g. 10k / 10k) from 3.3 V
-         |                    to GND, divider node as the signal reference.
-         v                    Centres the waveform inside the ADC input range.
-   AC waveform riding on 1.65 V DC
-         |
-         v
-   [op-amp buffer]          rail-to-rail, e.g. an MCP6001/MCP6002. REQUIRED:
-         |                   the 10k/10k divider presents ~165 ohm of source
-         v                   impedance into the SAR sample-and-hold, which does
-   low-impedance signal      not settle within the sampling window.
-   ESP32-S3 ADC1 pin  (GPIO2 recommended, see 4.3), ADC_11db attenuation
+MAINS CONDUCTOR
+     ¶
+     +-- ZMCT103C primary  ? clamp around ONE conductor only, never L and N together
+              ¶
+         [secondary]  2 wires, polarity does not matter for RMS
+              ¶
+        +-------------------+
+        ¶  burden resistor ¶  100 O  ? THE ONE RESISTOR YOU SET
+        +-------------------+
+              ¶            +-- 100 kO -- 3V3
+        1 µF  ¶            ¶      ? THE ONE DIVIDER YOU SET
+        film  ¶            +-- 100 kO -- GND
+        cap   ¶
+        (DC block, prevents CT core saturation)
+              ¶
+              +--------? ADS1015 AIN0    GND ----------? ADS1015 GND
+                           ADS1015 --? ESP32 I≤C (SDA=GPIO8, SCL=GPIO9)
 ```
+
+**Rule: exactly one capacitor in the chain.** Adding a second one forms a
+voltage divider with the burden and silently scales every reading.
+
+**If you fit an op-amp buffer**, put it between the divider node and AIN0. Not
+required with the ADS1015 ó its input impedance is far higher than the S3's
+internal ADC, so the 100 kO divider is acceptable here. That is one of the
+reasons the external ADC is worth it.
+
+### 5.2.1 What you can adjust, and where
+
+| Part | Default | Set it by | Where |
+|---|---|---|---|
+| Burden resistor | 100 O | **soldering** | physical, 1 component |
+| Bias divider | 100 kO / 100 kO | **soldering** | physical, 2 components |
+| CT ratio | 1000:1 | dashboard | `zmctCtRatio` |
+| Power factor | 0.9 | dashboard | `zmctPowerFactor` |
+| Trim gain | 1.0 | dashboard | `zmctGain` |
+
+The three dashboard values arrive via `GET /api/Device/config` every 15 s and
+persist to NVS, so they survive a reboot with no network.
+
+### 5.2.2 Sizing the burden for your maximum current
+
+`V_peak = (I_primary / ratio) ◊ burden`. The signal must stay inside the PGA
+range (±4.096 V at the default setting), and leave headroom below the 1.65 V
+bias so the negative half-cycle is not clipped.
+
+| Max primary current | Burden | Signal | Bias node range |
+|---|---|---|---|
+| 5 A | 220 O | 1.1 V p-p | 1.10 Ö 2.20 V |
+| 10 A | 100 O | 2.0 V p-p | 0.65 Ö 2.65 V |
+| 14 A | 100 O | 2.8 V p-p | 0.25 Ö 3.05 V ? clipping starts |
+| 20 A | 68 O | 2.7 V p-p | 0.30 Ö 3.00 V |
+
+**Rule of thumb:** choose the burden so peak-to-peak stays at or below ~2.5 V.
+Above that the negative excursion approaches ground, where the clamp diodes
+start conducting and the reading goes wrong in a way that still looks numeric.
+
+If you need more range than 14 A, drop the PGA one step (±2.048 V) and raise
+the burden proportionally ó but then re-check the bias, because the firmware's
+mid-supply check assumes the bias sits near half of full scale.
+
 
 **The 1.65 V bias is mandatory, not optional.** The ADC input range is 0-3.3 V.
 A centred AC sine that swings negative would be clipped at zero by the input
@@ -355,22 +388,22 @@ the range.
 
 | Parameter | Value |
 |---|---|
-| Burden resistor | e.g. **100 ohm** - ‚ö† confirm the value actually fitted; it sets the volts-per-amp scale and must match your calibration constant. |
+| Burden resistor | e.g. **100 ohm** - ? confirm the value actually fitted; it sets the volts-per-amp scale and must match your calibration constant. |
 | Coupling capacitor | series, blocks DC |
 | Bias divider | 3.3 V -> two equal resistors -> 1.65 V |
-| ADC attenuation | `ADC_11db` = **11 dB**, set in `.ino:678-679`; effective measurable range approx **0‚Äì3.1 V**, not 3.3 V |
+| ADC attenuation | `ADC_11db` = **11 dB**, set in `.ino:678-679`; effective measurable range approx **0ñ3.1 V**, not 3.3 V |
 | ADC resolution | 12-bit (`analogReadResolution(12)`, `.ino:677`) |
-| Op-amp buffer | **Required** ‚Äî rail-to-rail (e.g. MCP6001/6002), 3.3 V |
+| Op-amp buffer | **Required** ó rail-to-rail (e.g. MCP6001/6002), 3.3 V |
 
-‚ö†Ô∏è **Effective ADC range is not 0‚Äì3.3 V.** At `ADC_11db` (11 dB) attenuation the
-ESP32-S3 measures roughly **0‚Äì3.1 V**, not the full 0‚Äì3.3 V. Sizing the bias
+?? **Effective ADC range is not 0ñ3.3 V.** At `ADC_11db` (11 dB) attenuation the
+ESP32-S3 measures roughly **0ñ3.1 V**, not the full 0ñ3.3 V. Sizing the bias
 network for a 3.3 V full scale assumes headroom that does not exist above about
-1.65 V, and will clip the positive-going excursion asymmetrically ‚Äî the same
+1.65 V, and will clip the positive-going excursion asymmetrically ó the same
 distortion as bottom-rail clipping.
 
-‚ö†Ô∏è **Note on the bias value.** The firmware comments say "~1.5 V"
-(`config.h:77`, `.ino:53`). **1.65 V is the correct figure** ‚Äî exactly mid-supply
-for a 3.3 V rail ‚Äî and is what this document specifies. The ~1.5 V in the
+?? **Note on the bias value.** The firmware comments say "~1.5 V"
+(`config.h:77`, `.ino:53`). **1.65 V is the correct figure** ó exactly mid-supply
+for a 3.3 V rail ó and is what this document specifies. The ~1.5 V in the
 comments is superseded.
 
 **Never read the raw signal against ground.** A grounded read sees the 1.65 V DC
@@ -394,7 +427,7 @@ entire reason the excursion method is used instead of an absolute reading.
 |---|---|---|
 | `ZMPT_SAMPLE_COUNT` | 1000 (`config.h:95`) | Samples per window; ~1 kHz over several mains cycles |
 | `ZMPT_NOISE_FLOOR` | 12 counts (`config.h:106`) | Excursion below this = "no signal", not "0 A" |
-| `ZMPT_VOLT_CAL` / `ZMPT_CURR_CAL` | `1.0f` (`config.h:100-101`) | ‚ö† **Uncalibrated.** Indicative only until tuned against a multimeter and a known load. |
+| `ZMPT_VOLT_CAL` / `ZMPT_CURR_CAL` | `1.0f` (`config.h:100-101`) | ? **Uncalibrated.** Indicative only until tuned against a multimeter and a known load. |
 
 The noise floor matters diagnostically: an excursion below 12 counts with 0 A is
 a **wiring problem**, not a quiet channel. Reporting it as a genuine 0.0 A reading
@@ -435,7 +468,7 @@ per-channel figures are not measurements.
 | Sensor | `METER_ZMPT101B` (`config.h:55,64,90-91`) | **ZMCT103C** current transformer |
 | Channels | A **voltage + current PAIR** on two ADC pins | **One current output only** |
 | Pins | `ZMPT_VOLT_PIN 1` **and** `ZMPT_CURR_PIN 2` - both required | One pin is enough; one of the two does not exist on the hardware |
-| Front end | ZMPT101B **breakout module** with integrated burden resistor and LM358 buffer (`config.h:76-77`) | A **bare CT**: you must add the burden, coupling cap and bias yourself (¬ß5.2) |
+| Front end | ZMPT101B **breakout module** with integrated burden resistor and LM358 buffer (`config.h:76-77`) | A **bare CT**: you must add the burden, coupling cap and bias yourself (ß5.2) |
 
 Why the existing path is actively wrong, not merely misnamed:
 
@@ -460,13 +493,13 @@ voltage-silent -> fault rule. This document does not edit the firmware.
 
 ---
 
-## 6. PZEM-004T alternative ‚Äî the path to real V/A/W
+## 6. PZEM-004T alternative ó the path to real V/A/W
 
 A PZEM-004T v3.0 measures **voltage, current and power directly**, which removes
-both the assumed-PF problem (¬ß5.4) and the voltage-channel mismatch (¬ß5.5). It
+both the assumed-PF problem (ß5.4) and the voltage-channel mismatch (ß5.5). It
 is the intended upgrade once a real meter is installed.
 
-> ### ‚ö† BLOCKER-LEVEL HAZARD: a PZEM-004T is NOT isolated from mains
+> ### ? BLOCKER-LEVEL HAZARD: a PZEM-004T is NOT isolated from mains
 >
 > **A PZEM-004T v3.0 places the ESP32 at mains potential.** Do **not** connect its
 > GND to the ESP32's GND.
@@ -475,9 +508,9 @@ is the intended upgrade once a real meter is installed.
 > side**. Its **voltage measurement is non-isolated**: the module's GND is
 > referenced to the mains side, and the voltage-sense network is bonded to it.
 > Tying module GND to ESP32 GND therefore **bridges mains potential into the
-> ESP32**, its USB cable, and your laptop - precisely the act ¬ß1 item 3 forbids.
+> ESP32**, its USB cable, and your laptop - precisely the act ß1 item 3 forbids.
 > Note this is exactly the opposite of the ZMCT103C, which *is* galvanically
-> isolated (¬ß5.1).
+> isolated (ß5.1).
 >
 > **Consequences:**
 > - A PZEM-004T v3.0 **cannot be used with a direct UART connection to this
@@ -487,8 +520,8 @@ is the intended upgrade once a real meter is installed.
 >   galvanically isolated RS-485/Modbus adapter - with no galvanic path between
 >   the two sides.
 > - Until that hardware exists, **the PZEM option is not buildable.** Leave
->   `METER_SOURCE` at `METER_SIMULATE`; ¬ß5's ZMCT103C path is the only one that
->   can be safely wired today, and it is itself blocked by M1 (¬ß5.5).
+>   `METER_SOURCE` at `METER_SIMULATE`; ß5's ZMCT103C path is the only one that
+>   can be safely wired today, and it is itself blocked by M1 (ß5.5).
 
 ### 6.1 Pin and bus parameters
 
@@ -506,23 +539,23 @@ The optocoupler-isolated half of the module:
 
 | PZEM-004T terminal | Connect to |
 |---|---|
-| RX (module receives) | Isolated-UART TX ‚Üí ESP32-S3 **GPIO17** (TX) |
-| TX (module transmits) | Isolated-UART RX ‚Üí ESP32-S3 **GPIO16** (RX) |
+| RX (module receives) | Isolated-UART TX ? ESP32-S3 **GPIO17** (TX) |
+| TX (module transmits) | Isolated-UART RX ? ESP32-S3 **GPIO16** (RX) |
 | 5V (isolated supply) | Supply powering **only the isolated logic side** of the interface |
 | GND (isolated logic side) | **ESP32 GND - and only this terminal** |
 
-‚ö† **TX/RX cross.** The library is constructed as
+? **TX/RX cross.** The library is constructed as
 `PZEM004Tv30 mainsMeter(Serial2, PZEM_RX_PIN, PZEM_TX_PIN, 0x01)`, so the first
 pin is the ESP32's **RX** and must meet the module's **TX**. The two are adjacent
 GPIOs and easy to swap; a swapped pair simply never responds, with no error.
 
-‚ö† The isolation components above are **not standard on a PZEM-004T v3.0** -
+? The isolation components above are **not standard on a PZEM-004T v3.0** -
 they are the additional hardware this module requires. Do not assume the
 "isolated UART" column can be wired directly to the module's own 5V/GND pins.
 
 ### 6.3 Mains-side terminals (the non-isolated half)
 
-‚ö† These are the terminals that create the hazard above. They are the reason
+? These are the terminals that create the hazard above. They are the reason
 the whole section is blocked. Documented for completeness so the wiring is
 unambiguous **if** isolated hardware is used.
 
@@ -531,9 +564,9 @@ unambiguous **if** isolated hardware is used.
 | **Voltage input L** | Mains **line**, upstream of the common feed |
 | **Voltage input N** | Mains **neutral** |
 | **Current-transformer terminals** (the CT winding pair) | The single **current** conductor of the common mains feed - the line conductor passes through the CT; the neutral does **not** |
-| Module GND / voltage-sense reference | Bonded to the **mains side**. ‚ö† **Never** to ESP32 GND. |
+| Module GND / voltage-sense reference | Bonded to the **mains side**. ? **Never** to ESP32 GND. |
 
-‚ö† **This voltage-sense bond is precisely the isolation gap.** It is why ¬ß6.1's
+? **This voltage-sense bond is precisely the isolation gap.** It is why ß6.1's
 isolated interface is mandatory rather than optional, and why no arrangement of
 these terminals can make a stock PZEM-004T v3.0 safe to attach to an ESP32.
 
@@ -550,16 +583,16 @@ selections, not simultaneous inputs.
 
 ---
 
-## 7. Power supply ‚Äî three separate domains
+## 7. Power supply ó three separate domains
 
 **The ESP32-S3 is a 3.3 V device.** Its I/O is not 5 V tolerant. Mixing domains
 is the most likely way to destroy the board.
 
 | Domain | Voltage | Source | Loads |
 |---|---|---|---|
-| Logic | **3.3 V only** | USB or a 3.3 V regulator | ESP32-S3; CT signal chain (burden, coupling cap, 1.65 V bias divider, op-amp buffer ‚Äî ¬ß5.2) |
-| Relay coils | per coil rating | **separate supply** (¬ß7.2) | 13 relay coils |
-| USB ports | **5 V** | **its own 5 V supply** (¬ß7.3) | CH10-CH13 |
+| Logic | **3.3 V only** | USB or a 3.3 V regulator | ESP32-S3; CT signal chain (burden, coupling cap, 1.65 V bias divider, op-amp buffer ó ß5.2) |
+| Relay coils | per coil rating | **separate supply** (ß7.2) | 13 relay coils |
+| USB ports | **5 V** | **its own 5 V supply** (ß7.3) | CH10-CH13 |
 
 ### 7.1 Rules
 
@@ -574,17 +607,17 @@ is the most likely way to destroy the board.
   converter. A non-isolated buck converter on the mains side puts the USB
   socket and anything plugged into it at mains potential.
 - **CH9 (110 V) must be fed by a galvanically isolated step-down
-  transformer** from the mains feed, upstream of relay IN9. ‚ö† **An
-  *autotransformer* is not acceptable here.** For 220 V ‚Üí 110 V an autotransformer
+  transformer** from the mains feed, upstream of relay IN9. ? **An
+  *autotransformer* is not acceptable here.** For 220 V ? 110 V an autotransformer
   is the cheap and obvious choice, and it leaves the 110 V socket at mains
   potential with no isolation barrier - exactly the failure this document spends
-  ¬ß1 preventing. Specify a **true isolation transformer** with a separate
+  ß1 preventing. Specify a **true isolation transformer** with a separate
   secondary winding. `config.h:121` says only "1x110V via step-down" and does not
-  mention isolation; that requirement comes from ¬ß1 and is not optional.
+  mention isolation; that requirement comes from ß1 and is not optional.
 
 ### 7.2 Relay coil supply and driver stage
 
-‚ö† **Do not drive the relay coils directly from ESP32 GPIO.**
+? **Do not drive the relay coils directly from ESP32 GPIO.**
 
 | Concern | Detail |
 |---|---|
@@ -598,13 +631,13 @@ is the most likely way to destroy the board.
 | Recommendation | Detail |
 |---|---|
 | **ULN2803** (preferred) | 8 channels per IC, so **two ULN2803s** cover 13 channels. Integrated Darlington + freewheeling diodes, so no external snubbers are needed. |
-| Drive level | A ULN2803 is a **sinking** Darlington array and is **non-inverting with respect to the coil**: input HIGH turns the output transistor ON, which pulls current through the coil and energises it (GPIO HIGH ‚Üí Darlington ON ‚Üí coil energised ‚Üí contact closed). That is a **direct match** to `RELAY_CLOSED_LEVEL HIGH`; no sign change is needed. ‚ö† **Do not flip `RELAY_CLOSED_LEVEL` to `LOW`** - `setup()` writes `!RELAY_CLOSED_LEVEL` at boot, so flipping it drives all 13 coils HIGH and energises every outlet before the firmware runs (¬ß2.3). |
-| Coil supply | Sized for **all 13 coils simultaneously closed**, with margin. If each coil is ~90 mA, allow ‚â• 1.5 A at the coil rail, and give it real bulk decoupling near the board. |
-| Common ground | The driver/relay supply ground must be **common with ESP32 GND on the low-voltage side only.** ‚ö† It must **never** be connected to mains earth (¬ß1, item 3). |
-| Fail state | Verify that a de-powered or reset ESP32 leaves the coils OFF - i.e. the fail-open behaviour the firmware assumes (¬ß2.2). |
+| Drive level | A ULN2803 is a **sinking** Darlington array and is **non-inverting with respect to the coil**: input HIGH turns the output transistor ON, which pulls current through the coil and energises it (GPIO HIGH ? Darlington ON ? coil energised ? contact closed). That is a **direct match** to `RELAY_CLOSED_LEVEL HIGH`; no sign change is needed. ? **Do not flip `RELAY_CLOSED_LEVEL` to `LOW`** - `setup()` writes `!RELAY_CLOSED_LEVEL` at boot, so flipping it drives all 13 coils HIGH and energises every outlet before the firmware runs (ß2.3). |
+| Coil supply | Sized for **all 13 coils simultaneously closed**, with margin. If each coil is ~90 mA, allow = 1.5 A at the coil rail, and give it real bulk decoupling near the board. |
+| Common ground | The driver/relay supply ground must be **common with ESP32 GND on the low-voltage side only.** ? It must **never** be connected to mains earth (ß1, item 3). |
+| Fail state | Verify that a de-powered or reset ESP32 leaves the coils OFF - i.e. the fail-open behaviour the firmware assumes (ß2.2). |
 
-‚ö† **Confirm the relay board's coil-current rating and its isolation between
-coil side and contact side before applying power** (¬ß1, item 2). An opto-isolated
+? **Confirm the relay board's coil-current rating and its isolation between
+coil side and contact side before applying power** (ß1, item 2). An opto-isolated
 module is the minimum for mains switching.
 
 ---
@@ -657,16 +690,16 @@ Hop numbering: (1) ADC sampling, (2) Wi-Fi HTTPS POST, (3) server ingest,
 
 | # | Hop | Mechanism | Source |
 |---|---|---|---|
-| 1 | **ADC sampling** | `readMeters()` is called **every `loop()` iteration**, at the top of the loop. `loop()` ends with `delay(200)`, so the effective sampling period is **~200 ms in SIM/PZEM mode only**. ‚ö†Ô∏è In `METER_ZMPT101B` mode each `readMeters()` performs 2 x 1000 `analogRead()` calls (`.ino:262-263`), which dominates the loop time by a wide margin, so iterations are substantially slower than 200 ms. 12-bit resolution and `ADC_11db` attenuation are set once in `setup()`. | `.ino:228,262-263,677-679,729,754`; `config.h:95` |
+| 1 | **ADC sampling** | `readMeters()` is called **every `loop()` iteration**, at the top of the loop. `loop()` ends with `delay(200)`, so the effective sampling period is **~200 ms in SIM/PZEM mode only**. ?? In `METER_ZMPT101B` mode each `readMeters()` performs 2 x 1000 `analogRead()` calls (`.ino:262-263`), which dominates the loop time by a wide margin, so iterations are substantially slower than 200 ms. 12-bit resolution and `ADC_11db` attenuation are set once in `setup()`. | `.ino:228,262-263,677-679,729,754`; `config.h:95` |
 | 2 | **Wi-Fi** | Credentials come from **NVS flash** (namespace `morwifi`), holding up to `WIFI_SLOTS` = 3 saved networks. `config.h` SSID/password are **first-boot seeds only**. Join is tried last-working-first, then each remaining slot, then a scan. `WIFI_JOIN_TIMEOUT_MS` = 12000 per attempt. | `config.h:28-29`; `.ino:143-198,694-720` |
 | 3 | **HTTPS POST** | `HTTPClient` over `WiFiClientSecure` (`setInsecure()`). Host `mor-powermanagement.onrender.com`, port `443`, `BACKEND_USE_TLS 1`, base `/api`. URL built by `backendUrl()`. Auth via the `X-Device-Key` header carrying `DEVICE_API_KEY`. Body is ArduinoJson with `deviceId` = `DEVICE_ID` (`mor-prototype-01`), `faultFlag`, `missedPosts`, `meteringMode`, plus `readings[]` and `relayStates[]` arrays of 13 entries. Sent every `TELEMETRY_INTERVAL_MS` = **5000 ms**. | `config.h:33-38,43`; `.ino:200-212,584-636` |
 | 4 | **Config sync (reverse direction)** | `GET /api/Device/config` every `CONFIG_INTERVAL_MS` = **15000 ms**, same TLS + `X-Device-Key`. Parses thresholds and the per-outlet policy table (allowance, priority, rated volts, desired status, idle limit) and persists to NVS namespace `mor` with magic `MOR2`, so the ESP32 enforces the last synced policy with no network. | `.ino:525-582`; `config.h:44` |
 | 5 | **Server ingest** | `POST /api/Device/telemetry` -> `IngestTelemetry`, which stores per-outlet readings, refreshes live outlet state, and evaluates threshold crossings and fault lockout. Returns `Ok<IngestTelemetryResult>`. `GET /api/Device/config` -> `GetDeviceConfig` returns thresholds + the policy table. Both are `AllowAnonymous()` at group level with an `X-Device-Key` filter. | `Device.cs:12-38` |
-| 6 | **Dashboard receive mechanism** | ‚ö† **There is NO SignalR, WebSocket, or server push anywhere in this solution.** A search for `SignalR`/`MapHub`/`HubConnection` returns zero hits. The mechanism is **client-side polling**: the SPA runs `window.setInterval(() => refreshFromBackend(), 5000)` while authenticated, so it re-fetches `GET /api/Dashboard/state` (cookie-authenticated, *not* the device key) every 5 s. Failure sets `backendOnline(false)` - the offline badge. | `App.tsx:105-111`; `api.ts:168-169`; `Dashboard.cs:23` |
+| 6 | **Dashboard receive mechanism** | ? **There is NO SignalR, WebSocket, or server push anywhere in this solution.** A search for `SignalR`/`MapHub`/`HubConnection` returns zero hits. The mechanism is **client-side polling**: the SPA runs `window.setInterval(() => refreshFromBackend(), 5000)` while authenticated, so it re-fetches `GET /api/Dashboard/state` (cookie-authenticated, *not* the device key) every 5 s. Failure sets `backendOnline(false)` - the offline badge. | `App.tsx:105-111`; `api.ts:168-169`; `Dashboard.cs:23` |
 | 7 | **Relay actuation** | `applyRelays()` computes `closed = !sFault && desiredEnergized[i] && !localShed`, then `digitalWrite(RELAY_PINS[i], closed ? RELAY_CLOSED_LEVEL : !RELAY_CLOSED_LEVEL)`. Called every loop after policy evaluation, and after each config sync. | `.ino:214-220,692,722-732` |
 | 8 | **Serial snapshot** | `printChannelSnapshot()` every `SNAPSHOT_INTERVAL_MS` = 5000 ms, driven from `loop()` rather than from `postTelemetry()`, so the bench stays observable with no backend reachable. Prints `C`/`o` per channel plus W and the channel's own volts; in ZMPT mode it also prints `v_pp` / `i_pp`. | `.ino:645-658,745-748` |
 
-### 8.3 Latency ‚Äî stated plainly
+### 8.3 Latency ó stated plainly
 
 Transport is device **push** to server, then server **poll** to browser. So the
 end-to-end delay from a physical change to a painted dashboard is **up to about
@@ -685,7 +718,7 @@ both returned **`HTTP -11`** for the first ~30 s, then began returning `200`
 without any intervention.
 
 `-11` is Arduino `HTTPClient::connectionFailed()`. The cause here is **Render's
-free-tier cold start** ‚Äî the instance is spun down when idle and takes tens of
+free-tier cold start** ó the instance is spun down when idle and takes tens of
 seconds to boot, so the first TLS connections from the device time out before
 the app is listening. DNS and TCP 443 are both fine throughout.
 
@@ -710,11 +743,11 @@ chain with no mains and no meter hardware attached.
 
 | # | Step | Expect to see | Pass criterion |
 |---|---|---|---|
-| A0 | ‚ö†Ô∏è **Set `WIFI_PASS` in `config.h` BEFORE the first flash.** `config.h:25` ships as `#define WIFI_PASS ""` (empty, so no secret is committed), and `config.h:22-23` says "Fill it in locally before the first flash". | ‚Äî | **Non-empty password, or an open network.** If you flash as-is, `tryJoin()` seeds slot 0 with an SSID and an empty password (`.ino:159-161`), fails against a WPA2 network, and the only symptom is a generic `Wi-Fi failed` with a scan listing ‚Äî **no hint that the cause is your own empty password.** |
-| A1 | Confirm `METER_SOURCE` is `METER_SIMULATE` (`config.h:67-69`) | - | **The safe default.** Do not change it yet (¬ß5.5). |
+| A0 | ?? **Set `WIFI_PASS` in `config.h` BEFORE the first flash.** `config.h:25` ships as `#define WIFI_PASS ""` (empty, so no secret is committed), and `config.h:22-23` says "Fill it in locally before the first flash". | ó | **Non-empty password, or an open network.** If you flash as-is, `tryJoin()` seeds slot 0 with an SSID and an empty password (`.ino:159-161`), fails against a WPA2 network, and the only symptom is a generic `Wi-Fi failed` with a scan listing ó **no hint that the cause is your own empty password.** |
+| A1 | Confirm `METER_SOURCE` is `METER_SIMULATE` (`config.h:67-69`) | - | **The safe default.** Do not change it yet (ß5.5). |
 | A2 | Flash over USB-COM: `arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device` | - | Flash succeeds. Using `--fqbn esp32:esp32:esp32` instead will fail with "This chip is ESP32-S3". |
 | A3 | Open the serial monitor at **115200 baud** | `MOR power-management prototype starting` then `SIM mode: synthetic mains readings (no sensor wired)` | SIM mode confirmed - this proves no sensor is expected yet. |
-| A4 | Check Wi-Fi join | `Wi-Fi trying "<ssid>" ...`, then `IP: <address>` | ‚ö† **If the board already has a saved network in NVS, that one wins and a new SSID in `config.h` is ignored** (the seed only applies when NVS slot 0 is empty, `.ino:159`). Erase NVS/flash to change networks. If it fails, the firmware prints a scan listing every visible SSID - use that. |
+| A4 | Check Wi-Fi join | `Wi-Fi trying "<ssid>" ...`, then `IP: <address>` | ? **If the board already has a saved network in NVS, that one wins and a new SSID in `config.h` is ignored** (the seed only applies when NVS slot 0 is empty, `.ino:159`). Erase NVS/flash to change networks. If it fails, the firmware prints a scan listing every visible SSID - use that. |
 | A5 | Watch the serial snapshot | `channels: 1:o0W/220V 2:o0W/220V ...` repeating every 5 s, all `o` (open) | All 13 channels listed, every relay **open** at rest. This is the fail-safe state and must be true with nothing connected. |
 | A6 | Activate a channel from the dashboard | `config synced: P_limit=3600 W, 13 channels` and `POL-02`-style state change in the snapshot (`o` becomes `C`) | Config sync works and relay state changes. |
 
@@ -725,18 +758,18 @@ chain with no mains and no meter hardware attached.
 | B1 | Sign in to the dashboard | - | Session is authenticated (cookie auth, not the device key). |
 | B2 | Watch the serial log | `telemetry: HTTP 200, total=<N>W` every 5 s | **HTTP 2xx** from `POST /api/Device/telemetry`. A `401` means `DEVICE_API_KEY` does not match the backend's `Device:ApiKey`. |
 | B3 | Confirm the device appears in the dashboard | Device-online indicator lit; `deviceLastSeen` advancing; **Simulated** provenance badge | The device is visible and the badge reads **Simulated**, which is correct in SIM mode. |
-| B4 | Change a threshold in the dashboard, wait ~15 s | `config synced: P_limit=... W` on serial | The reverse path (Dashboard ‚Üí device) works. |
+| B4 | Change a threshold in the dashboard, wait ~15 s | `config synced: P_limit=... W` on serial | The reverse path (Dashboard ? device) works. |
 
-‚ö† **Expect up to ~10 s of lag** between a physical change and the dashboard (¬ß8.3). Wait two full cycles before concluding something is broken.
+? **Expect up to ~10 s of lag** between a physical change and the dashboard (ß8.3). Wait two full cycles before concluding something is broken.
 
 ### Stage C - Meter hardware. Still no mains on the outlets.
 
 | # | Step | Expect to see | Pass criterion |
 |---|---|---|---|
-| C1 | ‚ö† **Resolve the ¬ß5.5 mismatch FIRST** | - | `METER_ZMPT101B` assumes a V+I pair and will declare a fault with a CT-only build. Do not switch `METER_SOURCE` until the code is reconciled. |
+| C1 | ? **Resolve the ß5.5 mismatch FIRST** | - | `METER_ZMPT101B` assumes a V+I pair and will declare a fault with a CT-only build. Do not switch `METER_SOURCE` until the code is reconciled. |
 | C2 | Confirm the CT part marking and ratio | - | Verify ZMCT103**C** vs ZMCT103**B**; the ratio differs. Record it. |
-| C3 | Confirm the burden resistor actually fitted | - | Record the value (e.g. 100 Œ©). It sets the scale for `ZMPT_CURR_CAL`. |
-| C4 | Wire the CT chain: secondary ‚Üí burden ‚Üí coupling cap ‚Üí 1.65 V bias divider ‚Üí op-amp buffer ‚Üí **GPIO2** | - | Continuity-check the divider reads 1.65 V **before** connecting to the ESP32. |
+| C3 | Confirm the burden resistor actually fitted | - | Record the value (e.g. 100 O). It sets the scale for `ZMPT_CURR_CAL`. |
+| C4 | Wire the CT chain: secondary ? burden ? coupling cap ? 1.65 V bias divider ? op-amp buffer ? **GPIO2** | - | Continuity-check the divider reads 1.65 V **before** connecting to the ESP32. |
 | C5 | Power up with the CT around a **low-voltage, isolated source** (e.g. a bench supply or a low-watt lamp on an isolated winding) - not the mains feed | Serial `zmpt: v_pp=... i_pp=...` | A **non-zero** `i_pp` that grows with load. `i_pp = 0` means a wiring fault, not an idle channel. |
 | C6 | Calibrate against a multimeter | - | Tune `ZMPT_CURR_CAL` (currently `1.0f` = uncalibrated) until the reading matches the reference. Until then the value is **indicative only**. |
 
@@ -744,10 +777,10 @@ chain with no mains and no meter hardware attached.
 
 | # | Step | Expect to see | Pass criterion |
 |---|---|---|---|
-| D1 | ‚ö†Ô∏è Re-read ¬ß1 in full, and confirm the bench supply is **fused and RCD/GFCI-protected** (¬ß1 items 7) | ‚Äî | Safety understood; breaker in reach; circuit verified dead; protection in place. |
-| D1a | ‚ö†Ô∏è **Confirm the CH9 step-down transformer is a galvanically ISOLATED type, not an autotransformer** (¬ß7.1) | ‚Äî | Separate secondary winding. An autotransformer leaves the 110 V socket at mains potential ‚Äî do **not** energise CH9 on one. |
-| D2 | Energise **one** channel only, with a single low-wattage load | That channel reads `C`; others `o` | Correct channel and no others. Confirms the pin-to-channel mapping (¬ß2.1). |
-| D3 | Verify the mapping is 1:1 | Each channel toggles independently as commanded | **Critically: confirm CH1‚ÜíGPIO4 ... CH13‚ÜíGPIO18.** An off-by-one here energises the wrong outlet. |
+| D1 | ?? Re-read ß1 in full, and confirm the bench supply is **fused and RCD/GFCI-protected** (ß1 items 7) | ó | Safety understood; breaker in reach; circuit verified dead; protection in place. |
+| D1a | ?? **Confirm the CH9 step-down transformer is a galvanically ISOLATED type, not an autotransformer** (ß7.1) | ó | Separate secondary winding. An autotransformer leaves the 110 V socket at mains potential ó do **not** energise CH9 on one. |
+| D2 | Energise **one** channel only, with a single low-wattage load | That channel reads `C`; others `o` | Correct channel and no others. Confirms the pin-to-channel mapping (ß2.1). |
+| D3 | Verify the mapping is 1:1 | Each channel toggles independently as commanded | **Critically: confirm CH1?GPIO4 ... CH13?GPIO18.** An off-by-one here energises the wrong outlet. |
 | D4 | Add loads progressively | Power readings scale | Stops before the protective device rating is approached. |
 | D5 | Test the fault path | On a genuine sensor fault: `POL-01: S_fault TRUE ... all relays opened` | **All** relays open. If only the faulted channel opens, the fail-safe is not working - stop. |
 
@@ -756,7 +789,7 @@ chain with no mains and no meter hardware attached.
 - Keep the ESP32 on **USB power** where possible, so the logic domain is
   independent of the relay supply.
 - Never leave a mains channel energised unattended.
-- Do not connect mains earth to the ESP32 ground, ever (¬ß1, item 3).
+- Do not connect mains earth to the ESP32 ground, ever (ß1, item 3).
 
 ---
 
@@ -765,12 +798,12 @@ chain with no mains and no meter hardware attached.
 Where the source and the real hardware disagree. **These are documented, not
 fixed** - this guide does not edit the firmware.
 
-### M1 - `METER_ZMPT101B` is wrong for a ZMCT103C  ‚úÖ RESOLVED
+### M1 - `METER_ZMPT101B` is wrong for a ZMCT103C  ? RESOLVED
 
 | | |
 |---|---|
 | **Was** | `METER_ZMPT101B` - a **voltage + current PAIR** on two ADC pins (`ZMPT_VOLT_PIN 1`, `ZMPT_CURR_PIN 2`), via a breakout module with integrated burden and LM358 buffer |
-| **Hardware is** | A **ZMCT103C** - a **current transformer only**, one AC output, bare component requiring an external burden, coupling cap and 1.65 V bias (¬ß5) |
+| **Hardware is** | A **ZMCT103C** - a **current transformer only**, one AC output, bare component requiring an external burden, coupling cap and 1.65 V bias (ß5) |
 | **Impact** | `p = vRms * aRms` is meaningless - there is no voltage. Worse, a silent voltage channel tripped `sFault` after 3 failures and **opened all 13 relays**, shutting the rig down. |
 
 **Now fixed.** `METER_ZMCT103C` (`= 3`) reads a **single** ADC pin with the correct
@@ -785,15 +818,15 @@ Two behaviours worth knowing:
 
 - **A genuine "no load" is not a fault.** An empty CT sitting at its bias returns
   `true` with `0 A`, so it is still published. Only an implausible **bias**
-  (outside ¬±700 counts of 2048) trips `POL-01`, which is the right trigger: a
+  (outside ±700 counts of 2048) trips `POL-01`, which is the right trigger: a
   missing divider, an open coupling cap or an unpowered buffer all land there.
 - **The serial snapshot prints `bias=<n>/2048 pp=<n>`.** `bias` is the single
-  most useful number while commissioning ‚Äî near 2048 means the front end is alive;
+  most useful number while commissioning ó near 2048 means the front end is alive;
   near 0 or 4095 means it is not wired. Check it *before* switching to mains.
 
 `METER_SOURCE` remains `METER_SIMULATE`. That is deliberate: a ZMCT build with
 nothing on the pin fails its front-end check, trips `POL-01` after three windows
-and opens all 13 relays. Correct fail-safe behaviour, but it takes the rig down ‚Äî
+and opens all 13 relays. Correct fail-safe behaviour, but it takes the rig down ó
 so switch only once the chain is proven.
 
 Verified: compiles clean for `esp32:esp32:esp32s3` (1,036,249 bytes / 79%).
@@ -808,31 +841,31 @@ a full-width 13-entry zero literal (`config.h:132-134`).
 
 The substantive point is unchanged and remains a wiring fact: **no rocker
 switches are fitted on this prototype.** POL-02/03/04 are not manually
-reachable (¬ß2.3).
+reachable (ß2.3).
 
-### M3 - CT current vs. assumed power factor  ‚ö† LIVE, affects all reported watts
+### M3 - CT current vs. assumed power factor  ? LIVE, affects all reported watts
 
 | | |
 |---|---|
 | **Code says** | `powerWatts` is posted per channel and rendered as watts (`api.ts` `MeteringMode` comments) |
 | **Hardware is** | A CT measures current only. No voltage sensor, no power factor. |
-| **Impact** | P is `nominal V √ó I_rms √ó assumed PF`. Without PF that is **apparent power (VA), not real watts**. Per-channel figures are an **allowance-weighted allocation** of one common-feed total (`.ino:306-324`), not per-channel measurements. |
-| **Requirement** | The UI **must not** label per-channel values as individually measured V/A/W. A single CT cannot attribute draw to a branch. Install the PZEM-004T (¬ß6) for real V/A/W. |
+| **Impact** | P is `nominal V ◊ I_rms ◊ assumed PF`. Without PF that is **apparent power (VA), not real watts**. Per-channel figures are an **allowance-weighted allocation** of one common-feed total (`.ino:306-324`), not per-channel measurements. |
+| **Requirement** | The UI **must not** label per-channel values as individually measured V/A/W. A single CT cannot attribute draw to a branch. Install the PZEM-004T (ß6) for real V/A/W. |
 
-### M4 - No SignalR / no push transport  ‚ö† Informational
+### M4 - No SignalR / no push transport  ? Informational
 
 The dashboard might be assumed to receive push updates. It does not: there is
 **no SignalR, WebSocket, or server-push mechanism anywhere in the solution**
 (zero hits for `SignalR`/`MapHub`/`HubConnection`). The browser **polls**
 `GET /api/Dashboard/state` every 5 s (`App.tsx:105-111`). Combined with the
-device's 5 s POST, end-to-end latency is **up to ~10 s** (¬ß8.3). Any
+device's 5 s POST, end-to-end latency is **up to ~10 s** (ß8.3). Any
 "real-time"/"live" claim in the UI or the thesis text needs qualifying.
 
 ### M5 - Thesis hardware plan vs. this build
 
 The thesis plan describes **six** ZMCT103C units, one per branch, plus an
 ADS1115 external ADC. **This build can accommodate at most ONE analog front end**
-on GPIO1/GPIO2 (¬ß4). Multiple CTs require an external multi-channel ADC (ADS1115
+on GPIO1/GPIO2 (ß4). Multiple CTs require an external multi-channel ADC (ADS1115
 over I2C) or moving relays off ADC1 - a design change, not a wiring change.
 
 ### M6 - Calibration constants are placeholders
@@ -851,18 +884,18 @@ physical hardware before the meter path is trusted:
 
 1. **The exact ZMCT part marking** - ZMCT103**C** vs ZMCT103**B**. The
    transformation ratio differs and directly scales every current reading.
-2. **The burden resistor value actually fitted** - the 100 Œ© in ¬ß5.2 is a
+2. **The burden resistor value actually fitted** - the 100 O in ß5.2 is a
    recommendation, not a confirmed value. It must match the calibration
    constant.
 
 ---
 
-## Appendix ‚Äî quick reference
+## Appendix ó quick reference
 
 | Item | Value |
 |---|---|
 | Board | ESP32-S3, FQBN `esp32:esp32:esp32s3` |
-| Channels | 13 - 8√ó 220 V, 1√ó 110 V (step-down), 4√ó USB 5 V |
+| Channels | 13 - 8◊ 220 V, 1◊ 110 V (step-down), 4◊ USB 5 V |
 | Relay GPIOs | 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18 |
 | Relay logic | `RELAY_CLOSED_LEVEL HIGH` (active-high, fail-open) |
 | Switch inputs | none - all 13 `SWITCH_PINS` are `0` (unwired) |

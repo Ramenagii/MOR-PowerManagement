@@ -28,4 +28,31 @@ public class PowerSystemConfig : BaseAuditableEntity
 
     // When the device last reported a metering mode.
     public DateTimeOffset? MeteringModeUpdatedAt { get; set; }
+
+    // -------------------------------------------------------------------------
+    // Meter calibration (ZMCT103C + ADS1015 front end).
+    //
+    // These describe the hardware actually fitted, not the firmware build, so
+    // they live in the database and are pushed to the ESP32 on every config
+    // sync. A wrong CT ratio scales every reading by a constant factor, and the
+    // ratio printed on the part is unreliable -- so this must be adjustable at
+    // runtime rather than compiled in.
+    //
+    // Defaults match the compiled firmware fallbacks, so a device that has
+    // never synced still behaves sensibly.
+    // -------------------------------------------------------------------------
+
+    // Primary:secondary turns ratio, e.g. 1000 for a 1000:1 CT.
+    public double ZmctCtRatio { get; set; } = 1000;
+
+    // Burden resistor in ohms converting CT secondary current to a voltage.
+    public double ZmctBurdenOhms { get; set; } = 100;
+
+    // Assumed power factor used to turn measured current into ESTIMATED watts.
+    // A CT cannot measure phase, so this is the largest single error source in
+    // reported wattage until a PZEM-004T is fitted.
+    public double ZmctPowerFactor { get; set; } = 0.9;
+
+    // Trim multiplier (measured / uncalibrated) tuned against a known load.
+    public double ZmctGain { get; set; } = 1.0;
 }
