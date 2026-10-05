@@ -4,8 +4,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <!-- Suppress NU1608 until Npgsql.EntityFrameworkCore.PostgreSQL 10.0.0 is released -->
-    <!-- Suppress NU1902/NU1903: template pins OpenTelemetry 1.15.0 / transitive packages with known advisories; audit stays visible as warnings -->
-    <WarningsNotAsErrors>NU1608;NU1902;NU1903</WarningsNotAsErrors>
+    <!-- NU1902/NU1903 (NuGet security advisories) are deliberately NOT downgraded to
+         errors: TreatWarningsAsErrors applies so that a reintroduced vulnerable package
+         fails the build. Vulnerable transitive packages are fixed by version pin in
+         Directory.Packages.props, not by muting the audit. -->
+    <WarningsNotAsErrors>NU1608</WarningsNotAsErrors>
     <ArtifactsPath>$(MSBuildThisFileDirectory)artifacts</ArtifactsPath>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

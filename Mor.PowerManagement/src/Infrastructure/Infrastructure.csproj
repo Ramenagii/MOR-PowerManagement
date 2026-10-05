@@ -11,6 +11,13 @@
     <PackageReference Include="Microsoft.AspNetCore.Diagnostics.EntityFrameworkCore" />
     <PackageReference Include="Microsoft.AspNetCore.Identity.EntityFrameworkCore" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" />
+    <!-- Transitive pin: Aspire.Npgsql.EntityFrameworkCore.PostgreSQL 13.2.0 depends on
+         OpenTelemetry.Extensions.Hosting 1.15.0 and Npgsql.OpenTelemetry 10.0.1 on
+         OpenTelemetry.Api 1.14.0, both below the 1.15.3 floor required by
+         GHSA-q834-8qmm-v933 / GHSA-4625-4j76-fww9 / GHSA-mr8r-92fq-pj8p
+         (Exporter.OpenTelemetryProtocol) and GHSA-g94r-2vxg-569j (Api).
+         Referencing Extensions.Hosting here resolves all four to the patched 1.15.3. -->
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
 
   <ItemGroup>

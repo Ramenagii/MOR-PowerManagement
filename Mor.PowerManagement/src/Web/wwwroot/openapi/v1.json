@@ -1464,7 +1464,11 @@
           "standbyThresholdWatts",
           "standbyIdleMinutes",
           "stabilizationDelayMs",
-          "outlets"
+          "outlets",
+          "zmctCtRatio",
+          "zmctBurdenOhms",
+          "zmctPowerFactor",
+          "zmctGain"
         ],
         "type": "object",
         "properties": {
@@ -1521,6 +1525,38 @@
             "items": {
               "$ref": "#/components/schemas/DeviceOutletPolicyDto"
             }
+          },
+          "zmctCtRatio": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "zmctBurdenOhms": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "zmctPowerFactor": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "zmctGain": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
           }
         }
       },

@@ -452,6 +452,60 @@ export class DashboardClient {
         }
         return Promise.resolve<void>(null as any);
     }
+
+    /**
+     * Ingest a defense-demo telemetry batch
+     * @return OK
+     */
+    ingestScenario(body: IngestTelemetryCommand): Promise<IngestTelemetryResult> {
+        let url_ = this.baseUrl + "/api/Dashboard/scenarios/ingest";
+        url_ = url_.replace(/[?&]$/, "");
+
+        const content_ = JSON.stringify(body);
+
+        let options_: RequestInit = {
+            body: content_,
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processIngestScenario(_response);
+        });
+    }
+
+    protected processIngestScenario(response: Response): Promise<IngestTelemetryResult> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result200 = IngestTelemetryResult.fromJS(resultData200);
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<IngestTelemetryResult>(null as any);
+    }
 }
 
 export class DeviceClient {
@@ -3647,6 +3701,8 @@ export class ThresholdsDto implements IThresholdsDto {
     warningThresholdWatts!: number;
     criticalThresholdWatts!: number;
     standbyThresholdWatts!: number;
+    standbyIdleMinutes!: number;
+    stabilizationDelayMs!: number;
 
     [key: string]: any;
 
@@ -3669,6 +3725,8 @@ export class ThresholdsDto implements IThresholdsDto {
             this.warningThresholdWatts = _data["warningThresholdWatts"];
             this.criticalThresholdWatts = _data["criticalThresholdWatts"];
             this.standbyThresholdWatts = _data["standbyThresholdWatts"];
+            this.standbyIdleMinutes = _data["standbyIdleMinutes"];
+            this.stabilizationDelayMs = _data["stabilizationDelayMs"];
         }
     }
 
@@ -3689,6 +3747,8 @@ export class ThresholdsDto implements IThresholdsDto {
         data["warningThresholdWatts"] = this.warningThresholdWatts;
         data["criticalThresholdWatts"] = this.criticalThresholdWatts;
         data["standbyThresholdWatts"] = this.standbyThresholdWatts;
+        data["standbyIdleMinutes"] = this.standbyIdleMinutes;
+        data["stabilizationDelayMs"] = this.stabilizationDelayMs;
         return data;
     }
 }
@@ -3698,6 +3758,8 @@ export interface IThresholdsDto {
     warningThresholdWatts: number;
     criticalThresholdWatts: number;
     standbyThresholdWatts: number;
+    standbyIdleMinutes: number;
+    stabilizationDelayMs: number;
 
     [key: string]: any;
 }
