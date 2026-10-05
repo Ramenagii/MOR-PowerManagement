@@ -26,7 +26,14 @@
 #include <PZEM004Tv30.h>
 #include <Preferences.h>
 
+// config.h must precede any conditional include below: it defines
+// METER_SOURCE, and an undefined macro evaluates to 0 in #if, so testing it
+// before the header is present silently selects the wrong branch.
 #include "config.h"
+
+#if METER_SOURCE == METER_ZMCT103C
+#include <Wire.h>
+#endif
 
 // Desired-state codes from GET /api/Device/config (OutletStatus enum order).
 #define DESIRED_ACTIVE 0
@@ -87,74 +94,151 @@ bool zmptRms(uint8_t pin, float calibration, float &rms, uint16_t &peakToPeak) {
 #endif  // METER_SOURCE == METER_ZMPT101B
 
 #if METER_SOURCE == METER_ZMCT103C
+// ---------------------------------------------------------------------------
+// Runtime-adjustable calibration.
+//
+// These are the four numbers that describe the hardware you actually fitted.
+// They arrive from the backend on every config sync and are cached in NVS, so
+// a re-trim is a dashboard edit rather than a reflash. That matters because
+// the CT ratio in particular is frequently mislabelled on the part, and a wrong
+// ratio scales every reading by a constant factor.
+// ---------------------------------------------------------------------------
+float zmctCtRatio = ZMCT_DEFAULT_CT_RATIO;
+float zmctBurdenOhms = ZMCT_DEFAULT_BURDEN_OHMS;
+float zmctPowerFactor = ZMCT_DEFAULT_POWER_FACTOR;
+float zmctGain = ZMCT_DEFAULT_GAIN;
+
 // Last window's diagnostics, published in the serial snapshot so a bench
 // session can be debugged without a logic analyser.
 float zmctLastVoltsRms = 0;
 uint16_t zmctLastPp = 0;
 uint16_t zmctLastBias = 0;
 bool zmctFrontEndOk = false;
+bool zmctAdcOnline = false;
+
+// PGA full-scale in millivolts, used to convert raw counts back to volts.
+float adsFullScaleMv() {
+  switch (ADS_PGA_4V096) {
+    case 0b000: return 6.144f;   // +/-4.096 V
+    case 0b001: return 4.096f;   // +/-2.048 V
+    case 0b010: return 2.048f;   // +/-1.024 V
+    case 0b011: return 1.024f;   // +/-0.512 V
+    case 0b100: return 0.512f;   // +/-0.256 V
+    case 0b101: return 0.256f;   // +/-0.128 V
+    default:    return 4.096f;
+  }
+}
 
 /**
- * Read primary current from the ZMCT103C.
+ * Single-shot read of the ADS front end.
  *
- * The CT produces a bipolar AC waveform centred on the 1.65 V bias divider.
- * RMS therefore has to come from the peak-to-peak excursion, never from the
- * absolute ADC value -- reading the pin against ground reports the bias as
- * ~1.65 V of DC and is meaningless.
+ * Written against the TI register map rather than pulling in a library: the
+ * project has no ADS1xxx dependency installed, and the subset needed here is
+ * three register writes and one read. Config register is rebuilt from scratch
+ * every conversion rather than read-modify-written, so a partially written
+ * config on a brown-out cannot leave the PGA or MUX in an unknown state.
+ */
+bool adsReadMilliVolts(float &mv) {
+  // CONFIG (0x01): OS=1 start a single conversion, MUX, PGA, MODE=1, SPS.
+  const uint16_t cfg = (uint16_t)(0x8000 | (ADS_MUX_AIN0_GND << 12) |
+                                  (ADS_PGA_4V096 << 9) | 0x0200 | (ADS_SPS_128 << 5));
+  Wire.beginTransmission(ADS_I2C_ADDR);
+  Wire.write(0x01);
+  Wire.write((uint8_t)(cfg >> 8));
+  Wire.write((uint8_t)(cfg & 0xFF));
+  if (Wire.endTransmission() != 0) return false;
+
+  // A conversion at 128 SPS takes ~7.8 ms. Waiting properly matters: polling
+  // the conversion register too early returns a stale or mid-conversion value,
+  // which shows up as a plausible-looking but wrong bias.
+  delay(10);
+
+  Wire.beginTransmission(ADS_I2C_ADDR);
+  Wire.write(0x00);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((int)ADS_I2C_ADDR, (int)2) != 2) return false;
+
+  const int16_t raw = (int16_t)(((uint16_t)Wire.read() << 8) | Wire.read());
+
+#if ADS_IS_1115
+  mv = (float)raw * (adsFullScaleMv() / 32768.0f);
+#else
+  mv = (float)raw * (adsFullScaleMv() / 2048.0f);
+#endif
+  return true;
+}
+
+/**
+ * Read primary current from the ZMCT103C via the ADS1015 front end.
  *
- * The bias is measured per window rather than assumed. A fixed constant would
- * drift with temperature and supply, and a half-supplied or unbuffered front
- * end would silently produce a plausible-looking number instead of an error.
+ * The CT produces a bipolar AC waveform centred on the 1.65 V bias. RMS must
+ * come from the peak-to-peak excursion, never the absolute value -- reading the
+ * pin against ground reports the bias as ~1.65 V of DC and is meaningless.
  *
- * Returns false only when the front end is not believable. A genuine "no load"
- * is NOT a failure -- it returns true with 0 A, because an empty CT sitting at
- * its bias is a legitimate reading and must still be published.
+ * Returns false when the front end is not believable. A genuine "no load" is
+ * NOT a failure: it returns true with 0 A, because an empty CT sitting at its
+ * bias is a legitimate reading and must still be published.
  */
 bool zmctReadAmps(float &amps, float &voltsRms) {
-  int lo = 4095;
-  int hi = 0;
-  uint32_t sum = 0;
+  int lo = 0x7FFF, hi = -0x7FFF;
+  double sum = 0;
+  uint32_t valid = 0;
 
   for (int i = 0; i < ZMCT_SAMPLE_COUNT; i++) {
-    int raw = analogRead(ZMCT_PIN);
-    if (raw < lo) lo = raw;
-    if (raw > hi) hi = raw;
-    sum += (uint32_t)raw;
+    float mv;
+    if (!adsReadMilliVolts(mv)) continue;
+    int v = (int)lroundf(mv);
+    if (v < lo) lo = v;
+    if (v > hi) hi = v;
+    sum += mv;
+    valid++;
   }
 
+  // No successful I2C transaction at all means the ADC is absent or the bus is
+  // wrong. Distinguished from a bad bias, because the remedies differ.
+  if (valid == 0) {
+    zmctAdcOnline = false;
+    zmctFrontEndOk = false;
+    zmctLastPp = 0;
+    zmctLastBias = 0;
+    zmctLastVoltsRms = 0;
+    amps = 0.0f;
+    voltsRms = 0.0f;
+    return false;
+  }
+  zmctAdcOnline = true;
+
   const uint16_t pp = (uint16_t)(hi - lo);
-  const uint16_t bias = (uint16_t)(sum / ZMCT_SAMPLE_COUNT);
+  const float biasMv = (float)(sum / valid);
+  const uint16_t biasCounts = (uint16_t)(biasMv * 1000.0f);
 
   zmctLastPp = pp;
-  zmctLastBias = bias;
+  zmctLastBias = biasCounts;
   zmctLastVoltsRms = 0;  // stays 0 on the failure / no-load paths below
 
-  // Gross front-end sanity check, before any maths is derived from the signal.
-  // Missing divider, open coupling cap or unpowered buffer all land here.
-  const int biasErr = (int)bias - ZMCT_BIAS_COUNTS;
-  zmctFrontEndOk = (biasErr <= ZMCT_BIAS_TOLERANCE) && (biasErr >= -ZMCT_BIAS_TOLERANCE);
+  // Expected bias is half of full scale: ~2048 mV at +/-4.096 V.
+  zmctFrontEndOk = fabsf(biasMv - (adsFullScaleMv() / 2.0f)) <= 400.0f;
   if (!zmctFrontEndOk) {
     amps = 0.0f;
     voltsRms = 0.0f;
     return false;
   }
 
-  if (pp < ZMCT_NOISE_FLOOR) {
-    amps = 0.0f;      // CT is carrying no current: legitimate, not a fault
+  if (pp < 40) {   // ~40 mV p-p of noise floor, in millivolts
+    amps = 0.0f;   // CT is carrying no current: legitimate, not a fault
     voltsRms = 0.0f;
     return true;
   }
 
-  // Peak-to-peak -> peak -> RMS. The CT waveform is sinusoidal, so the 1/sqrt(2)
-  // form factor applies; the 2 on peak-to-peak is the half-wave amplitude.
-  const float countsToVolts = ZMCT_MV_FULL_SCALE / 4095.0f;
-  const float peak = (pp / 2.0f) * countsToVolts;
-  voltsRms = peak * 0.70710678f * ZMCT_CAL;
-  zmctLastVoltsRms = voltsRms;
+  // Peak-to-peak -> peak -> RMS. The CT waveform is sinusoidal, so the
+  // 1/sqrt(2) form factor applies; the 2 on peak-to-peak is the half-wave
+  // amplitude.
+  const float peak = (pp / 2.0f);
+  voltsRms = peak * 0.70710678f * zmctGain;
 
   // Secondary RMS current through the burden, stepped back up by the ratio.
-  const float secondaryAmps = voltsRms / ZMCT_BURDEN_OHMS;
-  amps = secondaryAmps * ZMCT_CT_RATIO;
+  const float secondaryAmps = (voltsRms / 1000.0f) / zmctBurdenOhms;
+  amps = secondaryAmps * zmctCtRatio;
   return true;
 }
 #endif  // METER_SOURCE == METER_ZMCT103C
@@ -565,6 +649,12 @@ void savePolicyTable() {
   // network: a device that forgot its idle duration would either shed channels
   // immediately or never shed them at all.
   nvsPolicy.putInt("sbIdle", cfgStandbyIdleMinutes);
+#if METER_SOURCE == METER_ZMCT103C
+  nvsPolicy.putFloat("zmRatio", zmctCtRatio);
+  nvsPolicy.putFloat("zmBurden", zmctBurdenOhms);
+  nvsPolicy.putFloat("zmPF", zmctPowerFactor);
+  nvsPolicy.putFloat("zmGain", zmctGain);
+#endif
   {
     int16_t idleArr[OUTLET_COUNT];
     for (int i = 0; i < OUTLET_COUNT; i++) idleArr[i] = (int16_t)idleLimitMinutes[i];
@@ -595,6 +685,14 @@ bool loadPolicyTable() {
   cfgStandby = nvsPolicy.getFloat("standby", cfgStandby);
   cfgStabilizationMs = nvsPolicy.getInt("stabMs", cfgStabilizationMs);
   cfgStandbyIdleMinutes = nvsPolicy.getInt("sbIdle", cfgStandbyIdleMinutes);
+#if METER_SOURCE == METER_ZMCT103C
+  // Absent in tables written before calibration became runtime-adjustable; the
+  // compiled defaults then stand, which is the safe direction.
+  zmctCtRatio = nvsPolicy.getFloat("zmRatio", zmctCtRatio);
+  zmctBurdenOhms = nvsPolicy.getFloat("zmBurden", zmctBurdenOhms);
+  zmctPowerFactor = nvsPolicy.getFloat("zmPF", zmctPowerFactor);
+  zmctGain = nvsPolicy.getFloat("zmGain", zmctGain);
+#endif
   // Absent in tables written before POL-08 was implemented; leaving the
   // compiled -1 (exempt) defaults in place is the safe direction, since an
   // un-enforced standby rule only wastes power while a wrongly-enforced one
@@ -657,6 +755,21 @@ bool syncConfig() {
   // POL-08 idle duration. Without this the local standby rule had no timer to
   // run on and would have had to fall back to a compiled-in guess.
   cfgStandbyIdleMinutes = doc["standbyIdleMinutes"] | cfgStandbyIdleMinutes;
+
+#if METER_SOURCE == METER_ZMCT103C
+  // Runtime-adjustable sensor calibration. The backend is the source of truth
+  // because these describe the hardware actually fitted, not the firmware build.
+  // Guarded on positivity so a malformed or zero value cannot silently scale
+  // every reading to zero -- a null-overwrite bug would look like "no load".
+  float r = doc["zmctCtRatio"] | zmctCtRatio;
+  float b = doc["zmctBurdenOhms"] | zmctBurdenOhms;
+  float pf = doc["zmctPowerFactor"] | zmctPowerFactor;
+  float g = doc["zmctGain"] | zmctGain;
+  if (r > 0) zmctCtRatio = r;
+  if (b > 0) zmctBurdenOhms = b;
+  if (pf > 0 && pf <= 1.0) zmctPowerFactor = pf;
+  if (g > 0) zmctGain = g;
+#endif
 
   JsonArray outlets = doc["outlets"];
   for (JsonObject o : outlets) {
@@ -771,12 +884,16 @@ void printChannelSnapshot() {
                 sFault ? " FAULT" : "");
 #endif
 #if METER_SOURCE == METER_ZMCT103C
-  // The bias is the single most useful number when commissioning: a front end
-  // that reads ~2048 counts is alive, one that reads 0 or 4095 is not wired.
-  // pp then confirms the CT path separately from the bias network.
-  Serial.printf("zmct: bias=%u/%u pp=%u v_rms=%.3fV%s\n",
-                zmctLastBias, ZMCT_BIAS_COUNTS, zmctLastPp, zmctLastVoltsRms,
-                zmctFrontEndOk ? "" : " FRONT-END-IMPLAUSIBLE");
+  // bias is the single most useful number while commissioning: ~2048 mV means
+  // the front end is alive, ~0 or ~4096 means it is not wired. pp then confirms
+  // the CT path separately from the bias network. adc=0 means the I2C device
+  // did not answer at all -- a different fault with a different fix.
+  Serial.printf("zmct: adc=%s bias=%umV/%d pp=%umV v_rms=%.3fV %s\n",
+                zmctAdcOnline ? "ok" : "MISSING", zmctLastBias,
+                (int)adsFullScaleMv() / 2, zmctLastPp, zmctLastVoltsRms,
+                zmctFrontEndOk ? "" : "FRONT-END-IMPLAUSIBLE");
+  Serial.printf("zmct cal: ratio=%.0f burden=%.1fR pf=%.2f gain=%.3f\n",
+                zmctCtRatio, zmctBurdenOhms, zmctPowerFactor, zmctGain);
 #endif
 }
 
@@ -801,18 +918,18 @@ void setup() {
   analogSetPinAttenuation(ZMPT_CURR_PIN, ADC_11db);
   Serial.printf("meter: ZMPT101B on ADC1 (V=GPIO%d, I=GPIO%d)\n", ZMPT_VOLT_PIN, ZMPT_CURR_PIN);
 #elif METER_SOURCE == METER_ZMCT103C
-  // 12-bit samples on ADC1. ADC2 cannot be read while Wi-Fi is associated, and
-  // this device is always associated, so ADC1 is not a preference here.
-  analogReadResolution(12);
-  analogSetPinAttenuation(ZMCT_PIN, ADC_11db);
-  pinMode(ZMCT_PIN, INPUT);
-  Serial.printf("meter: ZMCT103C on ADC1 (I=GPIO%d, ratio=%.0f:1, burden=%.0f ohm)\n",
-                ZMCT_PIN, ZMCT_CT_RATIO, ZMCT_BURDEN_OHMS);
-  Serial.println("  NOTE: current only. Volts are the nominal rail rating and watts are");
+  // The CT is read through an external ADS1015/ADS1115 on I2C, not the S3's
+  // internal ADC. Wire.begin() must succeed before any sample loop runs, or
+  // every read fails and the front-end check trips with no diagnosis.
+  Wire.begin(ADS_SDA_PIN, ADS_SCL_PIN, 400000);
+  Wire.setTimeOut(50);
+  Serial.printf("meter: ZMCT103C via ADS1115 on I2C (SDA=GPIO%d, SCL=GPIO%d, addr=0x%02X)\n",
+                ADS_SDA_PIN, ADS_SCL_PIN, ADS_I2C_ADDR);
+  Serial.printf("  NOTE: current only. Volts are the nominal rail rating and watts are\n");
   Serial.printf("  ESTIMATED as V_nominal x I x %.2f. Real power needs a PZEM-004T.\n",
-                ZMCT_POWER_FACTOR);
-  Serial.printf("  Front-end check: bias must sit near %u +/- %d counts (~1.65 V).\n",
-                ZMCT_BIAS_COUNTS, ZMCT_BIAS_TOLERANCE);
+                zmctPowerFactor);
+  Serial.println("  Front-end check: bias must sit near mid-supply (~1.65 V, 2048 mV).");
+  Serial.println("  Calibration (ratio/burden/PF/gain) is pushed from the backend and cached in NVS.");
 #elif METER_SOURCE == METER_PZEM004T
   Serial.printf("meter: PZEM-004T v3.0 on UART (RX=GPIO%d, TX=GPIO%d)\n", PZEM_RX_PIN, PZEM_TX_PIN);
 #else

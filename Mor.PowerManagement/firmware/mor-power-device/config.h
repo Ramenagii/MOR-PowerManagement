@@ -206,6 +206,45 @@
 // nominal 3.3 V causes clipping that looks like AC distortion.
 #define ZMCT_MV_FULL_SCALE 3100.0f
 
+// ---- ADS1015 / ADS1115 external I2C ADC (expansion board) -----------------
+// The expansion board does NOT feed the CT into the ESP32's internal ADC. It
+// goes ESP32 --I2C--> ADS1015 --> analog pin. That gives a 16-bit conversion
+// instead of the S3's 12-bit, which matters at these signal levels.
+//
+// I2C pins are the board defaults: SDA = GPIO8, SCL = GPIO9
+// (variants/esp32s3/pins_arduino.h). CH5/CH6 relays were moved off them.
+#define ADS_SDA_PIN 8
+#define ADS_SCL_PIN 9
+#define ADS_I2C_ADDR 0x48   // ADS1015/ADS1115 default; ADDR->GND = 0x48
+
+// 1 = ADS1115 (16-bit, PGA +/-FS), 0 = ADS1015 (12-bit). Most modules sold as
+// "ADC1015" are actually ADS1115, so default to 1115. Both share a register
+// layout; only resolution and gain encoding differ.
+#define ADS_IS_1115 1
+
+// Single-shot conversions at 128 SPS. The CT waveform is 50/60 Hz, so this only
+// affects how fast a window completes, not waveform fidelity -- RMS is
+// integrated over many samples regardless.
+#define ADS_SPS_128 0b100
+
+// PGA +/-4.096 V. With a 1.65 V bias that leaves +/-2.4 V of headroom, which
+// matches a 100 ohm burden at roughly 14 A primary.
+#define ADS_PGA_4V096 0b010
+
+// MUX: single-ended AIN0 referenced to GND.
+#define ADS_MUX_AIN0_GND 0b100
+
+// ---- ZMCT calibration: runtime-adjustable ---------------------------------
+// DEFAULTS ONLY. Every one is overwritten from GET /api/Device/config once the
+// backend supplies a value, then persisted to NVS, so the sensor can be
+// re-trimmed from the dashboard without reflashing. CT ratio, burden value and
+// gain are properties of the hardware you actually fitted -- they should not be
+// baked into a binary.
+#define ZMCT_DEFAULT_CT_RATIO 1000.0f
+#define ZMCT_DEFAULT_BURDEN_OHMS 100.0f
+#define ZMCT_DEFAULT_POWER_FACTOR 0.9f
+#define ZMCT_DEFAULT_GAIN 1.0f
+
 // ---- PZEM-004T v3.0 bus --------------------------------------------------
 // 13-channel rig: single mains PZEM (address 1) on the common feed.
 // Per-channel watts are estimated from the mains total (see .ino).
@@ -221,7 +260,16 @@
 // ---- Relay outputs, one per outlet channel ----
 // Order: 8x220V (CH1-8), 1x110V via step-down (CH9), 4xUSB 5V (CH10-13).
 // Safe ESP32-S3 GPIOs avoiding strapping (0,3,45,46), USB (19,20) and SPI flash.
-static const uint8_t RELAY_PINS[OUTLET_COUNT] = { 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 18 };
+//
+// CH5 and CH6 were moved OFF GPIO8/GPIO9. Those two pins are the board's
+// default I2C pair (variants/esp32s3/pins_arduino.h: SDA=8, SCL=9) and the
+// ADS1015 front end hangs off them -- driving them as relay outputs fights the
+// I2C bus. GPIO21 and GPIO47 are used instead.
+//
+// GPIO35-37 were deliberately avoided: on modules with octal PSRAM (this board
+// reports 8 MB embedded) those pins are wired to the PSRAM and are not
+// available. GPIO47 is free on the common WROOM/S3-DevKitC breakouts.
+static const uint8_t RELAY_PINS[OUTLET_COUNT] = { 4, 5, 6, 7, 21, 47, 10, 11, 12, 13, 14, 15, 18 };
 #define RELAY_CLOSED_LEVEL HIGH
 
 // ---- Manual switch inputs, raw rocker/switch caps (0 = not wired) ----
