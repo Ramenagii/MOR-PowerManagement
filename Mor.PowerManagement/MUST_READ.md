@@ -49,8 +49,8 @@ pins 0/3/45/46, USB pins 19/20 and flash pins):
 
 | Device | Role | I²C address | Library |
 |---|---|---|---|
-| **INA226** | Mains bus meter on the common 220 V feed: V, A, W. Authoritative P_total. | `0x40` | `INA226` (Rob Tillaart) v0.6.6 |
-| **ADS1115 / ADS1015** | 4-channel ADC reading each branch's analog CT sensor → real per-branch current for CH1–CH4 | `0x48` | `Adafruit ADS1X15` v2.6.2 (+ `Adafruit BusIO`) |
+| **INA226** | Voltage reference on the common 220 V feed (behind a divider), plus DC rail monitoring. **Not a mains power meter** — see §12. | `0x40` | `INA226` (Rob Tillaart) v0.6.6 |
+| **ADS1015 / ADS1115** | 4-channel ADC reading each branch's analog CT sensor → real per-branch current for CH1–CH4 | `0x48` | `Adafruit ADS1X15` v2.6.2 (+ `Adafruit BusIO`) |
 | ArduinoJson | telemetry / config JSON | — | v7.4.3 |
 
 Install once per machine (sketchbook on this PC is `D:\Arduino15\user\libraries`):
@@ -60,6 +60,16 @@ arduino-cli lib install "ArduinoJson"
 arduino-cli lib install "Adafruit ADS1X15"
 arduino-cli lib install "INA226"
 ```
+
+### Calibration constants — do not guess these
+
+| Constant | Value | What breaks if it is wrong |
+|---|---|---|
+| `INA226_SHUNT_OHM` / `INA226_MAX_CURRENT_AMPS` | **0.010 Ω / 8.0 A** | The INA226 derives current from the shunt voltage. A wrong pair scales **every** current and watt reading on the dashboard. Using `configure(0.1, 0.1, …)` produced 0.000 A on all four channels while the sensor was healthy. |
+| `INA226_MAIN_VOLT_DIVIDER` | **9.46** | Reported volts. 24.1 V at the pin × 9.46 = 228 V. |
+| `I2C_CLOCK_HZ` | **100000** | A 400 kHz build found *neither* I²C device on the current wiring. If sensors vanish, check the bus first, then this. |
+| `ZMCT_CAL_FACTOR` | **0.52** | Every branch amp is this × the measured RMS. Calibrate against a known load. |
+| `AC_VOLTAGE` (raw sketch) | **238** — see §12 | Only affects the standalone raw sketch; the framework firmware uses measured volts instead. |
 
 **Electrical cautions — read before wiring:**
 - The INA226 senses **max 36 V**. It must sit behind a **voltage divider on the
@@ -391,3 +401,33 @@ Do these when the practice/design 1 phase ends:
 ---
 
 *Last updated 11 Oct 2026. Testing rig configuration in force until 31 Oct 2026.*
+
+---
+
+## 12. Bench reality (recorded 11 Oct 2026)
+
+What the rig actually does right now, as opposed to what the design intends.
+
+**Working, measured on the bench:**
+- INA226 online at 0x40, reading 227.6 V after the 9.46 divider
+- ADS1015 online at 0x48, four CT channels reading 0.059 / 0.029 / 0.024 / 0.025 A
+- Telemetry HTTP 200 at 1 Hz; dashboard total 30.81 W against a 1200 W limit
+- Relays and rules are disabled (RELAY_OUTPUT_ENABLED 0, RULES_ENABLED 0), so nothing can shed or trip
+
+**Two honest gaps to resolve before the write-up:**
+1. **The INA226 is not a mains power meter.** It sits on a 24 V DC rail that is
+   drawing ~0 A, so mains power and kWh read ~0. It is currently useful only as
+   the voltage reference (24.1 V x 9.46). Either rewire it to the mains feed, or
+   describe it in the manuscript as a voltage reference, not as P_total.
+2. **Branch volts are measured; the raw sketch's AC_VOLTAGE is assumed.**
+   The framework firmware multiplies measured branch current by the measured
+   INA226 voltage. The standalone raw sketch instead assumes a constant 238 V
+   while the bench meter reads 228 V, so its watt figures are ~4% high.
+
+**Failure modes worth remembering:**
+- The ESP32 enumerates on a **different COM port after every replug** (it has been
+  COM10, COM11 and COM12 today). A missing port looks identical to an I2C fault.
+- The bus has gone silent three times today, each time after the wiring was
+  handled. Long-term fix: solder or lock the sensor VCC/GND rather than Dupont.
+- An INA226 that reports 0 A is usually a **shunt calibration** fault, not a dead
+  sensor. Confirm the bus answers before suspecting hardware.
