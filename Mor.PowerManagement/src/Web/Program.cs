@@ -22,6 +22,12 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.KnownProxies.Clear();
 });
 
+// Short in-memory cache for the read-heavy dashboard endpoints (see
+// Dashboard.cs). The console polls state twice a second and the database is
+// cloud-hosted, so without this every poll pays a ~180 ms round trip and the
+// console reads as lagging.
+builder.Services.AddMemoryCache();
+
 builder.AddKeyVaultIfConfigured();
 builder.AddApplicationServices();
 builder.AddInfrastructureServices();

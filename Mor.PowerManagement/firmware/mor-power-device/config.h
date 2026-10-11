@@ -1,286 +1,188 @@
-﻿#pragma once
+#pragma once
 
 #include <Arduino.h>
 
 // ---------------------------------------------------------------------------
-// MOR power-management prototype â€” ESP32 edge controller.
+// MOR power-management prototype — ESP32 edge controller.
 // Edit the values below for your bench, then compile and flash with:
 //   arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 //   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-//
-// Board: ESP32-S3 rev v0.2, QFN56, 40 MHz crystal, 8 MB embedded PSRAM
-// (AP_3v3), MAC 3c:0f:02:cf:80:18.
-//
-// The board exposes TWO USB paths and Windows assigns them different ports:
-//   COM10 - CH343 USB-UART bridge (VID_1A86&PID_55D3). UART0, works with any
-//           firmware, and is what the Serial Monitor should use.
-//   COM11 - chip-native USB / USB-Serial-JTAG (VID_303A&PID_1001). Disappears
-//           from Windows whenever the USB peripheral is powered down, which an
-//           esptool "Hard resetting via RTS pin" reliably triggers. If the port
-//           vanishes mid-session, unplug and replug the cable to get it back.
-// Detect with `arduino-cli board list` before each upload; do not trust a
-// hardcoded port. On CH343 the chip auto-resets into the bootloader, so no BOOT
-// press is needed.
-//
-//  * Do NOT use the esp32:esp32:esp32 FQBN. It compiles, but esptool then
-//    refuses the flash with "This chip is ESP32-S3".
-//
-// NOTE: the build does not currently enable the 8 MB PSRAM (the stock esp32s3
-// profile reports a 327,680-byte heap). Nothing here needs it yet; enable a
-// PSRAM board option before allocating large buffers on the heap.
+// The board is an ESP32-S3 (WCH CH343 USB-serial). Using esp32:esp32:esp32
+// compiles but esptool refuses the flash with "This chip is ESP32-S3".
 // ---------------------------------------------------------------------------
 
-#define OUTLET_COUNT 13
+// Testing rig (MUST_READ.md, until 31 Oct 2026): 4x220V outlets + 1xUSB 5V.
+// Restore to 13 for the final rig: CH1-8 220V, CH9 110V, CH10-13 USB.
+#define OUTLET_COUNT 5
 
 // ---- Wi-Fi ----
-// Credentials are stored in NVS flash (written on first setup via
-// WIFI_SLOTS), so the repo never has to hold a real password. The values below
-// are first-boot SEEDS ONLY: if a matching SSID is already saved in NVS, the
-// stored password wins and these are ignored.
+// Credentials live in NVS flash (written on first setup), so the repo never
+// holds a real password. The values in config.h are first-boot seeds only and
+// are ignored once NVS holds a working network.
 //
-// WIFI_PASS is deliberately left empty so no secret is committed. Fill it in
-// locally before the first flash, or provision it on-device at first boot.
-//
-// LOCAL SECRET: the bench password is filled in locally and this file is left
-// UNCOMMITTED on purpose. Do not `git add config.h` with the password in it --
-// see the note in .git/info/exclude. Strip the value back to "" before any
-// commit or push.
-#define WIFI_SSID "GHHK715A-2.4"
+// config.local.h is where real credentials go, and it is git-ignored so a
+// password can never reach the repository by accident. Copy
+// config.local.h.example to config.local.h and fill it in.
+#if __has_include("config.local.h")
+#include "config.local.h"
+#endif
+
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+
+#ifndef WIFI_PASS
 #define WIFI_PASS ""
+#endif
 
 // Saved-network store: up to WIFI_SLOTS SSID/password pairs in NVS.
 #define WIFI_SLOTS 3
 #define WIFI_JOIN_TIMEOUT_MS 12000UL
 
 // ---- Backend (ASP.NET Core Web API) ----
-// Cloud deployment (public, any-device access).
-#define BACKEND_HOST "mor-powermanagement.onrender.com"
-#define BACKEND_PORT 443
+// LAN bench: point the device at the PC running the backend. The cloud host
+// still runs the full 13-channel rig and re-seeds it on every start, which
+// silently overwrites the 5-channel testing configuration that MUST_READ.md
+// defines for this phase. Talking to the LAN backend keeps the testing rig and
+// the dashboard in the same place.
+#define BACKEND_HOST "192.168.18.47"
+#define BACKEND_PORT 5211
 #define BACKEND_BASE "/api"
 // 1 = https (host has a real cert), 0 = plain http for the LAN bench.
-#define BACKEND_USE_TLS 1
+#define BACKEND_USE_TLS 0
 #define DEVICE_ID "mor-prototype-01"
 // Must match the backend Device:ApiKey when key enforcement is turned on.
 #define DEVICE_API_KEY "vuZAWog0U6MnqHF58TK3DhCzO9Je2atQ"
 
 // ---- Timing ----
-#define TELEMETRY_INTERVAL_MS 5000UL
+// Telemetry is 1 Hz so the console reads as live rather than as a slow poll.
+#define TELEMETRY_INTERVAL_MS 1000UL
 #define CONFIG_INTERVAL_MS 15000UL
-// Serial per-channel snapshot. Deliberately independent of the telemetry
-// interval so the rig stays observable with no backend reachable.
-#define SNAPSHOT_INTERVAL_MS 5000UL
+// Serial per-channel snapshot at 4 Hz, set in the .ino.
 
-// ---- Meter source ---------------------------------------------------------
-// Which front end the mains reading comes from. The dashboard's provenance
-// badge is derived from SIMULATE_METERS below, never from this choice, so the
-// two must stay consistent.
-//
-//   METER_SIMULATE  0 - no hardware. Synthesised load. Reports Simulated.
-//   METER_ZMPT101B  1 - ZMPT101B current/voltage sensor pair on ADC1.
-//                     Reports Metered (the value is isolated-CT measured).
-//   METER_PZEM004T  2 - PZEM-004T v3.0 over UART (Modbus address 1).
-//                     Reports Metered.
-//
-// The rig is designed around ONE meter on the common mains feed; per-channel
-// power is an allowance-weighted share of that total. A later PZEM swap needs
-// no code change beyond this constant.
-#define METER_SIMULATE 0
-#define METER_ZMPT101B 1
-#define METER_PZEM004T 2
-// ZMCT103C current transformer. Measures CURRENT ONLY -- a CT has no voltage
-// output. Volts stay at each channel's nominal rating and watts are estimated
-// as V_nominal x I x ZMCT_POWER_FACTOR. Reports EstimatedFromCurrent (=3), NOT
-// Metered (=2), so the UI cannot imply real power was measured.
-#define METER_ZMCT103C 3
+// ---------------------------------------------------------------------------
+// RAW TEST MODE (temporary — see MUST_READ.md section 11)
+// The measurement chain is proven; telemetry is now posted so the readings are
+// visible on the dashboard. The two protective subsystems stay OFF until the
+// bench authorises them:
+//   0 = relays are not driven (pins stay at POWER_ON, so channels stay live)
+//   0 = framework rules do not evaluate and cannot shed or trip anything
+//   1 = telemetry is posted once a second
+// ---------------------------------------------------------------------------
+#define RELAY_OUTPUT_ENABLED 0
+#define RULES_ENABLED 0
+#define TELEMETRY_ENABLED 1
 
-#ifndef METER_SOURCE
-// ZMCT103C on the common feed. Switch to this only once GPIO2 shows a bias
-// near 2048 counts (~1.65 V) with a meter or in the serial snapshot. If the pin
-// is floating the front-end check fails, POL-01 trips after three windows and
-// opens all 13 relays -- correct fail-safe behaviour, but it will take the rig
-// down, so keep the serial monitor open before powering up.
-#define METER_SOURCE METER_ZMCT103C
-#endif
+// ---- I2C bus (shared by INA226 + ADS1015) ----
+// Bench wiring: SDA = GPIO 8, SCL = GPIO 9. These are the pins the ADS1015 is
+// physically wired to, so they are fixed by the hardware, not chosen.
+#define I2C_SDA_PIN 8
+#define I2C_SCL_PIN 9
+// I2C bus speed. 100 kHz is what this wiring sustains RIGHT NOW: measured on
+// the current hardware, a 400 kHz build found NEITHER the INA226 (0x40) nor
+// the ADS1015 (0x48), while a 100 kHz build found both. The standalone sketch
+// ran at 400 kHz earlier in the day, but the modules have since been unplugged
+// and re-seated, and the current wiring no longer tolerates the fast rate.
+// Revisit only with short leads and stronger pull-ups, verified by a bus scan.
+#define I2C_CLOCK_HZ 100000
+
+// ---- INA226: mains bus meter on the common 220 V feed ----
+// Provides the authoritative V / A / W for the whole extension, replacing the
+// assumed line voltage the standalone branch monitor used.
+// The INA226 senses at most 36 V, so it sits behind a divider on the mains feed.
+#define INA226_ADDR 0x40
+// Bus-voltage divider ratio, calibrated on the bench. The INA226 reports 24.1 V
+// at its bus pin; mains measured 228 V with a multimeter, so 228 / 24.1 = 9.46.
+// Re-check with a multimeter after touching the resistor ladder and update this
+// one number — it is the only calibration constant in the voltage path.
+#define INA226_MAIN_VOLT_DIVIDER 9.46f
+
+// Shunt calibration, exactly as the validated bench sketch sets it: 8 A full
+// scale on a 10 mOhm shunt. The INA226 derives current from the shunt voltage,
+// so the wrong shunt value scales EVERY current and watt reading - this was
+// reporting 0 A and 0 W while the sensor itself was fine.
+#define INA226_MAX_CURRENT_AMPS 8.0f
+#define INA226_SHUNT_OHM 0.010f
+// Used only when the INA226 is not answering at all, so the rig still reports a
+// plausible voltage instead of reading 0 V on every channel.
+#define FALLBACK_MAINS_VOLTS 228.0f
+
+// ---- ADS1015: per-branch AC current via analog CT sensors ----
+// Gain and data rate are the values the bench proved out. GAIN_TWOTHIRDS is
+// +/-6.144 V, which brackets a 0-5 V CT module output biased at 2.5 V.
+#define ADS_ADDR 0x48
+#define ADS_GAIN GAIN_TWOTHIRDS
+#define ADS_DATA_RATE RATE_ADS1015_3300SPS
+
+// CT calibration, measured on this bench against a known load.
+#define ZMCT_CAL_FACTOR 0.52f
+// Noise floor: raw readings below this are treated as 0 A so idle channels do
+// not show phantom jitter that would keep FR-10 idle detection awake.
+#define ZMCT_NOISE_FLOOR_AMPS 0.010f
+// Above this fraction of the low range the mid-range factor applies, which is
+// what keeps a 0.264 A reading from being reported as 0.274 A.
+#define ZMCT_MID_RANGE_AMPS 0.080f
+#define ZMCT_MID_RANGE_FACTOR 0.264f / 0.274f
+// Adaptive filter: a step larger than this snaps through untouched, so a load
+// change is visible at once instead of being smoothed into staleness. Anything
+// smaller is smoothed (1 - ADAPTIVE_EMA_HISTORY old, ADAPTIVE_EMA_HISTORY new).
+#define ZMCT_ADAPTIVE_STEP_AMPS 0.015f
+#define ZMCT_ADAPTIVE_EMA_HISTORY 0.7f
+// Samples per channel per pass. 600 samples at 3300 SPS is ~182 ms, which is
+// ~11 AC cycles at 60 Hz — long enough for the RMS to mean something.
+#define ZMCT_DEDICATED_SAMPLES 600
+// Stack for the sampling task; it is pinned to core 0 so a full four-channel
+// pass cannot delay the serial output on core 1.
+#define SENSOR_TASK_STACK 4096
+#define SENSOR_TASK_PRIORITY 2
+// How many ADS1015 channels actually have a CT wired (0..4). Only these are
+// measured; any outlet beyond this is reported as derived, never as measured.
+#define BRANCH_CT_COUNT 4
+// Per-branch overcurrent trip in amps RMS, evaluated by FR-03 on the board.
+#define BRANCH_OVERCURRENT_AMPS 5.0f
+
+// How often the sensor sweep runs. The RMS window is blocking by nature
+// (2 CT channels x ~184 ms), so it is deliberately NOT run every loop
+// iteration: doing that starves the Wi-Fi and telemetry work in the same loop.
+// The main loop keeps spinning at full speed between sweeps, and the dashboard
+// still sees a fresh reading every second.
+#define METER_INTERVAL_MS 1000UL
 
 // Placeholder for bench tests without hardware wired:
-// 1 = synthesise the mains reading (no sensor needed), 0 = read real hardware.
-#define SIMULATE_METERS (METER_SOURCE == METER_SIMULATE)
+// 0 = read the real INA226 + ADS1015 on the wired bench.
+#define SIMULATE_METERS 0
 
-// ---- ZMPT101B AC sensor (expansion board) ---------------------------------
-// ZMPT101B is a 2 mA : 2 mA current transformer with a burden resistor and an
-// LM358 output stage. The OUT pin is a small AC waveform riding on ~1.5 V of
-// DC bias, so RMS must be taken from the peak-to-peak excursion, NOT from the
-// absolute ADC value. Measuring the raw pin against ground would read the bias
-// as ~1.5 V of DC and be meaningless.
-//
-// Pin choice is forced by the ADC, not preference:
-//   * ESP32-S3 ADC1 = GPIO1..GPIO10. ADC2 = GPIO11..GPIO20 is NOT usable while
-//     Wi-Fi is active, and this device is always on Wi-Fi.
-//   * GPIO0 and GPIO3 are strapping pins - do not use for analog.
-//   * RELAY_PINS already occupy GPIO4..15 and GPIO18.
-//   => GPIO1 and GPIO2 are the only free ADC1 pins, which is exactly one
-//      voltage/current pair. A second meter would require moving relays off
-//      ADC1 or accepting an ADC2 reading loss.
-#define ZMPT_VOLT_PIN 1   // ADC1_CHANNEL_0
-#define ZMPT_CURR_PIN 2   // ADC1_CHANNEL_1
-
-// Samples per RMS window. 1000 samples at roughly 1 kHz spans several cycles
-// of a 50/60 Hz waveform, so one mains cycle is captured comfortably.
-#define ZMPT_SAMPLE_COUNT 1000
-
-// Calibration factor: measured RMS / uncalibrated RMS.
-// Set to 1.0 until the sensor is wired, then tune against a multimeter and a
-// known load. Until this is calibrated the value is indicative only.
-#define ZMPT_VOLT_CAL 1.0f
-#define ZMPT_CURR_CAL 1.0f
-
-// Samples below this peak-to-peak count are treated as "no signal". The output
-// sits at its DC bias when the primary carries no current, so a tiny excursion
-// is an idle channel, not a reading of zero that should still be published.
-#define ZMPT_NOISE_FLOOR 12
-
-// ---- ZMCT103C current transformer (expansion board) ------------------------
-// A ZMCT103C is a CURRENT transformer. It has no voltage output and needs no
-// power supply of its own -- it generates its signal from the current in its
-// primary. This is the difference that matters: the ZMPT101B path above is
-// WRONG for this part, because it assumes a voltage+current pair on two pins.
-//
-// REQUIRED SIGNAL CHAIN (see docs/WIRING.md section 5):
-//   CT secondary -> burden resistor -> 1uF AC coupling cap -> 100k/100k bias
-//   divider at 1.65 V -> rail-to-rail op-amp buffer -> this pin
-//
-// The coupling cap is not optional. A bias divider placed straight on a CT
-// secondary creates a DC path through the burden, which biases the magnetic
-// core into saturation and collapses the output into a plausible-looking lie.
-//
-// The bias MUST be referenced to the board's 3V3 pin, never to VIN/5V. The ADC
-// input is 3.3 V maximum; referencing 5 V destroys the GPIO.
-
-// GPIO2 (ADC1_CHANNEL_1) is the recommended pin: it was the documented current
-// role on the ZMPT path, so the pairing is unchanged. GPIO1 is held spare.
-#define ZMCT_PIN 2
-
-// VERIFY against the marking on your part. ZMCT103C variants ship as 1000:1,
-// 2000:1 and 3000:1; a wrong ratio scales every reading by that factor.
-#define ZMCT_CT_RATIO 1000.0f
-
-// Burden resistor across the CT secondary, in ohms. This converts secondary
-// current to the voltage the ADC sees: V_peak = I_primary / ratio * burden.
-// With 1000:1 and 100 ohm, 10 A primary -> 10 mA -> 1.0 V peak (2 V p-p),
-// sitting at 1.65 +/- 1.0 V. Clips at roughly 14 A; lower this if your rig
-// exceeds that.
-#define ZMCT_BURDEN_OHMS 100.0f
-
-// Assumed power factor for the ESTIMATED wattage. Without a PZEM there is no
-// phase information, so watts are apparent-power-derived, not real power.
-// 1.0 assumes a purely resistive load (heater, kettle); ~0.9 is typical for
-// electronics. This is the single biggest source of error in estimated watts.
-#define ZMCT_POWER_FACTOR 0.9f
-
-// Multiplier on the uncalibrated RMS. Leave at 1.0 until the front end is built,
-// then tune against a clamp meter on a known load.
-#define ZMCT_CAL 1.0f
-
-// Samples per RMS window. The ESP32-S3 ADC is far slower than mains, so this
-// buys resolution rather than bandwidth: 2048 samples spans many cycles of a
-// 50/60 Hz waveform.
-#define ZMCT_SAMPLE_COUNT 2048
-
-// Peak-to-peak ADC counts below which the CT is treated as carrying no current.
-// The pin sits at its bias when the primary is unloaded; a small excursion is
-// "no load", not a small reading.
-#define ZMCT_NOISE_FLOOR 20
-
-// Expected DC bias, in ADC counts at 12-bit with ADC_11db attenuation.
-// Mid-supply (1.65 V) lands near 2048. Deliberately wide: this is a gross
-// "is the front end wired and biased at all" check, not a precision trim. A
-// reading far from this range means the divider is missing, the cap is open, or
-// the buffer is not powered -- in every case the current figure is meaningless
-// and must not be published.
-#define ZMCT_BIAS_COUNTS 2048
-#define ZMCT_BIAS_TOLERANCE 700
-
-// Millimetres to millivolts for the ADC full scale at 11 dB attenuation. The
-// ESP32-S3 is not a true 3.3 V input here: the usable range is roughly 0-3.1 V,
-// and the top of the range is non-linear. Sizing the bias network against a
-// nominal 3.3 V causes clipping that looks like AC distortion.
-#define ZMCT_MV_FULL_SCALE 3100.0f
-
-// ---- ADS1015 / ADS1115 external I2C ADC (expansion board) -----------------
-// The expansion board does NOT feed the CT into the ESP32's internal ADC. It
-// goes ESP32 --I2C--> ADS1015 --> analog pin. That gives a 16-bit conversion
-// instead of the S3's 12-bit, which matters at these signal levels.
-//
-// I2C pins are the board defaults: SDA = GPIO8, SCL = GPIO9
-// (variants/esp32s3/pins_arduino.h). CH5/CH6 relays were moved off them.
-#define ADS_SDA_PIN 8
-#define ADS_SCL_PIN 9
-#define ADS_I2C_ADDR 0x48   // ADS1015/ADS1115 default; ADDR->GND = 0x48
-
-// 1 = ADS1115 (16-bit, PGA +/-FS), 0 = ADS1015 (12-bit). Most modules sold as
-// "ADC1015" are actually ADS1115, so default to 1115. Both share a register
-// layout; only resolution and gain encoding differ.
-#define ADS_IS_1115 1
-
-// Single-shot conversions at 128 SPS. The CT waveform is 50/60 Hz, so this only
-// affects how fast a window completes, not waveform fidelity -- RMS is
-// integrated over many samples regardless.
-#define ADS_SPS_128 0b100
-
-// PGA +/-4.096 V. With a 1.65 V bias that leaves +/-2.4 V of headroom, which
-// matches a 100 ohm burden at roughly 14 A primary.
-#define ADS_PGA_4V096 0b010
-
-// MUX: single-ended AIN0 referenced to GND.
-#define ADS_MUX_AIN0_GND 0b100
-
-// ---- ZMCT calibration: runtime-adjustable ---------------------------------
-// DEFAULTS ONLY. Every one is overwritten from GET /api/Device/config once the
-// backend supplies a value, then persisted to NVS, so the sensor can be
-// re-trimmed from the dashboard without reflashing. CT ratio, burden value and
-// gain are properties of the hardware you actually fitted -- they should not be
-// baked into a binary.
-#define ZMCT_DEFAULT_CT_RATIO 1000.0f
-#define ZMCT_DEFAULT_BURDEN_OHMS 100.0f
-#define ZMCT_DEFAULT_POWER_FACTOR 0.9f
-#define ZMCT_DEFAULT_GAIN 1.0f
-
-// ---- PZEM-004T v3.0 bus --------------------------------------------------
-// 13-channel rig: single mains PZEM (address 1) on the common feed.
-// Per-channel watts are estimated from the mains total (see .ino).
-#define PZEM_RX_PIN 16
-#define PZEM_TX_PIN 17
+// Bench diagnostic: try several I2C pin pairs at boot and report which one the
+// sensors answer on. Set to 1 to run the hunt, then back to 0. It only prints;
+// it does not change how the rig runs.
+#define DIAG_PIN_HUNT 0
 
 // Provenance reported to the backend with every telemetry batch (D8). The
 // backend labels the dashboard charts from this instead of hardcoding a claim,
 // so the UI stays honest in both bench and metered states. The value posted is
-// derived from SIMULATE_METERS: 1 = Simulated, 2 = Metered.
+// derived from SIMULATE_METERS: 1 = Simulated, 2 = Metered (INA226 + ADS1015
+// actually read on the bench).
 #define REPORT_METERING_MODE
 
 // ---- Relay outputs, one per outlet channel ----
-// Order: 8x220V (CH1-8), 1x110V via step-down (CH9), 4xUSB 5V (CH10-13).
+// Testing rig order: CH1-CH4 = 220 V outlets, CH5 = USB 5 V.
 // Safe ESP32-S3 GPIOs avoiding strapping (0,3,45,46), USB (19,20) and SPI flash.
-//
-// CH5 and CH6 were moved OFF GPIO8/GPIO9. Those two pins are the board's
-// default I2C pair (variants/esp32s3/pins_arduino.h: SDA=8, SCL=9) and the
-// ADS1015 front end hangs off them -- driving them as relay outputs fights the
-// I2C bus. GPIO21 and GPIO47 are used instead.
-//
-// GPIO35-37 were deliberately avoided: on modules with octal PSRAM (this board
-// reports 8 MB embedded) those pins are wired to the PSRAM and are not
-// available. GPIO47 is free on the common WROOM/S3-DevKitC breakouts.
-static const uint8_t RELAY_PINS[OUTLET_COUNT] = { 4, 5, 6, 7, 21, 47, 10, 11, 12, 13, 14, 15, 18 };
-#define RELAY_CLOSED_LEVEL HIGH
+// ---- Relay outputs, one per outlet channel ----
+// Testing rig order: CH1-CH4 = 220 V outlets, CH5 = USB 5 V.
+// Relay GPIOs start at 10 to stay clear of the I2C pair (8, 9).
+static const uint8_t RELAY_PINS[OUTLET_COUNT] = { 10, 11, 12, 13, 14 };
+
+// NC (normally closed) contact wiring, as built on the bench:
+//   power PASSES while the relay coil is idle  (pin HIGH)
+//   driving LOW energises the coil, the NC contact OPENS, power is CUT
+// So "energised outlet" in the framework maps to the pin being HIGH, and every
+// protective action (shed, trip, master cut) must drive the pin LOW to actually
+// remove power. Getting this backwards would report a live outlet as cut.
+#define RELAY_POWER_ON_LEVEL HIGH
+#define RELAY_POWER_OFF_LEVEL LOW
 
 // ---- Manual switch inputs, raw rocker/switch caps (0 = not wired) ----
-// 0 means "no switch on this channel": handleManualSwitch() returns early on a
-// zero pin, so an unwired channel is inert rather than reading a floating
-// input. The prototype has NO rocker switches fitted -- the full-width literal
-// is deliberate so every channel is explicitly documented as unwired, rather
-// than a short initialiser leaving the intent ambiguous.
-static const uint8_t SWITCH_PINS[OUTLET_COUNT] = {
-  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
-};
+static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
 
 // ---- Local autonomy ----
 #define LOCAL_AUTO_SHED true

@@ -192,6 +192,11 @@ export type PolicyItem = {
   name: string
   condition: string
   action: string
+  /** Superseded POL-xx code, when the rule has one. */
+  legacyCode: string | null
+  ruleFamily: string
+  precedence: number
+  enabled: boolean
 }
 
 type BackendPolicy = {
@@ -200,6 +205,10 @@ type BackendPolicy = {
   name: string
   condition: string
   action: string
+  legacyCode: string | null
+  ruleFamily: string
+  precedence: number
+  enabled: boolean
 }
 
 export async function fetchPolicies(): Promise<PolicyItem[]> {
@@ -209,6 +218,10 @@ export async function fetchPolicies(): Promise<PolicyItem[]> {
     name: policy.name,
     condition: policy.condition,
     action: policy.action,
+    legacyCode: policy.legacyCode,
+    ruleFamily: policy.ruleFamily,
+    precedence: policy.precedence,
+    enabled: policy.enabled,
   }))
 }
 
@@ -400,9 +413,10 @@ export type TelemetrySeries = {
   totals: { watts: Array<number | null>; energyKwhDelta: number | null }
 }
 
-const ALL_CHANNELS = 13
+// Testing rig: 5 wired channels (CH1-CH4 220V + CH5 USB 5V).
+const ALL_CHANNELS = 5
 
-// `channels` is omitted when nothing is filtered, so the server returns all 13.
+// `channels` is omitted when nothing is filtered, so the server returns all.
 // Any other subset is sent as a sorted, comma-joined id list.
 function telemetryQuery(window: TelemetryWindow, channels?: number[]): string {
   const base = `?window=${encodeURIComponent(window)}`

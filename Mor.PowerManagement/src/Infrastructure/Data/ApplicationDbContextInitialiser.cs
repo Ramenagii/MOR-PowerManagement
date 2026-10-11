@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using System.Text;
 
 namespace Mor.PowerManagement.Infrastructure.Data;
 
@@ -68,8 +69,7 @@ public class ApplicationDbContextInitialiser
     }
 
     public async Task TrySeedAsync()
-    {
-        // Default roles
+    {        // Default roles
         var administratorRole = new IdentityRole(Roles.Administrator);
 
         if (_roleManager.Roles.All(r => r.Name != administratorRole.Name))
@@ -132,17 +132,34 @@ public class ApplicationDbContextInitialiser
             await _context.SaveChangesAsync();
         }
 
-        // 13-channel rig spec (8x220V + 1x110V + 4xUSB, single mains PZEM).
-        // Enforced on every start so firmware, dashboard and thesis evaluation
-        // share one deterministic configuration.
+        // -------------------------------------------------------------------
+        // TESTING RIG (temporary until 31 Oct 2026) — see MUST_READ.md.
+        // 5 channels: 4x220V outlets (CH1-CH4) + 1xUSB 5V (CH5).
+        // The USB rail counts toward P_total and is a shed candidate.
+        // Set false to restore the full 13-channel rig for the final panel.
+        // -------------------------------------------------------------------
+        const bool TestingRig = true;
+
+        const double TestingMaxCapacityWatts = 1200.0;
+        const double TestingWarningThresholdWatts = 960.0;
+        const double TestingCriticalThresholdWatts = 1200.0;
+
+        const double FullRigMaxCapacityWatts = 4000.0;
+        const double FullRigWarningThresholdWatts = 3240.0;
+        const double FullRigCriticalThresholdWatts = 3600.0;
+
+        var (maxCapacity, warning, critical) = TestingRig
+            ? (TestingMaxCapacityWatts, TestingWarningThresholdWatts, TestingCriticalThresholdWatts)
+            : (FullRigMaxCapacityWatts, FullRigWarningThresholdWatts, FullRigCriticalThresholdWatts);
+
         var rigConfig = await _context.PowerSystemConfigs.FirstOrDefaultAsync();
         if (rigConfig is null)
         {
             _context.PowerSystemConfigs.Add(new PowerSystemConfig
             {
-                MaxCapacityWatts = 4000,
-                WarningThresholdWatts = 3240,
-                CriticalThresholdWatts = 3600,
+                MaxCapacityWatts = maxCapacity,
+                WarningThresholdWatts = warning,
+                CriticalThresholdWatts = critical,
                 StandbyThresholdWatts = 80,
                 StandbyIdleMinutes = 30,
                 StabilizationDelayMs = 500,
@@ -156,15 +173,28 @@ public class ApplicationDbContextInitialiser
         }
         else
         {
-            rigConfig.MaxCapacityWatts = 4000;
-            rigConfig.WarningThresholdWatts = 3240;
-            rigConfig.CriticalThresholdWatts = 3600;
+            rigConfig.MaxCapacityWatts = maxCapacity;
+            rigConfig.WarningThresholdWatts = warning;
+            rigConfig.CriticalThresholdWatts = critical;
             rigConfig.StandbyThresholdWatts = 80;
             rigConfig.StandbyIdleMinutes = 30;
             rigConfig.StabilizationDelayMs = 500;
         }
 
-        var outletSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
+        // One row per channel: name, role, relay label, priority, allowance,
+        // rail volts, schedule, idle limit, seeded status, seeded watts.
+        var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
+        {
+            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
+            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
+            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+            // Testing rig has a single USB 5V rail; it counts toward P_total.
+            ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
+        };
+
+        // Full 13-channel rig (8x220V + 1x110V + 4xUSB, single mains PZEM).
+        var fullRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
             ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 500, 220, "Class hours + override", null, OutletStatus.Active, 430),
             ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 500, 220, "08:00-18:00", 20, OutletStatus.Active, 360),
@@ -180,6 +210,8 @@ public class ApplicationDbContextInitialiser
             ("USB 3", "USB charging 5V", "Relay CH12", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
             ("USB 4", "USB charging 5V", "Relay CH13", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
         };
+
+        var outletSpecs = TestingRig ? testingRigSpecs : fullRigSpecs;
 
         // Idempotent rig sync: add missing channels, refresh policy fields on
         // existing ones, never touch live status/readings.
@@ -216,24 +248,139 @@ public class ApplicationDbContextInitialiser
             }
         }
 
-        if (!_context.ControlPolicies.Any())
+        if (TestingRig)
         {
-            _context.ControlPolicies.AddRange(
-                new ControlPolicy { Code = "POL-01", Name = "Hardware Fault Isolation", Condition = "S_fault is TRUE", Action = "ACT_FAULT()" },
-                new ControlPolicy { Code = "POL-02", Name = "Pre-Activation Assessment", Condition = "Request(i) and P_total is below P_limit", Action = "ACT_ALLOW(i)" },
-                new ControlPolicy { Code = "POL-03", Name = "Pre-Activation Denial", Condition = "Request(i) and P_total is at or above P_limit", Action = "ACT_DENY(i)" },
-                new ControlPolicy { Code = "POL-04", Name = "Post-Activation Verification", Condition = "500 ms after activation and P_total exceeds P_limit", Action = "ACT_SHED(i)" },
-                new ControlPolicy { Code = "POL-05", Name = "Load Shedding Level 1", Condition = "P_total exceeds P_limit for low-priority energized outlets", Action = "ACT_SHED(i)" },
-                new ControlPolicy { Code = "POL-06", Name = "Load Shedding Level 2", Condition = "Overload remains after low-priority shedding", Action = "ACT_SHED(i) for medium priority" },
-                new ControlPolicy { Code = "POL-07", Name = "Priority Preservation", Condition = "High-priority outlet is active during shedding", Action = "ACT_PRESERVE(i)" },
-                new ControlPolicy { Code = "POL-08", Name = "Standby Load Management", Condition = "P_branch_i stays below standby threshold for 30 minutes", Action = "ACT_SHED(i)" });
+            // The bench physically has five channels, and the firmware addresses
+            // them positionally: outletId 1..5 in every telemetry batch. The
+            // full-rig seed left USB 1 at id 10, which no bench channel could
+            // ever match, so the testing rig takes the table over wholesale:
+            // delete every outlet row (telemetry cascades) and re-seed in spec
+            // order, which renumbers the channels 1..5.
+            //
+            // The reset is one-shot: it only runs while the stored rows do not
+            // already match the testing spec exactly (same rows, same order,
+            // ids 1..5). A restart after a live bench session must never wipe
+            // the device's live status, load or telemetry history.
+            // Restored by flipping TestingRig back to false.
+            var existing = await _context.Outlets.OrderBy(o => o.Id).ToListAsync();
+            var matches = existing.Count == testingRigSpecs.Length
+                && testingRigSpecs.Select((spec, i) =>
+                        existing[i].RelayChannel == spec.Relay && existing[i].Id == i + 1)
+                    .All(matched => matched);
+
+            if (!matches)
+            {
+                _context.Outlets.RemoveRange(existing);
+
+                foreach (var spec in testingRigSpecs)
+                {
+                    _context.Outlets.Add(new Outlet
+                    {
+                        Name = spec.Name,
+                        Role = spec.Role,
+                        MeterChannel = "PZEM-01 · mains bus",
+                        RelayChannel = spec.Relay,
+                        Priority = spec.Priority,
+                        AllowanceWatts = spec.Allowance,
+                        RatedVoltageVolts = spec.Volts,
+                        Schedule = spec.Schedule,
+                        IdleLimitMinutes = spec.Idle,
+                        Status = spec.Status,
+                        CurrentWatts = spec.Watts,
+                    });
+                }
+
+                await _context.SaveChangesAsync();
+
+                // Postgres identity sequences do not rewind, so the fresh rows
+                // come back numbered after the deleted ones. The firmware sends
+                // outletId 1..5 positionally, so Id must equal channel number or
+                // Guard.Against.NotFound silently drops every reading. Telemetry
+                // cascaded away with the old rows, so nothing references the old
+                // ids and the renumbering is safe. Raw SQL because EF does not
+                // expose identity reseeding.
+                var renumber = new StringBuilder("UPDATE \"Outlets\" SET \"Id\" = CASE \"RelayChannel\" ");
+                for (var i = 0; i < testingRigSpecs.Length; i++)
+                {
+                    renumber.Append("WHEN '").Append(testingRigSpecs[i].Relay).Append("' THEN ").Append(i + 1).Append(' ');
+                }
+
+                renumber.Append("END WHERE \"RelayChannel\" IN (");
+                renumber.Append(string.Join(", ", testingRigSpecs.Select(s => $"'{s.Relay}'")));
+                renumber.Append(");");
+
+                await _context.Database.ExecuteSqlRawAsync(renumber.ToString());
+                await _context.Database.ExecuteSqlRawAsync(
+                    "SELECT setval(pg_get_serial_sequence('\"Outlets\"', 'Id'), (SELECT COALESCE(MAX(\"Id\"), 0) FROM \"Outlets\"), true);");
+
+                _logger.LogInformation(
+                    "Testing rig active: reset {Count} outlet rows so channels renumber 1-5.", existing.Count);
+            }
+        }
+
+        // Framework rules FR-01..FR-12 (see MUST_READ.md section 3).
+        // Seeded idempotently: codes are the key, so renaming a rule updates it
+        // instead of duplicating. POL-xx survives in LegacyCode.
+        var ruleSpecs = new (string Code, string Name, string Condition, string Action, string Family, string? Legacy, int Precedence)[]
+        {
+            ("FR-01", "Hardware Fault Isolation", "S_fault is TRUE for 3 consecutive ticks", "ACT_FAULT()", "Safety/Interlock", "POL-01", 10),
+            ("FR-02", "Voltage Window Protection", "Branch voltage outside 198-264 V (220 V class) for 2 consecutive ticks", "ACT_SHED(i) + latch", "Safety/Interlock", null, 20),
+            ("FR-03", "Branch Overcurrent Protection", "I_branch exceeds 1.25 x rated amps for 2 consecutive ticks", "ACT_SHED(i) + latch", "Safety/Interlock", null, 30),
+            ("FR-04", "Pre-Activation Assessment", "Request(i) and P_total + Allowance(i) is at or below P_limit", "ACT_ALLOW(i)", "PreActivation", "POL-02", 40),
+            ("FR-05", "Pre-Activation Denial", "Request(i) and P_total + Allowance(i) exceeds P_limit, or branch is latched", "ACT_DENY(i)", "PreActivation", "POL-03", 50),
+            ("FR-06", "Post-Activation Verification", "500 ms after activation and P_total exceeds P_limit", "ACT_SHED(i) - newest activation first", "PostActivation", "POL-04", 60),
+            ("FR-07", "Load Shedding Level 1", "P_total exceeds P_limit for low-priority energized outlets", "ACT_SHED(i)", "DemandSide", "POL-05", 70),
+            ("FR-08", "Load Shedding Level 2", "Overload remains after low-priority shedding", "ACT_SHED(i) for medium priority", "DemandSide", "POL-06", 80),
+            ("FR-09", "Priority Preservation", "High or Critical outlet is active during shedding", "ACT_PRESERVE(i)", "DemandSide", "POL-07", 90),
+            ("FR-10", "Standby Load Management", "P_branch_i stays below 80 W standby threshold for 30 minutes", "ACT_SHED(i)", "Idle", "POL-08", 100),
+            ("FR-11", "Calibration Due Downgrade", "CalibrationDueAt is in the past for the branch instrument class", "ACT_DOWNGRADE(i)", "Measurement", null, 110),
+            ("FR-12", "Rule Audit Trail", "Any rule fires", "ACT_LOG()", "Audit", null, 120),
+        };
+
+        foreach (var spec in ruleSpecs)
+        {
+            var rule = await _context.ControlPolicies.FirstOrDefaultAsync(p => p.Code == spec.Code);
+            if (rule is null)
+            {
+                _context.ControlPolicies.Add(new ControlPolicy
+                {
+                    Code = spec.Code,
+                    Name = spec.Name,
+                    Condition = spec.Condition,
+                    Action = spec.Action,
+                    RuleFamily = spec.Family,
+                    LegacyCode = spec.Legacy,
+                    Precedence = spec.Precedence,
+                    Enabled = true,
+                });
+            }
+            else
+            {
+                rule.Name = spec.Name;
+                rule.Condition = spec.Condition;
+                rule.Action = spec.Action;
+                rule.RuleFamily = spec.Family;
+                rule.LegacyCode = spec.Legacy;
+                rule.Precedence = spec.Precedence;
+                rule.Enabled = true;
+            }
+        }
+
+        // Retire any legacy POL-xx row that survived an earlier seed: FR-xx
+        // carries the same meaning and LegacyCode keeps the manuscript usable.
+        var legacyRows = await _context.ControlPolicies
+            .Where(p => p.Code.StartsWith("POL-"))
+            .ToListAsync();
+        if (legacyRows.Count > 0)
+        {
+            _context.ControlPolicies.RemoveRange(legacyRows);
         }
 
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Policies loaded for 13 channels (8x220V mains, 1x110V step-down, 4x5V USB), metered by a single mains PZEM-004T v3.0 on the common feed.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below warning threshold.", Severity = EventSeverity.Success });
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 4x220V outlets (CH1-CH4) plus 1xUSB 5V (CH5) on a single mains feed. USB counts toward P_total; P_limit is capped at 1200 W until 31 Oct 2026.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 960 W warning threshold.", Severity = EventSeverity.Success });
         }
 
         await _context.SaveChangesAsync();

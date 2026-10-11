@@ -42,7 +42,7 @@
           "Dashboard"
         ],
         "summary": "Get telemetry series",
-        "description": "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a provenance label: only CH1-CH8 voltage is ever metered, from the single mains PZEM-004T on the common feed; per-channel current and power are derived by distributing the mains total across energized channels weighted by allowance. Empty buckets are returned as null, never zero.",
+        "description": "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a provenance label: the 220 V mains channels (CH1-CH4) report voltage from the INA226 on the mains feed, and their current is measured on each channel's own ADS1015 input via its branch CT sensor; the USB rail has no current sensor and reports its nominal rating. Empty buckets are returned as null, never zero.",
         "operationId": "GetTelemetry",
         "parameters": [
           {
@@ -95,8 +95,8 @@
         "tags": [
           "Dashboard"
         ],
-        "summary": "Get control policies",
-        "description": "Returns the POL-01..POL-08 event-condition-action policy repository.",
+        "summary": "Get framework rules",
+        "description": "Returns the FR-01..FR-12 event-condition-action framework rule repository, in precedence order.",
         "operationId": "GetPolicies",
         "responses": {
           "200": {
@@ -130,7 +130,7 @@
           "Dashboard"
         ],
         "summary": "Request outlet activation",
-        "description": "Runs the POL-02/POL-03 pre-activation assessment for an outlet and records the decision.",
+        "description": "Runs the FR-04/FR-05 pre-activation assessment for an outlet and records the decision.",
         "operationId": "RequestActivation",
         "parameters": [
           {
@@ -227,7 +227,7 @@
           "Dashboard"
         ],
         "summary": "Apply selective load response",
-        "description": "Disconnects the lowest-priority energized outlets first (POL-05).",
+        "description": "Disconnects the lowest-priority energized outlets first (FR-07).",
         "operationId": "ApplySelectiveResponse",
         "requestBody": {
           "content": {
@@ -1317,7 +1317,11 @@
           "code",
           "name",
           "condition",
-          "action"
+          "action",
+          "legacyCode",
+          "ruleFamily",
+          "precedence",
+          "enabled"
         ],
         "type": "object",
         "properties": {
@@ -1340,6 +1344,26 @@
           },
           "action": {
             "type": "string"
+          },
+          "legacyCode": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "ruleFamily": {
+            "type": "string"
+          },
+          "precedence": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "enabled": {
+            "type": "boolean"
           }
         }
       },

@@ -1,365 +1,324 @@
-// MOR power-management prototype — ESP32-S3 edge controller.
-//
-// Each loop iteration the firmware:
-//   1. reads ONE mains meter and estimates per-channel watts from that total,
-//      weighted by each channel's allowance,
-//   2. evaluates the ECA policy table locally (POL-01..POL-08 twins),
-//   3. drives thirteen relay channels (8x220V + 1x110V + 4xUSB),
-//   4. POSTs telemetry to the backend and periodically re-syncs config.
-//
-// Meter front end is selected by METER_SOURCE in config.h:
-//   METER_SIMULATE  synthesised, no hardware (the current default)
-//   METER_ZMPT101B  expansion board, isolated V+I pair on ADC1
-//   METER_PZEM004T  PZEM-004T v3.0 over UART
-// All three feed the same downstream path, so swapping in the PZEM later is a
-// one-constant change and not a rewrite.
-//
-// The backend (ASP.NET Core + Neon) is the system of record. Policy edits made
-// in the dashboard reach the hardware through GET /api/Device/config, which the
-// firmware polls every CONFIG_INTERVAL_MS and writes to NVS; the ESP32 keeps
-// running the last synced policy table when the network drops.
+/*
+  ============================================================================
+  MOR / LoadWise — ESP32-S3 power monitoring firmware
+  ============================================================================
+
+  Built directly on the validated bench sketch. The measurement engine below is
+  the same code that produced the proven readings; this file adds only what the
+  dashboard needs on top of it:
+
+    1. Wi-Fi (credentials from config.local.h, git-ignored)
+    2. POST /api/Device/telemetry every second
+    3. GET  /api/Device/config to pick up P_limit and priorities
+
+  Deliberately NOT in this file, during the sensing phase:
+    - relay driving        (RELAY_OUTPUT_ENABLED 0)
+    - FR-01..FR-12 rules   (RULES_ENABLED 0)
+
+  Because nothing here trips a protective rule, the shared I2C bus between the
+  core-0 ADS1015 task and the core-1 INA226 read cannot cause a fault - a
+  garbled transaction would at worst print or report one odd sample.
+
+  Hardware
+    INA226  0x40   voltage reference (24 V rail behind a divider) + DC monitoring
+    ADS1015 0x48   4-channel ADC, one ZMCT103C per mains branch (CH1-CH4)
+    I2C     SDA = GPIO 8, SCL = GPIO 9
+
+  Flash
+    arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+    arduino-cli upload  -p COM12 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+
+  Build with USB CDC On Boot DISABLED: with it enabled, Serial is routed to the
+  ESP32-S3 native USB port instead of the CH343 bridge the board is using.
+  ============================================================================
+*/
 
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <PZEM004Tv30.h>
-#include <Preferences.h>
+#include <Wire.h>
+#include <INA226.h>
+#include <Adafruit_ADS1X15.h>
+#include <math.h>
 
-// config.h must precede any conditional include below: it defines
-// METER_SOURCE, and an undefined macro evaluates to 0 in #if, so testing it
-// before the header is present silently selects the wrong branch.
 #include "config.h"
 
-#if METER_SOURCE == METER_ZMCT103C
-#include <Wire.h>
-#endif
+// I2C Pins for ESP32-S3
+#define I2C_SDA 8
+#define I2C_SCL 9
 
-// Desired-state codes from GET /api/Device/config (OutletStatus enum order).
-#define DESIRED_ACTIVE 0
-#define DESIRED_STANDBY 1
+// I2C Addresses
+#define INA226_ADDRESS 0x40
+#define ADS1015_ADDRESS 0x48
 
-// Single mains meter for the 13-channel rig (common feed, address 1).
-// Per-channel power is estimated from the mains total weighted by allowance.
-PZEM004Tv30 mainsMeter(Serial2, PZEM_RX_PIN, PZEM_TX_PIN, 0x01);
+INA226 ina226(INA226_ADDRESS);
+Adafruit_ADS1015 ads;
 
-// Latest raw mains reading, whichever front end produced it.
-// A value of -1 means "this meter did not produce a reading", which the policy
-// layer treats as a sensor fault rather than as a zero-load measurement.
-struct MainsReading {
-  float volts = -1.0f;
-  float amps = -1.0f;
-  float watts = -1.0f;
-};
+// Grid Voltage Assumption Variable (Volts AC)
+const float AC_VOLTAGE = 238.0;
 
-#if METER_SOURCE == METER_ZMPT101B
+// Base Sensor Hardware Factors for ZMCT103C
+const float CALIBRATION_FACTOR = 0.52;
 
-/**
- * RMS from a ZMPT101B OUT pin.
- *
- * The output is a small AC waveform riding on roughly 1.5 V of DC bias, so the
- * ADC reading against ground is meaningless as an AC measurement. The correct
- * method is to sample a window, take the peak-to-peak excursion, halve it for
- * the peak amplitude, and multiply by 1/sqrt(2) for RMS:
- *
- *     Vrms = (pp / 2) * (Vref / full_scale) * 0.7071 * calibration
- *
- * `ok` is false when the excursion is below the noise floor, which is how an
- * unconnected or de-energised sensor presents itself. Reporting that as 0.0 A
- * would be indistinguishable from a real zero-load reading.
- */
-bool zmptRms(uint8_t pin, float calibration, float &rms, uint16_t &peakToPeak) {
-  int lo = 4095;
-  int hi = 0;
+// Sampling & Filter Parameters
+const uint16_t DEDICATED_SAMPLES = 600;       // ~11 AC cycles @ 60Hz (~180ms acquisition per ch)
+const float NOISE_FLOOR_AMPS = 0.010;         // 10mA noise gate
+const float ADAPTIVE_STEP_THRESHOLD = 0.015;  // 15mA delta triggers instant snapshot
 
-  for (int i = 0; i < ZMPT_SAMPLE_COUNT; i++) {
-    int raw = analogRead(pin);
-    if (raw < lo) lo = raw;
-    if (raw > hi) hi = raw;
-  }
+// Cross-Core Shared Sensor Variables
+float inaBusVoltage_V = 0.0;
+float inaShuntVoltage_mV = 0.0;
+float inaCurrent_A = 0.0;
+float inaPower_W = 0.0;
 
-  peakToPeak = (uint16_t)(hi - lo);
-  if (peakToPeak < ZMPT_NOISE_FLOOR) {
-    rms = 0.0f;
-    return false;
-  }
+float currentAmpsCH1 = 0.0;
+float currentAmpsCH2 = 0.0;
+float currentAmpsCH3 = 0.0;
+float currentAmpsCH4 = 0.0;
 
-  const float vref = 3.3f;
-  const float fullScale = 4095.0f;
-  const float peak = (peakToPeak / 2.0f) * (vref / fullScale);
-  rms = peak * 0.70710678f * calibration;
-  return true;
-}
+float wattageCH1 = 0.0;
+float wattageCH2 = 0.0;
+float wattageCH3 = 0.0;
+float wattageCH4 = 0.0;
 
-#endif  // METER_SOURCE == METER_ZMPT101B
+// FreeRTOS Handles
+SemaphoreHandle_t dataMutex = NULL;
+TaskHandle_t sensorTaskHandle = NULL;
 
-#if METER_SOURCE == METER_ZMCT103C
-// ---------------------------------------------------------------------------
-// Runtime-adjustable calibration.
-//
-// These are the four numbers that describe the hardware you actually fitted.
-// They arrive from the backend on every config sync and are cached in NVS, so
-// a re-trim is a dashboard edit rather than a reflash. That matters because
-// the CT ratio in particular is frequently mislabelled on the part, and a wrong
-// ratio scales every reading by a constant factor.
-// ---------------------------------------------------------------------------
-float zmctCtRatio = ZMCT_DEFAULT_CT_RATIO;
-float zmctBurdenOhms = ZMCT_DEFAULT_BURDEN_OHMS;
-float zmctPowerFactor = ZMCT_DEFAULT_POWER_FACTOR;
-float zmctGain = ZMCT_DEFAULT_GAIN;
+// Serial Output Timer (Core 1)
+unsigned long lastSerialPrint = 0;
+const unsigned long SERIAL_PRINT_INTERVAL_MS = 250; // 4Hz refresh for responsive serial feedback
 
-// Last window's diagnostics, published in the serial snapshot so a bench
-// session can be debugged without a logic analyser.
-float zmctLastVoltsRms = 0;
-uint16_t zmctLastPp = 0;
-uint16_t zmctLastBias = 0;
-bool zmctFrontEndOk = false;
-bool zmctAdcOnline = false;
-
-// PGA full-scale in millivolts, used to convert raw counts back to volts.
-float adsFullScaleMv() {
-  switch (ADS_PGA_4V096) {
-    case 0b000: return 6.144f;   // +/-4.096 V
-    case 0b001: return 4.096f;   // +/-2.048 V
-    case 0b010: return 2.048f;   // +/-1.024 V
-    case 0b011: return 1.024f;   // +/-0.512 V
-    case 0b100: return 0.512f;   // +/-0.256 V
-    case 0b101: return 0.256f;   // +/-0.128 V
-    default:    return 4.096f;
-  }
-}
-
-/**
- * Single-shot read of the ADS front end.
- *
- * Written against the TI register map rather than pulling in a library: the
- * project has no ADS1xxx dependency installed, and the subset needed here is
- * three register writes and one read. Config register is rebuilt from scratch
- * every conversion rather than read-modify-written, so a partially written
- * config on a brown-out cannot leave the PGA or MUX in an unknown state.
- */
-bool adsReadMilliVolts(float &mv) {
-  // CONFIG (0x01): OS=1 start a single conversion, MUX, PGA, MODE=1, SPS.
-  const uint16_t cfg = (uint16_t)(0x8000 | (ADS_MUX_AIN0_GND << 12) |
-                                  (ADS_PGA_4V096 << 9) | 0x0200 | (ADS_SPS_128 << 5));
-  Wire.beginTransmission(ADS_I2C_ADDR);
-  Wire.write(0x01);
-  Wire.write((uint8_t)(cfg >> 8));
-  Wire.write((uint8_t)(cfg & 0xFF));
-  if (Wire.endTransmission() != 0) return false;
-
-  // A conversion at 128 SPS takes ~7.8 ms. Waiting properly matters: polling
-  // the conversion register too early returns a stale or mid-conversion value,
-  // which shows up as a plausible-looking but wrong bias.
-  delay(10);
-
-  Wire.beginTransmission(ADS_I2C_ADDR);
-  Wire.write(0x00);
-  if (Wire.endTransmission(false) != 0) return false;
-  if (Wire.requestFrom((int)ADS_I2C_ADDR, (int)2) != 2) return false;
-
-  const int16_t raw = (int16_t)(((uint16_t)Wire.read() << 8) | Wire.read());
-
-#if ADS_IS_1115
-  mv = (float)raw * (adsFullScaleMv() / 32768.0f);
-#else
-  mv = (float)raw * (adsFullScaleMv() / 2048.0f);
-#endif
-  return true;
-}
-
-/**
- * Read primary current from the ZMCT103C via the ADS1015 front end.
- *
- * The CT produces a bipolar AC waveform centred on the 1.65 V bias. RMS must
- * come from the peak-to-peak excursion, never the absolute value -- reading the
- * pin against ground reports the bias as ~1.65 V of DC and is meaningless.
- *
- * Returns false when the front end is not believable. A genuine "no load" is
- * NOT a failure: it returns true with 0 A, because an empty CT sitting at its
- * bias is a legitimate reading and must still be published.
- */
-bool zmctReadAmps(float &amps, float &voltsRms) {
-  int lo = 0x7FFF, hi = -0x7FFF;
-  double sum = 0;
-  uint32_t valid = 0;
-
-  for (int i = 0; i < ZMCT_SAMPLE_COUNT; i++) {
-    float mv;
-    if (!adsReadMilliVolts(mv)) continue;
-    int v = (int)lroundf(mv);
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
-    sum += mv;
-    valid++;
-  }
-
-  // No successful I2C transaction at all means the ADC is absent or the bus is
-  // wrong. Distinguished from a bad bias, because the remedies differ.
-  if (valid == 0) {
-    zmctAdcOnline = false;
-    zmctFrontEndOk = false;
-    zmctLastPp = 0;
-    zmctLastBias = 0;
-    zmctLastVoltsRms = 0;
-    amps = 0.0f;
-    voltsRms = 0.0f;
-    return false;
-  }
-  zmctAdcOnline = true;
-
-  const uint16_t pp = (uint16_t)(hi - lo);
-  const float biasMv = (float)(sum / valid);
-  const uint16_t biasCounts = (uint16_t)(biasMv * 1000.0f);
-
-  zmctLastPp = pp;
-  zmctLastBias = biasCounts;
-  zmctLastVoltsRms = 0;  // stays 0 on the failure / no-load paths below
-
-  // Expected bias is half of full scale: ~2048 mV at +/-4.096 V.
-  zmctFrontEndOk = fabsf(biasMv - (adsFullScaleMv() / 2.0f)) <= 400.0f;
-  if (!zmctFrontEndOk) {
-    amps = 0.0f;
-    voltsRms = 0.0f;
-    return false;
-  }
-
-  if (pp < 40) {   // ~40 mV p-p of noise floor, in millivolts
-    amps = 0.0f;   // CT is carrying no current: legitimate, not a fault
-    voltsRms = 0.0f;
-    return true;
-  }
-
-  // Peak-to-peak -> peak -> RMS. The CT waveform is sinusoidal, so the
-  // 1/sqrt(2) form factor applies; the 2 on peak-to-peak is the half-wave
-  // amplitude.
-  const float peak = (pp / 2.0f);
-  voltsRms = peak * 0.70710678f * zmctGain;
-
-  // Secondary RMS current through the burden, stepped back up by the ratio.
-  const float secondaryAmps = (voltsRms / 1000.0f) / zmctBurdenOhms;
-  amps = secondaryAmps * zmctCtRatio;
-  return true;
-}
-#endif  // METER_SOURCE == METER_ZMCT103C
-
-struct ChannelState {
-  float voltage = 0;
-  float current = 0;
-  float power = 0;
-  float energy = 0;
-  bool relayClosed = false;
-  bool localShed = false;
-  uint8_t faultStreak = 0;
-  bool switchLast = HIGH;
-  unsigned long switchChangedAt = 0;
-};
-
-ChannelState channels[OUTLET_COUNT];
-
-// Synced policy table (backend is the authority).
-// Defaults match the 13-channel rig: 8x500W + 300W + 4x10W, P_limit 3600W.
-// CH10-13 are USB-A 5V/2.1A ports, so 10W is the honest ceiling per port
-// (5V x 2.1A). A larger allowance would authorise a load the port cannot serve.
-float cfgLimit = 3600;        // P_limit
-float cfgWarning = 3240;
-float cfgStandby = 80;
-int cfgStabilizationMs = 500;
-int prioRank[OUTLET_COUNT] = { 0, 1, 1, 2, 2, 3, 3, 3, 2, 3, 3, 3, 3 };
-float allowanceW[OUTLET_COUNT] = { 500, 500, 500, 500, 500, 500, 500, 500, 300, 10, 10, 10, 10 };
-// Nominal volts at each channel's own output. CH1-8 sit on the mains bus and
-// match the PZEM reading; CH9 is fed by the step-down transformer and CH10-13
-// by the 5V buck rail, so reporting the mains reading for those would be wrong.
-float ratedVolts[OUTLET_COUNT] = { 220, 220, 220, 220, 220, 220, 220, 220, 110, 5, 5, 5, 5 };
-bool desiredEnergized[OUTLET_COUNT] = { false, false, false, false, false, false, false, false, false, false, false, false, false };
-bool configSynced = false;
-
-// On-device copy of the policy table (NVS flash). The protection logic runs
-// from this copy, so the prototype enforces the last synced policy even with
-// no network, and resumes it immediately on power-up.
-Preferences nvsPolicy;
-const uint32_t POLICY_MAGIC = 0x4D4F5232;  // "MOR2": 16-bit desired mask for 13 channels
-unsigned long missedPosts = 0;
-
-bool sFault = false;
-// Peak-to-peak excursion from the last ZMPT101B window, kept for the serial
-// snapshot so a dead sensor is visible as a number rather than inferred from a
-// suspicious 0.0 A reading.
-uint16_t lastZmptPp = 0;
-uint16_t lastZmptAp = 0;
+// Telemetry / config sync (Core 1). Kept separate from the sensor engine so the
+// measurement code above stays exactly as validated.
 unsigned long lastTelemetryAt = 0;
 unsigned long lastConfigAt = 0;
-unsigned long lastSnapshotAt = 0;
+float cfgLimit = 1200.0f;
+float cfgWarning = 960.0f;
+unsigned long missedPosts = 0;
 
-// ---- Multi-WiFi store (NVS "morwifi"): up to WIFI_SLOTS networks. ----
-Preferences nvsWifi;
-char wifiSsid[WIFI_SLOTS][33];
-char wifiPass[WIFI_SLOTS][65];
-int wifiLastOk = 0;
+// Function Prototypes
+void sensorTask(void *pvParameters);
+float readChannelRMS(uint8_t channelPin, float calFactor);
+float applyPiecewiseCalibration(float rawAmps);
+float updateFilteredAmps(float rawAmps, float currentStored);
+void printSerialTelemetry();
+bool postTelemetry();
+bool syncConfig();
 
-void loadWifiSlots() {
-  for (int i = 0; i < WIFI_SLOTS; i++) {
-    wifiSsid[i][0] = 0;
-    wifiPass[i][0] = 0;
-  }
-  wifiLastOk = 0;
-  nvsWifi.begin("morwifi", true);
-  for (int i = 0; i < WIFI_SLOTS; i++) {
-    String s = nvsWifi.getString(("ssid" + String(i)).c_str(), "");
-    String p = nvsWifi.getString(("pass" + String(i)).c_str(), "");
-    s.toCharArray(wifiSsid[i], 33);
-    p.toCharArray(wifiPass[i], 65);
-  }
-  wifiLastOk = nvsWifi.getInt("lastok", 0);
-  nvsWifi.end();
-  // First boot ever: seed slot 0 from config.h (usually empty placeholders).
-  if (wifiSsid[0][0] == 0 && WIFI_SSID[0] != 0) {
-    strncpy(wifiSsid[0], WIFI_SSID, 32);
-    strncpy(wifiPass[0], WIFI_PASS, 64);
-  }
-  if (wifiLastOk < 0 || wifiLastOk >= WIFI_SLOTS) wifiLastOk = 0;
-}
+// =========================================================================
+// SETUP (Core 1)
+// =========================================================================
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) { delay(10); }
 
-void saveWifiSlots() {
-  nvsWifi.begin("morwifi", false);
-  for (int i = 0; i < WIFI_SLOTS; i++) {
-    nvsWifi.putString(("ssid" + String(i)).c_str(), wifiSsid[i]);
-    nvsWifi.putString(("pass" + String(i)).c_str(), wifiPass[i]);
-  }
-  nvsWifi.putInt("lastok", wifiLastOk);
-  nvsWifi.end();
-}
+  // Create Mutex for cross-core memory protection
+  dataMutex = xSemaphoreCreateMutex();
 
-bool tryJoin(const char* ssid, const char* pass) {
-  if (ssid[0] == 0) return false;
-  Serial.printf("Wi-Fi trying \"%s\" ", ssid);
-  WiFi.disconnect(true);
+  // Initialize Fast-Mode I2C (400 kHz)
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+
+  Serial.println("\nInitializing Sensors on ESP32-S3...");
+
+  // Initialize INA226 Power Monitor (Rob Tillaart Library)
+  if (!ina226.begin()) {
+    Serial.println("Error: INA226 module not detected at 0x40!");
+    while (1) { delay(10); }
+  }
+  ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
+
+  // Initialize ADS1015 ADC for ZMCT103C sensors
+  if (!ads.begin(ADS1015_ADDRESS, &Wire)) {
+    Serial.println("Error: ADS1015 not detected at 0x48!");
+    while (1) { delay(100); }
+  }
+  ads.setGain(GAIN_TWOTHIRDS);
+  ads.setDataRate(RATE_ADS1015_3300SPS);
+
+  // Pin High-Speed Sampling Engine to Core 0 (Priority 2)
+  xTaskCreatePinnedToCore(
+    sensorTask,         /* Task function */
+    "SensorEngine",     /* Task name */
+    4096,               /* Stack size */
+    NULL,               /* Parameters */
+    2,                  /* Priority */
+    &sensorTaskHandle,  /* Task handle */
+    0                   /* Core ID: 0 */
+  );
+
+  Serial.println("Initialization Complete. Dual-Core Monitoring Active.\n");
+
+  // Network, then first config sync so P_limit matches the dashboard.
   WiFi.mode(WIFI_STA);
-  delay(200);
-  if (pass[0] == 0) {
-    WiFi.begin(ssid);
-  } else {
-    WiFi.begin(ssid, pass);
-  }
-  unsigned long deadline = millis() + WIFI_JOIN_TIMEOUT_MS;
-  while (WiFi.status() != WL_CONNECTED && millis() < deadline) {
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Wi-Fi ");
+  for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500);
     Serial.print(".");
   }
-  Serial.println();
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.printf("wifi: join failed \"%s\" status=%d\n", ssid, (int)WiFi.status());
-    return false;
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print(" connected, IP: ");
+    Serial.println(WiFi.localIP());
+    syncConfig();
+  } else {
+    Serial.println(" failed - running sensors only, no telemetry.");
   }
-  return true;
 }
 
+// =========================================================================
+// CORE 1: MAIN LOOP (Serial Telemetry & INA226 Polling)
+// =========================================================================
+void loop() {
+  // Read INA226 (DC Monitor) directly on Core 1 using Rob Tillaart functions
+  float busV   = ina226.getBusVoltage();       // Returns Bus Voltage in V
+  float shuntV = ina226.getShuntVoltage_mV();  // Returns Shunt Voltage in mV
+  float inAmps = ina226.getCurrent();          // Returns Current in A
+  float inWatts = ina226.getPower();           // Returns Power in W
+
+  // Update INA226 shared variables under mutex
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    inaBusVoltage_V = busV;
+    inaShuntVoltage_mV = shuntV;
+    inaCurrent_A = inAmps;
+    inaPower_W = inWatts;
+    xSemaphoreGive(dataMutex);
+  }
+
+  // Print Telemetry at 4Hz interval
+  if (millis() - lastSerialPrint >= SERIAL_PRINT_INTERVAL_MS) {
+    lastSerialPrint = millis();
+    printSerialTelemetry();
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (millis() - lastConfigAt > CONFIG_INTERVAL_MS) {
+      lastConfigAt = millis();
+      syncConfig();
+    }
+    if (millis() - lastTelemetryAt > TELEMETRY_INTERVAL_MS) {
+      lastTelemetryAt = millis();
+      postTelemetry();
+    }
+  }
+}
+
+// =========================================================================
+// CORE 0: HIGH-SPEED 4-CHANNEL ZMCT103C SAMPLING TASK
+// =========================================================================
+void sensorTask(void *pvParameters) {
+  for (;;) {
+    // Read all 4 channels sequentially from ADS1015 (A0, A1, A2, A3)
+    float raw1 = applyPiecewiseCalibration(readChannelRMS(0, CALIBRATION_FACTOR));
+    float raw2 = applyPiecewiseCalibration(readChannelRMS(1, CALIBRATION_FACTOR));
+    float raw3 = applyPiecewiseCalibration(readChannelRMS(2, CALIBRATION_FACTOR));
+    float raw4 = applyPiecewiseCalibration(readChannelRMS(3, CALIBRATION_FACTOR));
+
+    // Safely update shared global states under mutex protection
+    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      currentAmpsCH1 = updateFilteredAmps(raw1, currentAmpsCH1);
+      wattageCH1 = currentAmpsCH1 * AC_VOLTAGE;
+
+      currentAmpsCH2 = updateFilteredAmps(raw2, currentAmpsCH2);
+      wattageCH2 = currentAmpsCH2 * AC_VOLTAGE;
+
+      currentAmpsCH3 = updateFilteredAmps(raw3, currentAmpsCH3);
+      wattageCH3 = currentAmpsCH3 * AC_VOLTAGE;
+
+      currentAmpsCH4 = updateFilteredAmps(raw4, currentAmpsCH4);
+      wattageCH4 = currentAmpsCH4 * AC_VOLTAGE;
+
+      xSemaphoreGive(dataMutex);
+    }
+
+    // Yield 1 tick to feed Core 0 watchdog timer
+    vTaskDelay(pdMS_TO_TICKS(1));
+  }
+}
+
+// Single-pass RMS computation across dedicated 600 ADC samples
+float readChannelRMS(uint8_t channelPin, float calFactor) {
+  double sumRaw = 0.0;
+  double sumSqRaw = 0.0;
+
+  for (uint16_t i = 0; i < DEDICATED_SAMPLES; i++) {
+    int16_t rawADC = ads.readADC_SingleEnded(channelPin);
+    sumRaw += rawADC;
+    sumSqRaw += (double)rawADC * rawADC;
+  }
+
+  double meanRaw = sumRaw / DEDICATED_SAMPLES;
+  double variance = (sumSqRaw / DEDICATED_SAMPLES) - (meanRaw * meanRaw);
+  if (variance < 0.0) variance = 0.0;
+
+  float rawRMS = sqrt(variance);
+  float voltsRMS = rawRMS * ads.computeVolts(1);
+
+  return voltsRMS * calFactor;
+}
+
+// Piecewise Calibration: Protects low currents while scaling mid/high range
+float applyPiecewiseCalibration(float rawAmps) {
+  if (rawAmps < NOISE_FLOOR_AMPS) {
+    return 0.0;
+  }
+  if (rawAmps <= 0.080) {
+    return rawAmps; // Pass 1:1 on low range
+  }
+  const float MID_RANGE_FACTOR = 0.264 / 0.274; // ~0.9635
+  return rawAmps * MID_RANGE_FACTOR;
+}
+
+// Adaptive EMA Filter: Snaps immediately during load changes, smooths steady state
+float updateFilteredAmps(float rawAmps, float currentStored) {
+  if (fabs(rawAmps - currentStored) > ADAPTIVE_STEP_THRESHOLD) {
+    return rawAmps;
+  } else {
+    return (currentStored * 0.7) + (rawAmps * 0.3);
+  }
+}
+
+// Serial Telemetry Output
+void printSerialTelemetry() {
+  float inaV, inaShunt, inaI, inaP;
+  float a1, a2, a3, a4;
+  float w1, w2, w3, w4;
+
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    inaV     = inaBusVoltage_V;
+    inaShunt = inaShuntVoltage_mV;
+    inaI     = inaCurrent_A;
+    inaP     = inaPower_W;
+
+    a1 = currentAmpsCH1; w1 = wattageCH1;
+    a2 = currentAmpsCH2; w2 = wattageCH2;
+    a3 = currentAmpsCH3; w3 = wattageCH3;
+    a4 = currentAmpsCH4; w4 = wattageCH4;
+    xSemaphoreGive(dataMutex);
+  } else {
+    return;
+  }
+
+  Serial.println("==================================================");
+  Serial.print("[INA226 DC] Bus: "); Serial.print(inaV, 3);
+  Serial.print(" V | Shunt: "); Serial.print(inaShunt, 3);
+  Serial.print(" mV | Current: "); Serial.print(inaI, 3);
+  Serial.print(" A | Power: "); Serial.print(inaP, 3); Serial.println(" W");
+  Serial.println("--------------------------------------------------");
+  Serial.print("[ZMCT103C AC Channels @ "); Serial.print(AC_VOLTAGE, 1); Serial.println("V Grid Voltage]");
+  Serial.print("  CH1 (A0) -> "); Serial.print(a1, 3); Serial.print(" A | "); Serial.print(w1, 1); Serial.println(" W");
+  Serial.print("  CH2 (A1) -> "); Serial.print(a2, 3); Serial.print(" A | "); Serial.print(w2, 1); Serial.println(" W");
+  Serial.print("  CH3 (A2) -> "); Serial.print(a3, 3); Serial.print(" A | "); Serial.print(w3, 1); Serial.println(" W");
+  Serial.print("  CH4 (A3) -> "); Serial.print(a4, 3); Serial.print(" A | "); Serial.print(a4 * AC_VOLTAGE, 1); Serial.println(" W");
+}
+
+// =========================================================================
+// BACKEND TELEMETRY (Core 1)
+// =========================================================================
 String backendUrl(const char* path) {
-#if BACKEND_USE_TLS
-  String url = "https://";
-#else
-  String url = "http://";
-#endif
+  String url = BACKEND_USE_TLS ? "https://" : "http://";
   url += BACKEND_HOST;
   url += ":";
   url += BACKEND_PORT;
@@ -368,640 +327,100 @@ String backendUrl(const char* path) {
   return url;
 }
 
-void applyRelays() {
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    bool closed = !sFault && desiredEnergized[i] && !channels[i].localShed;
-    channels[i].relayClosed = closed;
-    digitalWrite(RELAY_PINS[i], closed ? RELAY_CLOSED_LEVEL : !RELAY_CLOSED_LEVEL);
-  }
-}
-
-float totalLoad() {
-  float total = 0;
-  for (int i = 0; i < OUTLET_COUNT; i++) total += channels[i].power;
-  return total;
-}
-
-void readMeters() {
-#if SIMULATE_METERS
-  // Placeholder: no PZEM wired. Synthesize a plausible mains load from the
-  // energized channels so the full telemetry -> dashboard loop can be tested.
-  static float simEnergy = 0;
-  float simDenom = 0;
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    if (channels[i].relayClosed || desiredEnergized[i]) simDenom += allowanceW[i];
-  }
-  float simTotal = simDenom * 0.72;  // mirrors the backend activation estimate
-  simEnergy += simTotal * (200.0f / 3600000.0f);  // ~200ms loop slice
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    channels[i].voltage = ratedVolts[i];
-    if (channels[i].relayClosed || desiredEnergized[i]) {
-      channels[i].power = simDenom > 0 ? simTotal * (allowanceW[i] / simDenom) : 0;
-      channels[i].current = channels[i].voltage > 0 ? channels[i].power / channels[i].voltage : 0;
-    } else {
-      channels[i].current = 0;
-      channels[i].power = 0;
-    }
-    channels[i].energy = simEnergy;
-  }
-  channels[0].faultStreak = 0;
-  return;
-#endif
-  float v;
-  float p;
-  float e;
-#if METER_SOURCE == METER_ZMPT101B
-  // ZMPT101B expansion board: one isolated voltage pair and one current pair on
-  // the common mains feed. Peak-to-peak over a sampling window gives RMS, so the
-  // DC bias the module sits at is removed by construction.
-  float vRms, aRms;
-  uint16_t vpp, app;
-  bool vOk = zmptRms(ZMPT_VOLT_PIN, ZMPT_VOLT_CAL, vRms, vpp);
-  bool aOk = zmptRms(ZMPT_CURR_PIN, ZMPT_CURR_CAL, aRms, app);
-
-  // A silent current channel means no load, which is legitimate. A silent
-  // voltage channel means the sensor is not reporting at all, which is a fault.
-  if (!vOk) {
-    channels[0].faultStreak++;
-    if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
-      sFault = true;
-      Serial.println("POL-01: S_fault TRUE (ZMPT101B voltage channel silent), all relays opened");
-    }
-    return;
-  }
-
-  channels[0].faultStreak = 0;
-  v = vRms;
-  p = aOk ? vRms * aRms : 0.0f;
-  e = mainsMeter.energy();  // PZEM stays as the energy counter until it is replaced
-  lastZmptPp = vpp;
-  lastZmptAp = app;
-#elif METER_SOURCE == METER_ZMCT103C
-  // ZMCT103C on the common feed: CURRENT ONLY.
-  //
-  // A current transformer has no voltage output, so `v` is deliberately NOT a
-  // measurement. It stays at the nominal mains rating and is used only to turn
-  // the measured amps into estimated watts. Reporting a fabricated voltage as
-  // though it were measured is the specific dishonesty this branch avoids.
-  float aRms, senseRms;
-  bool aOk = zmctReadAmps(aRms, senseRms);
-
-  if (!aOk) {
-    // Front end not believable (bias off mid-supply, divider missing, cap open
-    // or buffer unpowered). Publishing the resulting amps would be worse than
-    // reporting nothing, so treat it as POL-01 hardware isolation.
-    channels[0].faultStreak++;
-    if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
-      sFault = true;
-      Serial.printf("POL-01: S_fault TRUE (ZMCT103C front end implausible, bias=%u counts)\n",
-                    zmctLastBias);
-    }
-    return;
-  }
-
-  channels[0].faultStreak = 0;
-  // Reuse the configured nominal for the mains bus rather than inventing a
-  // constant, so Policy Admin stays the single source of truth for rail volts.
-  v = ratedVolts[0] > 0 ? ratedVolts[0] : 220.0f;   // nominal rail, NOT measured
-  p = v * aRms * ZMCT_POWER_FACTOR;                 // ESTIMATED watts
-  e = mainsMeter.energy();                // no energy counter on a CT
-  if (isnan(p) || p < 0) p = 0;
-#else
-  v = mainsMeter.voltage();
-  p = mainsMeter.power();
-  e = mainsMeter.energy();
-
-  // Current is no longer sampled: per-channel amps are derived from each
-  // channel's own volts, so only the values actually consumed are validated.
-  if (isnan(v) || isnan(p)) {
-    // POL-01 hardware fault isolation (single mains meter unreadable).
-    channels[0].faultStreak++;
-    if (channels[0].faultStreak >= FAULT_TRIP_COUNT && !sFault) {
-      sFault = true;
-      Serial.println("POL-01: S_fault TRUE (mains meter unreadable), all relays opened");
-    }
-    return;
-  }
-#endif
-
-  channels[0].faultStreak = 0;
-
-  // Distribute the mains total across energized channels weighted by allowance.
-  // Current is then derived per channel from its own volts, so the step-down
-  // (CH9, 110V) and the buck rail (CH10-13, 5V) report amps consistent with
-  // the power they are carrying instead of a scaled mains current.
-  float denom = 0;
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    if (channels[i].relayClosed || desiredEnergized[i]) denom += allowanceW[i];
-  }
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    if (ratedVolts[i] > 0 && fabsf(ratedVolts[i] - 220.0f) < 1.0f) {
-      channels[i].voltage = v;  // mains-bus channels report the measured value
-    } else {
-      channels[i].voltage = ratedVolts[i];  // derived rails report nominal
-    }
-    if (channels[i].relayClosed || desiredEnergized[i]) {
-      channels[i].power = denom > 0 ? p * (allowanceW[i] / denom) : 0;
-      channels[i].current = channels[i].voltage > 0 ? channels[i].power / channels[i].voltage : 0;
-    } else {
-      channels[i].current = 0;
-      channels[i].power = 0;
-    }
-    if (!isnan(e)) channels[i].energy = e;
-  }
-}
-
-// POL-05: lowest priority rank first, ties broken by higher draw.
-int pickShedCandidate() {
-  int pick = -1;
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    if (!channels[i].relayClosed || channels[i].localShed) continue;
-    if (pick < 0 || prioRank[i] < prioRank[pick] ||
-        (prioRank[i] == prioRank[pick] && channels[i].power > channels[pick].power)) {
-      pick = i;
-    }
-  }
-  return pick;
-}
-
-// Per-channel idle timer for POL-08. `idleSinceMs[i]` is the millis() value at
-// which the channel was first observed at or below the standby threshold; 0
-// means "not currently idle". A per-channel limit overrides the global
-// StandbyIdleMinutes; -1 means the channel is exempt.
-int idleLimitMinutes[OUTLET_COUNT] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1 };
-unsigned long idleSinceMs[OUTLET_COUNT] = { 0 };
-int cfgStandbyIdleMinutes = 30;
-
-/**
- * POL-08 standby load management.
- *
- * A channel that is energized but drawing at or below the standby threshold is
- * "idle". After its idle limit elapses the relay is opened.
- *
- * Why this runs on the device rather than only on the server: the policy table
- * is the firmware's contract with the backend, and POL-08 is the only rule in
- * POL-01..POL-08 that had no local implementation at all -- cfgStandby was
- * fetched and persisted but never evaluated. Server-side,
- * LoadResponseEvaluator.DetectIdleCandidates exists but had no callers, so the
- * rule was enforced nowhere. The ESP32 is also the component that can act
- * without a network round-trip, which is what the "runs the last synced policy
- * when the network drops" property requires.
- */
-void enforceStandbyPolicy(unsigned long now) {
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    // Only energized channels can be idle-but-connected.
-    if (!channels[i].relayClosed) {
-      idleSinceMs[i] = 0;
-      continue;
-    }
-
-    // A fault lockout opens relays itself; do not second-guess it here.
-    if (sFault || channels[i].localShed) continue;
-
-    if (channels[i].power > cfgStandby) {
-      idleSinceMs[i] = 0;  // back above the threshold: restart the timer
-      continue;
-    }
-
-    const int limit = idleLimitMinutes[i] >= 0 ? idleLimitMinutes[i] : cfgStandbyIdleMinutes;
-    if (limit <= 0) continue;  // 0 disables the timer for this channel
-
-    if (idleSinceMs[i] == 0) {
-      idleSinceMs[i] = now;  // first sample below threshold starts the clock
-      continue;
-    }
-
-    const unsigned long elapsed = now - idleSinceMs[i];
-    if (elapsed >= (unsigned long)limit * 60UL * 1000UL) {
-      channels[i].relayClosed = false;
-      idleSinceMs[i] = 0;
-      Serial.printf("POL-08: channel %d idle at %.0f W for %d min, standby shed\n",
-                    i + 1, channels[i].power, limit);
-    }
-  }
-}
-
-void evaluateLocalPolicies() {
-  if (sFault) return;
-
-  float total = totalLoad();
-
-  if (LOCAL_AUTO_SHED && total > cfgLimit) {
-    int pick = pickShedCandidate();
-    if (pick >= 0) {
-      channels[pick].localShed = true;
-      Serial.printf("POL-05: P_total %.0f W > P_limit %.0f W, shed channel %d\n",
-                    total, cfgLimit, pick + 1);
-    }
-  }
-
-  // Release local sheds once headroom is back.
-  if (total <= cfgWarning) {
-    for (int i = 0; i < OUTLET_COUNT; i++) channels[i].localShed = false;
-  }
-
-  // POL-08 runs after the capacity rules: a shed for overload is not an idle
-  // shed, and applying both to one channel would report the wrong reason.
-  enforceStandbyPolicy(millis());
-}
-
-void handleManualSwitch(int i) {
-  uint8_t pin = SWITCH_PINS[i];
-  if (pin == 0) return;
-
-  bool level = digitalRead(pin);
-  unsigned long now = millis();
-  if (level != channels[i].switchLast && now - channels[i].switchChangedAt > SWITCH_DEBOUNCE_MS) {
-    channels[i].switchChangedAt = now;
-    channels[i].switchLast = level;
-
-    if (level == LOW && !channels[i].relayClosed && !sFault) {
-      // POL-02 / POL-03 pre-activation assessment.
-      float projected = totalLoad() + allowanceW[i];
-      if (projected > cfgLimit) {
-        Serial.printf("POL-03: channel %d request denied (%.0f W + %.0f W > %.0f W)\n",
-                      i + 1, totalLoad(), allowanceW[i], cfgLimit);
-        return;
-      }
-      Serial.printf("POL-02: channel %d allowed, closing relay\n", i + 1);
-      desiredEnergized[i] = true;
-      applyRelays();
-      delay(cfgStabilizationMs);
-      readMeters();
-      // POL-04 post-activation verification.
-      if (totalLoad() > cfgLimit) {
-        channels[i].localShed = true;
-        Serial.printf("POL-04: channel %d verification failed, shed\n", i + 1);
-      }
-      applyRelays();
-    }
-  }
-}
-
-void savePolicyTable() {
-  nvsPolicy.begin("mor", false);
-  nvsPolicy.putUInt("magic", POLICY_MAGIC);
-  nvsPolicy.putFloat("limit", cfgLimit);
-  nvsPolicy.putFloat("warn", cfgWarning);
-  nvsPolicy.putFloat("standby", cfgStandby);
-  nvsPolicy.putInt("stabMs", cfgStabilizationMs);
-  // POL-08 inputs. Persisted so the standby rule survives a reboot with no
-  // network: a device that forgot its idle duration would either shed channels
-  // immediately or never shed them at all.
-  nvsPolicy.putInt("sbIdle", cfgStandbyIdleMinutes);
-#if METER_SOURCE == METER_ZMCT103C
-  nvsPolicy.putFloat("zmRatio", zmctCtRatio);
-  nvsPolicy.putFloat("zmBurden", zmctBurdenOhms);
-  nvsPolicy.putFloat("zmPF", zmctPowerFactor);
-  nvsPolicy.putFloat("zmGain", zmctGain);
-#endif
-  {
-    int16_t idleArr[OUTLET_COUNT];
-    for (int i = 0; i < OUTLET_COUNT; i++) idleArr[i] = (int16_t)idleLimitMinutes[i];
-    nvsPolicy.putBytes("idleLim", idleArr, sizeof(idleArr));
-  }
-  uint8_t prio[OUTLET_COUNT];
-  for (int i = 0; i < OUTLET_COUNT; i++) prio[i] = (uint8_t)prioRank[i];
-  nvsPolicy.putBytes("prio", prio, OUTLET_COUNT);
-  nvsPolicy.putBytes("allow", allowanceW, sizeof(allowanceW));
-  nvsPolicy.putBytes("volts", ratedVolts, sizeof(ratedVolts));
-  uint16_t mask = 0;
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    if (desiredEnergized[i]) mask |= (uint16_t)(1u << i);
-  }
-  nvsPolicy.putUShort("desired", mask);
-  nvsPolicy.end();
-}
-
-bool loadPolicyTable() {
-  nvsPolicy.begin("mor", true);
-  uint32_t magic = nvsPolicy.getUInt("magic", 0);
-  if (magic != POLICY_MAGIC) {
-    nvsPolicy.end();
-    return false;
-  }
-  cfgLimit = nvsPolicy.getFloat("limit", cfgLimit);
-  cfgWarning = nvsPolicy.getFloat("warn", cfgWarning);
-  cfgStandby = nvsPolicy.getFloat("standby", cfgStandby);
-  cfgStabilizationMs = nvsPolicy.getInt("stabMs", cfgStabilizationMs);
-  cfgStandbyIdleMinutes = nvsPolicy.getInt("sbIdle", cfgStandbyIdleMinutes);
-#if METER_SOURCE == METER_ZMCT103C
-  // Absent in tables written before calibration became runtime-adjustable; the
-  // compiled defaults then stand, which is the safe direction.
-  zmctCtRatio = nvsPolicy.getFloat("zmRatio", zmctCtRatio);
-  zmctBurdenOhms = nvsPolicy.getFloat("zmBurden", zmctBurdenOhms);
-  zmctPowerFactor = nvsPolicy.getFloat("zmPF", zmctPowerFactor);
-  zmctGain = nvsPolicy.getFloat("zmGain", zmctGain);
-#endif
-  // Absent in tables written before POL-08 was implemented; leaving the
-  // compiled -1 (exempt) defaults in place is the safe direction, since an
-  // un-enforced standby rule only wastes power while a wrongly-enforced one
-  // would shed channels the operator had deliberately exempted.
-  {
-    int16_t idleArr[OUTLET_COUNT];
-    if (nvsPolicy.getBytes("idleLim", idleArr, sizeof(idleArr)) == sizeof(idleArr)) {
-      for (int i = 0; i < OUTLET_COUNT; i++) idleLimitMinutes[i] = idleArr[i];
-    }
-  }
-  uint8_t prio[OUTLET_COUNT];
-  if (nvsPolicy.getBytes("prio", prio, OUTLET_COUNT) == OUTLET_COUNT) {
-    for (int i = 0; i < OUTLET_COUNT; i++) prioRank[i] = prio[i];
-  }
-  float allow[OUTLET_COUNT];
-  if (nvsPolicy.getBytes("allow", allow, sizeof(allow)) == sizeof(allow)) {
-    memcpy(allowanceW, allow, sizeof(allow));
-  }
-  // Absent in tables written before rated volts were tracked; keep the
-  // compiled rig defaults in that case rather than zeroing the channels.
-  float volts[OUTLET_COUNT];
-  if (nvsPolicy.getBytes("volts", volts, sizeof(volts)) == sizeof(volts)) {
-    memcpy(ratedVolts, volts, sizeof(volts));
-  }
-  uint16_t mask = nvsPolicy.getUShort("desired", 0);
-  for (int i = 0; i < OUTLET_COUNT; i++) desiredEnergized[i] = (mask & (1u << i)) != 0;
-  nvsPolicy.end();
-  return true;
-}
-
-bool syncConfig() {
-#if BACKEND_USE_TLS
-  WiFiClientSecure client;
-  client.setInsecure();  // Prototype LAN: dev cert is not publicly verifiable.
-#else
-  WiFiClient client;
-#endif
-  HTTPClient http;
-  if (!http.begin(client, backendUrl("/Device/config"))) return false;
-  if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
-
-  int code = http.GET();
-  if (code != 200) {
-    Serial.printf("config sync failed: HTTP %d\n", code);
-    http.end();
-    return false;
-  }
-
-  JsonDocument doc;
-  if (deserializeJson(doc, http.getString())) {
-    http.end();
-    return false;
-  }
-  http.end();
-
-  cfgLimit = doc["criticalThresholdWatts"] | cfgLimit;
-  cfgWarning = doc["warningThresholdWatts"] | cfgWarning;
-  cfgStandby = doc["standbyThresholdWatts"] | cfgStandby;
-  cfgStabilizationMs = doc["stabilizationDelayMs"] | cfgStabilizationMs;
-  // POL-08 idle duration. Without this the local standby rule had no timer to
-  // run on and would have had to fall back to a compiled-in guess.
-  cfgStandbyIdleMinutes = doc["standbyIdleMinutes"] | cfgStandbyIdleMinutes;
-
-#if METER_SOURCE == METER_ZMCT103C
-  // Runtime-adjustable sensor calibration. The backend is the source of truth
-  // because these describe the hardware actually fitted, not the firmware build.
-  // Guarded on positivity so a malformed or zero value cannot silently scale
-  // every reading to zero -- a null-overwrite bug would look like "no load".
-  float r = doc["zmctCtRatio"] | zmctCtRatio;
-  float b = doc["zmctBurdenOhms"] | zmctBurdenOhms;
-  float pf = doc["zmctPowerFactor"] | zmctPowerFactor;
-  float g = doc["zmctGain"] | zmctGain;
-  if (r > 0) zmctCtRatio = r;
-  if (b > 0) zmctBurdenOhms = b;
-  if (pf > 0 && pf <= 1.0) zmctPowerFactor = pf;
-  if (g > 0) zmctGain = g;
-#endif
-
-  JsonArray outlets = doc["outlets"];
-  for (JsonObject o : outlets) {
-    int ch = (int)o["channelId"] - 1;
-    if (ch < 0 || ch >= OUTLET_COUNT) continue;
-    prioRank[ch] = o["priority"] | 1;
-    allowanceW[ch] = o["allowanceWatts"] | 0.0f;
-    ratedVolts[ch] = o["ratedVoltageVolts"] | ratedVolts[ch];
-    // idleLimitMinutes is nullable: null means the channel is EXEMPT from the
-    // POL-08 standby shutdown, which is why -1 is the exempt marker rather than
-    // 0. Reading it as 0 would silently exempt or enforce the wrong channels.
-    if (o["idleLimitMinutes"].isNull()) {
-      idleLimitMinutes[ch] = -1;
-    } else {
-      idleLimitMinutes[ch] = o["idleLimitMinutes"] | -1;
-    }
-    int desired = o["desiredStatus"] | 3;
-    desiredEnergized[ch] = (desired == DESIRED_ACTIVE || desired == DESIRED_STANDBY);
-  }
-
-  configSynced = true;
-  Serial.printf("config synced: P_limit=%.0f W, %d channels\n", cfgLimit, outlets.size());
-  savePolicyTable();
-  Serial.println("policy table stored to flash");
-  return true;
-}
-
+// One batch per second. CH1-CH4 carry the measured CT currents; CH5 is the USB
+// rail, which has no current sensor, so it is reported at its nominal rating
+// rather than being given a fabricated reading.
 bool postTelemetry() {
+  float a[4], w[4];
+  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    a[0] = currentAmpsCH1; w[0] = wattageCH1;
+    a[1] = currentAmpsCH2; w[1] = wattageCH2;
+    a[2] = currentAmpsCH3; w[2] = wattageCH3;
+    a[3] = currentAmpsCH4; w[3] = wattageCH4;
+    xSemaphoreGive(dataMutex);
+  } else {
+    return false;
+  }
+
+  // Mains volts from the INA226 through the divider; AC_VOLTAGE is the
+  // fallback if the sensor is not answering, never a silently zeroed reading.
+  float mainsV = inaBusVoltage_V * INA226_MAIN_VOLT_DIVIDER;
+  if (!(mainsV > 1.0f)) mainsV = AC_VOLTAGE;
+
   JsonDocument doc;
   doc["deviceId"] = DEVICE_ID;
-  doc["faultFlag"] = sFault;
-  doc["missedPosts"] = missedPosts;
-
-#ifdef REPORT_METERING_MODE
-  // Provenance for the values in this batch:
-  //   1 = Simulated        - synthesised on the ESP32 (SIMULATE_METERS)
-  //   2 = Metered          - a real PZEM-004T measures V, I and energy
-  //   3 = EstimatedFromCurrent - ZMCT103C CT: current measured, volts nominal,
-  //                         watts estimated at an assumed power factor
-  // The backend renders these differently, so posting 2 from a CT build would
-  // make the UI claim measured volts and watts that were never measured.
-#if SIMULATE_METERS
-  doc["meteringMode"] = 1;
-#elif METER_SOURCE == METER_ZMCT103C
-  doc["meteringMode"] = 3;
-#else
-  doc["meteringMode"] = 2;
-#endif
-#endif
+  doc["sFault"] = false;                  // no protective rules run yet
+  doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   JsonArray readings = doc["readings"].to<JsonArray>();
-  JsonArray relays = doc["relayStates"].to<JsonArray>();
-  for (int i = 0; i < OUTLET_COUNT; i++) {
+  for (int i = 0; i < 4; i++) {
     JsonObject r = readings.add<JsonObject>();
     r["outletId"] = i + 1;
-    r["voltage"] = channels[i].voltage;
-    r["currentAmps"] = channels[i].current;
-    r["powerWatts"] = channels[i].power;
-    r["energyKwh"] = channels[i].energy;
+    r["voltage"] = mainsV;
+    r["currentAmps"] = a[i];
+    r["powerWatts"] = w[i];
+    r["energyKwh"] = 0.0;                // no cumulative counter on this rig
+  }
+  // CH5: USB 5 V rail, no CT fitted. Reported as nominal, not measured.
+  {
+    JsonObject r = readings.add<JsonObject>();
+    r["outletId"] = 5;
+    r["voltage"] = 5.0;
+    r["currentAmps"] = 0.0;
+    r["powerWatts"] = 0.0;
+    r["energyKwh"] = 0.0;
+  }
 
+  JsonArray relays = doc["relayStates"].to<JsonArray>();
+  for (int i = 0; i < 5; i++) {
     JsonObject s = relays.add<JsonObject>();
     s["outletId"] = i + 1;
-    s["relayClosed"] = channels[i].relayClosed;
+    s["relayClosed"] = true;              // relays are not driven in this phase
   }
 
   String payload;
   serializeJson(doc, payload);
 
-#if BACKEND_USE_TLS
-  WiFiClientSecure client;
-  client.setInsecure();
-#else
-  WiFiClient client;
-#endif
   HTTPClient http;
-  if (!http.begin(client, backendUrl("/Device/telemetry"))) return false;
+  if (!http.begin(backendUrl("/Device/telemetry"))) return false;
   http.addHeader("Content-Type", "application/json");
   if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
 
   int code = http.POST(payload);
   bool ok = code >= 200 && code < 300;
-  if (ok) {
-    missedPosts = 0;
-  } else {
-    missedPosts++;
-  }
-  Serial.printf("telemetry: HTTP %d, total=%.0f W%s\n",
-                code, totalLoad(), sFault ? " FAULT" : "");
+  if (ok) missedPosts = 0; else missedPosts++;
   http.end();
+
+  if (!ok || missedPosts % 10 == 1) {
+    Serial.printf("telemetry: HTTP %d, total=%.0f W\n", code, w[0] + w[1] + w[2] + w[3]);
+  }
   return ok;
 }
 
-// Per-channel snapshot: C = relay closed, o = relay open.
-// CH1-8 = 220V outlets, CH9 = 110V outlet, CH10-13 = USB sockets.
-// Volts is the channel's own rail, not the mains bus reading: CH9 shows 110V
-// and CH10-13 show 5V, so a mis-rated channel is visible without a meter.
-// Driven from loop() rather than postTelemetry() so the bench stays
-// observable when the backend is unreachable - a device that only reports
-// while online is unverifiable exactly when something has gone wrong.
-void printChannelSnapshot() {
-  Serial.print("channels:");
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    Serial.printf(" %d:%s%.0fW/%.0fV", i + 1, channels[i].relayClosed ? "C" : "o",
-                  channels[i].power, channels[i].voltage);
-  }
-  Serial.println();
-#if METER_SOURCE == METER_ZMPT101B
-  // Publishing the raw excursion alongside the derived RMS is what makes a
-  // dead sensor diagnosable: pp near zero with 0 A is a wiring problem, not a
-  // quiet channel.
-  Serial.printf("zmpt: v_pp=%u i_pp=%u%s\n", lastZmptPp, lastZmptAp,
-                sFault ? " FAULT" : "");
-#endif
-#if METER_SOURCE == METER_ZMCT103C
-  // bias is the single most useful number while commissioning: ~2048 mV means
-  // the front end is alive, ~0 or ~4096 means it is not wired. pp then confirms
-  // the CT path separately from the bias network. adc=0 means the I2C device
-  // did not answer at all -- a different fault with a different fix.
-  Serial.printf("zmct: adc=%s bias=%umV/%d pp=%umV v_rms=%.3fV %s\n",
-                zmctAdcOnline ? "ok" : "MISSING", zmctLastBias,
-                (int)adsFullScaleMv() / 2, zmctLastPp, zmctLastVoltsRms,
-                zmctFrontEndOk ? "" : "FRONT-END-IMPLAUSIBLE");
-  Serial.printf("zmct cal: ratio=%.0f burden=%.1fR pf=%.2f gain=%.3f\n",
-                zmctCtRatio, zmctBurdenOhms, zmctPowerFactor, zmctGain);
-#endif
-}
+// Picks up P_limit and the warning threshold from the Decision Point so the
+// console and the device cannot disagree about the operating limit.
+bool syncConfig() {
+  WiFiClient client;
+  HTTPClient http;
+  if (!http.begin(client, backendUrl("/Device/config"))) return false;
 
-void setup() {
-  Serial.begin(115200);
-
-  for (int i = 0; i < OUTLET_COUNT; i++) {
-    pinMode(RELAY_PINS[i], OUTPUT);
-    digitalWrite(RELAY_PINS[i], !RELAY_CLOSED_LEVEL);  // fail-safe: open
-    if (SWITCH_PINS[i] != 0) pinMode(SWITCH_PINS[i], INPUT_PULLUP);
-  }
-#ifdef LED_BUILTIN
-  pinMode(LED_BUILTIN, OUTPUT);
-#endif
-
-  Serial.println("\nMOR power-management prototype starting");
-#if METER_SOURCE == METER_ZMPT101B
-  // 12-bit samples on ADC1. ADC1 is used deliberately: ADC2 is driven by the
-  // Wi-Fi radio on this chip and cannot be read while associated.
-  analogReadResolution(12);
-  analogSetPinAttenuation(ZMPT_VOLT_PIN, ADC_11db);
-  analogSetPinAttenuation(ZMPT_CURR_PIN, ADC_11db);
-  Serial.printf("meter: ZMPT101B on ADC1 (V=GPIO%d, I=GPIO%d)\n", ZMPT_VOLT_PIN, ZMPT_CURR_PIN);
-#elif METER_SOURCE == METER_ZMCT103C
-  // The CT is read through an external ADS1015/ADS1115 on I2C, not the S3's
-  // internal ADC. Wire.begin() must succeed before any sample loop runs, or
-  // every read fails and the front-end check trips with no diagnosis.
-  Wire.begin(ADS_SDA_PIN, ADS_SCL_PIN, 400000);
-  Wire.setTimeOut(50);
-  Serial.printf("meter: ZMCT103C via ADS1115 on I2C (SDA=GPIO%d, SCL=GPIO%d, addr=0x%02X)\n",
-                ADS_SDA_PIN, ADS_SCL_PIN, ADS_I2C_ADDR);
-  Serial.printf("  NOTE: current only. Volts are the nominal rail rating and watts are\n");
-  Serial.printf("  ESTIMATED as V_nominal x I x %.2f. Real power needs a PZEM-004T.\n",
-                zmctPowerFactor);
-  Serial.println("  Front-end check: bias must sit near mid-supply (~1.65 V, 2048 mV).");
-  Serial.println("  Calibration (ratio/burden/PF/gain) is pushed from the backend and cached in NVS.");
-#elif METER_SOURCE == METER_PZEM004T
-  Serial.printf("meter: PZEM-004T v3.0 on UART (RX=GPIO%d, TX=GPIO%d)\n", PZEM_RX_PIN, PZEM_TX_PIN);
-#else
-  Serial.println("SIM mode: synthetic mains readings (no sensor wired)");
-#endif
-
-  if (loadPolicyTable()) {
-    Serial.printf("policy restored from flash: P_limit=%.0f W\n", cfgLimit);
-  } else {
-    Serial.println("no stored policy, using compiled defaults until first sync");
-  }
-  applyRelays();
-
-  WiFi.mode(WIFI_STA);
-  loadWifiSlots();
-
-  // Try last-working network first, then the rest.
-  bool linked = tryJoin(wifiSsid[wifiLastOk], wifiPass[wifiLastOk]);
-  for (int k = 0; !linked && k < WIFI_SLOTS; k++) {
-    int i = (wifiLastOk + k) % WIFI_SLOTS;
-    if (i == wifiLastOk) continue;
-    if (tryJoin(wifiSsid[i], wifiPass[i])) {
-      wifiLastOk = i;
-      saveWifiSlots();
-      linked = true;
-    }
-  }
-  if (!linked) {
-    Serial.println("wifi: scan start");
-    int scanN = WiFi.scanNetworks();
-    Serial.printf("wifi: scan found %d networks\n", scanN);
-    for (int i = 0; i < scanN; i++) {
-      Serial.printf("wifi: visible \"%s\" RSSI=%d ch=%d\n",
-                    WiFi.SSID(i).c_str(), WiFi.RSSI(i), WiFi.channel(i));
-    }
-    Serial.println("Wi-Fi failed; running local-only until reset");
-    return;
-  }
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
-
-  syncConfig();
-  applyRelays();
-}
-
-void loop() {
-  unsigned long now = millis();
-
-  readMeters();
-  for (int i = 0; i < OUTLET_COUNT; i++) handleManualSwitch(i);
-  evaluateLocalPolicies();
-  applyRelays();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    if (now - lastConfigAt > CONFIG_INTERVAL_MS) {
-      lastConfigAt = now;
-      if (syncConfig()) applyRelays();
-    }
-    if (now - lastTelemetryAt > TELEMETRY_INTERVAL_MS) {
-      lastTelemetryAt = now;
-      postTelemetry();
-    }
+  int code = http.GET();
+  if (code != 200) {
+    http.end();
+    return false;
   }
 
-  if (now - lastSnapshotAt > SNAPSHOT_INTERVAL_MS) {
-    lastSnapshotAt = now;
-    printChannelSnapshot();
-  }
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, http.getStream());
+  http.end();
+  if (err) return false;
 
-#ifdef LED_BUILTIN
-  digitalWrite(LED_BUILTIN, (now / 500) % 2 ? HIGH : LOW);
-#endif
+  float limit = doc["criticalThresholdWatts"] | cfgLimit;
+  cfgLimit = limit > 0 ? limit : cfgLimit;
+  float warn = doc["warningThresholdWatts"] | cfgWarning;
+  cfgWarning = warn > 0 ? warn : cfgWarning;
 
-  delay(200);
+  Serial.printf("config synced: P_limit=%.0f W, %d channels\n",
+                cfgLimit, (doc["outlets"].size()));
+  return true;
 }

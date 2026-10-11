@@ -310,10 +310,17 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
                 continue;
             }
 
-            acc.Volts[i] = Round(row.Voltage, 1);
-            acc.Amps[i] = Round(row.CurrentAmps, 2);
-            acc.Watts[i] = Round(row.PowerWatts, 1);
-            acc.PeakWatts[i] = Round(row.PeakWatts, 1);
+            // Three decimals on every per-channel electrical quantity. The rig
+            // sees genuinely small branch readings now that each mains channel
+            // has its own CT: a channel idling at 0.04 A is a real measurement,
+            // and one decimal rendered it as 0.0 while two rendered it as 0.04.
+            // Three keeps a sub-milliwatt resolution visible without pushing
+            // binary float noise into the payload. Energy (kWh) is a monotonic
+            // register and keeps its own precision below.
+            acc.Volts[i] = Round(row.Voltage, 3);
+            acc.Amps[i] = Round(row.CurrentAmps, 3);
+            acc.Watts[i] = Round(row.PowerWatts, 3);
+            acc.PeakWatts[i] = Round(row.PeakWatts, 3);
             acc.SampleCount += row.SampleCount;
         }
 
@@ -381,14 +388,28 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         _ => "Unknown",
     };
 
+    // Provenance copy must track the hardware actually on the bench.
+    //
+    // The PZEM-004T v3.0 is RETIRED. What is fitted now is an INA226 on the
+    // mains feed and an ADS1015 four-channel ADC, with a ZMCT103C branch
+    // current sensor on EACH mains branch (CH1-CH4). So per-branch current is
+    // MEASURED, not apportioned from a mains total - that distinction is the
+    // whole point of the "Measured" provenance label, and the earlier copy
+    // ("distributing the mains total across energized channels weighted by
+    // allowance") told the operator the opposite of what the hardware does.
+    //
+    // The 220 V / non-220 V split is therefore a hardware split, not a wording
+    // split, which is what keeps the two Metered arms meaningfully different:
+    // a mains branch has its own CT on the ADS1015, while the 5 V USB rail has
+    // no sensor at all and is only ever a nominal rating.
     private static string ResolveNote(MeteringMode mode, int ratedVolts) => mode switch
     {
         MeteringMode.Simulated =>
-            "Synthesized on the ESP32 (SIMULATE_METERS = 1). No PZEM is wired; these values are generated, not measured.",
+            "Synthesized on the ESP32 (SIMULATE_METERS = 1). No INA226, ADS1015 or branch current sensor is being read; these values are generated, not measured.",
         MeteringMode.Metered when Math.Abs(ratedVolts - 220) < 1 =>
-            "Volts read from the single mains PZEM-004T v3.0 on the common feed. Current and power are derived by distributing the mains total across energized channels weighted by allowance.",
+            "Volts read from the INA226 on the mains feed. Current is measured on this channel's own ADS1015 input via its ZMCT103C branch sensor - it is read directly, not distributed from a mains total. Power is volts x current on this channel.",
         MeteringMode.Metered =>
-            $"Volt is this channel's {ratedVolts} V nominal rating - it is not individually metered. Current and power are derived by distributing the mains total across energized channels weighted by allowance.",
+            $"Volt is this channel's {ratedVolts} V nominal rating, not a measurement - the USB rail has no current sensor wired to it. Current and power are derived from the INA226 mains feed, not from a CT on this branch.",
         MeteringMode.EstimatedFromCurrent =>
             $"Measured CURRENT only, from a ZMCT103C CT on the common feed. A current transformer has no voltage output, so the {ratedVolts} V shown is this channel's nominal rating and watts are ESTIMATED as V_nominal x I x an assumed power factor. Neither V nor W is individually measured - real power needs a PZEM-004T.",
         _ => "The device has not reported a metering mode yet, so this channel's provenance is unknown.",

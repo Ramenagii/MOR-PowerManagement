@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
-import { Gauge, PlugZap, ScanLine, ShieldCheck } from 'lucide-react'
+import { Activity, CloudOff, Gauge, LogOut, Plug, PlugZap, RotateCcw, ScanLine, ShieldCheck } from 'lucide-react'
 import {
   ApiError,
   activateOutlet,
@@ -42,6 +42,47 @@ import {
 } from './utils/scenarios'
 
 type Session = 'checking' | 'authed' | 'login' | 'offline'
+
+/**
+ * Pacing. The ESP32 posts every 1 s, so a 5 s dashboard poll threw away four
+ * out of five readings and made the console feel stalled. These are kept in
+ * step with the device cadence; the device remains the clock.
+ *
+ * 500 ms rather than 1 s: the database is cloud-hosted, so each state request
+ * costs roughly 180 ms of round trip. Polling at 1 s meant the number on screen
+ * was on average ~700 ms stale on top of the device's own 1 s posting interval,
+ * which read as a lagging dashboard rather than a live one.
+ */
+const DASHBOARD_POLL_MS = 500
+
+// The intro overlay used to hold the whole app behind it for 3.6 s, which read
+// as a hang on every load. It is a brand beat, not a wait: long enough to read,
+// short enough that the console is usable immediately.
+const INTRO_MS = 700
+
+// Route transitions are 0.48-0.56 s, which is cinema pacing for an operations
+// screen an operator may switch several times a minute.
+const ROUTE_TRANSITION_S = 0.2
+const SHELL_TRANSITION_S = 0.22
+
+/** The three operating bands the capacity meter is calibrated against. */
+function stateTagClass(state: string): string {
+  if (state === 'Critical') return 'ant-tag ant-tag-error'
+  if (state === 'Warning') return 'ant-tag ant-tag-warning'
+  return 'ant-tag ant-tag-success'
+}
+
+function meterFillClass(state: string): string {
+  if (state === 'Critical') return 'bg-error'
+  if (state === 'Warning') return 'bg-tertiary-container'
+  return 'bg-primary'
+}
+
+/** Clamp a threshold onto the meter's 0-100% track. */
+function trackPercent(value: number, max: number): number {
+  if (!(max > 0)) return 0
+  return Math.min(Math.max((value / max) * 100, 0), 100)
+}
 
 function App() {
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
@@ -104,14 +145,34 @@ function App() {
 
   useEffect(() => {
     if (session !== 'authed') return
-    const timer = window.setInterval(() => {
-      void refreshFromBackend().catch(() => setBackendOnline(false))
-    }, 5000)
-    return () => window.clearInterval(timer)
+    // Self-scheduling, not setInterval: a Neon hiccup that takes longer than
+    // the poll interval must never stack a second request on top of the first,
+    // because each late arrival triggers its own full re-render and the console
+    // reads as stuttering. Hidden tabs pause entirely instead of polling a
+    // screen nobody is looking at.
+    let cancelled = false
+    let timer = 0
+    const tick = () => {
+      if (cancelled) return
+      if (document.hidden) {
+        timer = window.setTimeout(tick, DASHBOARD_POLL_MS)
+        return
+      }
+      void refreshFromBackend()
+        .catch(() => setBackendOnline(false))
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(tick, DASHBOARD_POLL_MS)
+        })
+    }
+    timer = window.setTimeout(tick, 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [session, refreshFromBackend])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setIntroDone(true), 3600)
+    const timer = window.setTimeout(() => setIntroDone(true), INTRO_MS)
     return () => window.clearTimeout(timer)
   }, [introKey])
 
@@ -218,7 +279,6 @@ function App() {
     void runScenario(idleProfile(outlets), 'Idle shutdown')
   }
 
-
   const requestActivationLocal = () => {
     const requested = outlets.find((outlet) => outlet.id === 6)
     if (!requested) return
@@ -250,7 +310,6 @@ function App() {
   const requestActivation = () => {
     void runLive(() => activateOutlet(6), requestActivationLocal)
   }
-
 
   const replayIntro = () => {
     setIntroDone(false)
@@ -339,16 +398,19 @@ function App() {
   const connectionLabel =
     session === 'authed' && backendOnline ? 'Live — backend' : 'Simulated — backend offline'
 
+  const warningTrack = trackPercent(thresholds.warning, thresholds.max)
+  const criticalTrack = trackPercent(thresholds.critical, thresholds.max)
+
   return (
     <LayoutGroup id={`loadwise-${introKey}`}>
       <AnimatePresence mode="popLayout">
         {!introDone && <LoadingScreen key={`intro-${introKey}`} />}
       </AnimatePresence>
       <motion.main
-        className={`app-shell ${introDone ? 'is-ready' : 'is-waiting'}`}
+        className={`flex min-h-screen flex-col bg-background ${introDone ? '' : 'pointer-events-none select-none'}`}
         initial={false}
         animate={introDone ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
-        transition={{ duration: 0.56, ease: [0.22, 1, 0.36, 1] }}
+        transition={{ duration: SHELL_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
       >
         {/*
           The redesign replaces the old identity topbar + hamburger drawer with a
@@ -364,139 +426,276 @@ function App() {
         />
 
         {session === 'offline' && (
-          <div className="design-main">
-            <button type="button" className="btn btn-primary" onClick={() => setSession('login')}>
-              Sign in
-            </button>
-          </div>
-        )}
-
-        {session === 'authed' && (
-          <div className="design-footer">
-            <div className="design-footer-left">
-              <span>{userEmail ?? 'signed in'}</span>
-              <span>{connectionLabel}</span>
-              <span>{deviceOnline ? 'ESP32 online' : 'ESP32 offline'}</span>
-            </div>
-            <div className="design-footer-left">
-              <button type="button" className="btn" onClick={replayIntro}>
-                Replay intro
+          <div className="mx-auto w-full max-w-[1440px] px-margin pt-space-lg">
+            <section
+              role="status"
+              className="ant-card flex flex-col items-start gap-space-sm border-l-4 border-l-error p-space-lg"
+              aria-label="Backend unreachable"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <CloudOff size={18} className="text-error" aria-hidden="true" />
+                <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
+                  Backend unreachable
+                </h2>
+                <span className="ant-tag ant-tag-error">OFFLINE</span>
+              </div>
+              <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
+                The console could not reach <code className="font-code text-code">/api/Dashboard/state</code>,
+                so nothing below is live telemetry. The figures are the stored baseline for the test rig and
+                the buttons below write nothing. Sign in again once the device is reachable.
+              </p>
+              <button type="button" className="ant-btn ant-btn-primary" onClick={() => setSession('login')}>
+                Sign in
               </button>
-              <button type="button" className="btn" onClick={handleLogout}>
-                Sign out
-              </button>
-            </div>
+            </section>
           </div>
         )}
 
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={activeView}
-            className={`route-view ${activeView}-route`}
+            className="origin-top flex-1"
             layoutId="loadwise-route-surface"
             initial={routeInitial}
             animate={routeAnimate}
             exit={routeExit}
-            transition={{ duration: 0.48, ease: [0.22, 1, 0.36, 1] }}
+            transition={{ duration: ROUTE_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
           >
-            {activeView === 'dashboard' && (
-              <>
-                <section className="overview-grid" aria-label="System overview">
-                  <MetricCard
-                    icon={<Gauge />}
-                    label="Total load"
-                    value={formatWatts(load)}
-                    note={`${Math.round(loadPercent)}% of ${formatWatts(thresholds.max)} capacity`}
-                  />
-                  <MetricCard
-                    icon={<ShieldCheck />}
-                    label="Remaining capacity"
-                    value={formatWatts(remaining)}
-                    note={`${formatWatts(thresholds.warning)} warning / ${formatWatts(thresholds.critical)} critical`}
-                  />
-                  <MetricCard
-                    icon={<PlugZap />}
-                    label="Energized outlets"
-                    value={`${activeCount}/${outlets.length}`}
-                    note="Active and standby relay channels"
-                  />
-                  <MetricCard
-                    icon={<ScanLine />}
-                    label="Metering channels"
-                    value={`${outlets.length}`}
-                    note="Single mains PZEM-004T v3.0 on the common feed"
-                  />
-                </section>
-
-                <section className="load-panel" aria-label="Load capacity meter">
-                  <div className="section-heading">
-                    <div>
-                      <p className="eyebrow">Real-time load condition</p>
-                      <h2>Capacity and thresholds</h2>
+            {/*
+              ChannelInventoryView ships its own legacy `.design-main` frame — it
+              was ported first and is not editable here — so it opts out of the
+              shared page padding rather than stacking 24px twice. Every other
+              view gets the same 24px margin and 1440px column.
+            */}
+            <div
+              className={
+                activeView === 'channels'
+                  ? 'w-full'
+                  : 'mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg'
+              }
+            >
+              {activeView === 'dashboard' && (
+                <>
+                  {/* --- Page head ------------------------------------------------- */}
+                  <header className="flex flex-col gap-1">
+                    <nav
+                      aria-label="Breadcrumb"
+                      className="flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant"
+                    >
+                      <span>Console</span>
+                      <span className="text-xs text-outline" aria-hidden="true">
+                        /
+                      </span>
+                      <span className="font-medium text-on-surface">Dashboard</span>
+                    </nav>
+                    <div className="mt-1 flex flex-wrap items-center gap-space-sm">
+                      <h1 className="font-headline-md text-headline-md tracking-tight text-on-surface">
+                        Power Operations Dashboard
+                      </h1>
+                      <span className={`${stateTagClass(currentState)} font-code uppercase`}>
+                        {`System ${currentState}`}
+                      </span>
                     </div>
-                    <span>
-                      {formatWatts(load)} / {formatWatts(thresholds.max)}
-                    </span>
-                  </div>
-                  <div className="meter" aria-label="Total load usage">
-                    <div className="warning-mark" />
-                    <div className="critical-mark" />
-                    <div
-                      className={`meter-fill ${currentState.toLowerCase()}`}
-                      style={{ width: `${loadPercent}%` }}
-                    />
-                  </div>
-                  <div className="threshold-row">
-                    <span>Normal</span>
-                    <span>Warning: {formatWatts(thresholds.warning)}</span>
-                    <span>Critical: {formatWatts(thresholds.critical)}</span>
-                  </div>
-                </section>
+                    <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
+                      Live load against the configured master capacity, every controlled channel, and
+                      what the policy engine decided about them.
+                    </p>
+                  </header>
 
-                <section className="workspace-grid dashboard-workspace">
-                  <div className="outlet-section">
-                    <div className="section-heading">
-                      <div>
-                        <p className="eyebrow">Outlet-level monitoring</p>
-                        <h2>{`${outlets.length} controlled channels`}</h2>
+                  {/* --- Four-up summary ------------------------------------------- */}
+                  <section
+                    className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-4"
+                    aria-label="System overview"
+                  >
+                    <MetricCard
+                      icon={<Gauge />}
+                      label="Total load"
+                      value={formatWatts(load)}
+                      note={`${Math.round(loadPercent)}% of ${formatWatts(thresholds.max)} capacity`}
+                    />
+                    <MetricCard
+                      icon={<ShieldCheck />}
+                      label="Remaining capacity"
+                      value={formatWatts(remaining)}
+                      note={`${formatWatts(thresholds.warning)} warning / ${formatWatts(thresholds.critical)} critical`}
+                    />
+                    <MetricCard
+                      icon={<PlugZap />}
+                      label="Energized outlets"
+                      value={`${activeCount}/${outlets.length}`}
+                      note="Active and standby relay channels"
+                    />
+                    {/* The sensor copy is the honest one: the PZEM-004T that used to sit
+                        on the common feed is retired. Mains V/A/W now comes from an
+                        INA226 on that feed, each mains branch carries its own CT behind
+                        an ADS1015, and the 5 V USB rail has no CT at all — it is
+                        reported as a residual. */}
+                    <MetricCard
+                      icon={<ScanLine />}
+                      label="Metering channels"
+                      value={`${outlets.length}`}
+                      note="INA226 on the mains feed, ADS1015 CT per mains branch · CH5 USB is a residual"
+                    />
+                  </section>
+
+                  {/* --- Capacity meter -------------------------------------------- */}
+                  <section className="ant-card overflow-hidden" aria-label="Load capacity meter">
+                    <div className="ant-card-header">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Activity size={18} className="shrink-0 text-primary" aria-hidden="true" />
+                        <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
+                          Capacity and thresholds
+                        </h2>
+                        <code className="hidden rounded bg-surface-container px-2 py-0.5 font-code text-code text-on-surface-variant sm:inline">
+                          P_limit
+                        </code>
+                      </div>
+                      <div className="flex shrink-0 items-baseline gap-1.5">
+                        <span className="font-metric-display text-metric-display text-on-surface">
+                          {Math.round(load).toLocaleString()}
+                          <span className="font-code text-code font-semibold text-on-surface-variant"> W</span>
+                        </span>
+                        <span className="font-code text-code text-outline">
+                          {`/ ${Math.round(thresholds.max).toLocaleString()} W`}
+                        </span>
                       </div>
                     </div>
-                    <div className="outlet-grid">
-                      {outlets.map((outlet) => (
-                        <OutletCard key={outlet.id} outlet={outlet} onToggle={toggleOutlet} />
-                      ))}
+
+                    <div className="ant-card-body flex flex-col gap-space-md">
+                      {/* The two ticks are the signature of this panel: margin to trip
+                          read as a position on a calibrated scale, not as two numbers
+                          the operator has to compare by eye. */}
+                      <div className="relative">
+                        <div
+                          className="ant-meter"
+                          role="meter"
+                          aria-valuenow={Math.round(loadPercent)}
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-label={`Total load, ${Math.round(loadPercent)} percent of configured capacity`}
+                        >
+                          <div
+                            className={`ant-meter-fill ${meterFillClass(currentState)}`}
+                            style={{ width: `${loadPercent}%` }}
+                          />
+                        </div>
+                        <span
+                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-tertiary-container"
+                          style={{ left: `${warningTrack}%` }}
+                          aria-hidden="true"
+                        />
+                        <span
+                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-error"
+                          style={{ left: `${criticalTrack}%` }}
+                          aria-hidden="true"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-space-sm sm:grid-cols-3">
+                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-secondary pl-2">
+                          <span className="font-code text-code text-on-surface-variant">Normal band</span>
+                          <span className="font-metric-value text-metric-value font-semibold text-secondary">
+                            {`0 – ${Math.round(thresholds.warning).toLocaleString()} W`}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-tertiary-container pl-2">
+                          <span className="font-code text-code text-on-surface-variant">Warning · FR-05</span>
+                          <span className="font-metric-value text-metric-value font-semibold text-tertiary-container">
+                            {`${Math.round(thresholds.warning).toLocaleString()} – ${Math.round(
+                              thresholds.critical,
+                            ).toLocaleString()} W`}
+                          </span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-error pl-2">
+                          <span className="font-code text-code text-on-surface-variant">Critical · FR-06</span>
+                          <span className="font-metric-value text-metric-value font-semibold text-error">
+                            {`≥ ${Math.round(thresholds.critical).toLocaleString()} W`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <p className="font-code text-code text-outline">
+                        Ticks are placed at {warningTrack.toFixed(0)}% and {criticalTrack.toFixed(0)}% of
+                        P_limit. State refreshes every 5 s from GET /api/Dashboard/state.
+                      </p>
                     </div>
-                  </div>
+                  </section>
 
-                  <aside className="side-stack">
-                    <ScenarioPanel
-                      onNormal={scenarioNormal}
-                      onActivate={requestActivation}
-                      onBlock={scenarioCapacityBlock}
-                      onOverload={scenarioOverload}
-                      onSelective={scenarioSelective}
-                      onIdle={scenarioIdle}
-                      notice={scenarioNotice}
-                      busy={scenarioBusy}
-                    />
-                  </aside>
-                </section>
+                  {/* --- Controlled channels -------------------------------------- */}
+                  <section className="ant-card overflow-hidden" aria-label="Outlet-level monitoring">
+                    <div className="ant-card-header">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <Plug size={18} className="shrink-0 text-primary" aria-hidden="true" />
+                        <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
+                          {`${outlets.length} controlled channels`}
+                        </h2>
+                      </div>
+                      <span className="shrink-0 font-code text-code text-on-surface-variant">
+                        {`${activeCount} energized · ${outlets.length - activeCount} open or idle`}
+                      </span>
+                    </div>
+                    <div className="ant-card-body">
+                      <div className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-3">
+                        {outlets.map((outlet) => (
+                          <OutletCard key={outlet.id} outlet={outlet} onToggle={toggleOutlet} />
+                        ))}
+                      </div>
+                    </div>
+                  </section>
 
-                <EventLogPanel events={events} />
-              </>
-            )}
+                  <ScenarioPanel
+                    onNormal={scenarioNormal}
+                    onActivate={requestActivation}
+                    onBlock={scenarioCapacityBlock}
+                    onOverload={scenarioOverload}
+                    onSelective={scenarioSelective}
+                    onIdle={scenarioIdle}
+                    notice={scenarioNotice}
+                    busy={scenarioBusy}
+                  />
 
-            {activeView === 'channels' && <ChannelInventoryView />}
+                  <EventLogPanel events={events} />
+                </>
+              )}
 
-            {activeView === 'telemetry' && <TelemetryView />}
+              {activeView === 'channels' && <ChannelInventoryView />}
 
-            {activeView === 'admin' && <PolicyAdminView />}
+              {activeView === 'telemetry' && <TelemetryView />}
 
-            {activeView === 'policies' && <PoliciesView />}
+              {activeView === 'admin' && <PolicyAdminView />}
 
-            {activeView === 'hardware' && <HardwareView />}
+              {activeView === 'policies' && <PoliciesView />}
+
+              {activeView === 'hardware' && <HardwareView />}
+            </div>
           </motion.div>
         </AnimatePresence>
+
+        {session === 'authed' && (
+          <footer className="mt-auto flex flex-col gap-space-sm border-t border-surface-container bg-surface-container-lowest px-margin py-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap items-center gap-x-space-lg gap-y-1 font-code text-code text-on-surface-variant">
+              <span>{userEmail ?? 'signed in'}</span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  className={`ant-dot ${backendOnline ? 'ant-dot-normal' : 'ant-dot-warning'}`}
+                  aria-hidden="true"
+                />
+                {connectionLabel}
+              </span>
+              <span>{deviceOnline ? 'ESP32 online' : 'ESP32 offline'}</span>
+            </div>
+            <div className="flex shrink-0 items-center gap-space-sm">
+              <button type="button" className="ant-btn ant-btn-default" onClick={replayIntro}>
+                <RotateCcw size={16} className="text-outline" aria-hidden="true" />
+                Replay intro
+              </button>
+              <button type="button" className="ant-btn ant-btn-default" onClick={handleLogout}>
+                <LogOut size={16} className="text-outline" aria-hidden="true" />
+                Sign out
+              </button>
+            </div>
+          </footer>
+        )}
       </motion.main>
     </LayoutGroup>
   )

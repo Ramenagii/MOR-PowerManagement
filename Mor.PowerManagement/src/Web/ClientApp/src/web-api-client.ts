@@ -132,7 +132,7 @@ export class DashboardClient {
     }
 
     /**
-     * Get control policies
+     * Get framework rules
      * @return OK
      */
     getPolicies(): Promise<ControlPolicyDto[]> {
@@ -1850,6 +1850,10 @@ export class ControlPolicyDto implements IControlPolicyDto {
     name!: string;
     condition!: string;
     action!: string;
+    legacyCode!: string | undefined;
+    ruleFamily!: string;
+    precedence!: number;
+    enabled!: boolean;
 
     [key: string]: any;
 
@@ -1873,6 +1877,10 @@ export class ControlPolicyDto implements IControlPolicyDto {
             this.name = _data["name"];
             this.condition = _data["condition"];
             this.action = _data["action"];
+            this.legacyCode = _data["legacyCode"];
+            this.ruleFamily = _data["ruleFamily"];
+            this.precedence = _data["precedence"];
+            this.enabled = _data["enabled"];
         }
     }
 
@@ -1894,6 +1902,10 @@ export class ControlPolicyDto implements IControlPolicyDto {
         data["name"] = this.name;
         data["condition"] = this.condition;
         data["action"] = this.action;
+        data["legacyCode"] = this.legacyCode;
+        data["ruleFamily"] = this.ruleFamily;
+        data["precedence"] = this.precedence;
+        data["enabled"] = this.enabled;
         return data;
     }
 }
@@ -1904,6 +1916,10 @@ export interface IControlPolicyDto {
     name: string;
     condition: string;
     action: string;
+    legacyCode: string | undefined;
+    ruleFamily: string;
+    precedence: number;
+    enabled: boolean;
 
     [key: string]: any;
 }

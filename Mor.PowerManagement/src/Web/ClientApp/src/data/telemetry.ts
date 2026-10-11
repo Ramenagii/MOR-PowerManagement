@@ -10,25 +10,31 @@ export const TELEMETRY_WINDOWS: Array<{ id: TelemetryWindow; label: string }> = 
 ]
 
 /**
- * Poll cadence per window. Independent of App.tsx's 5 s dashboard loop (D10) —
+ * Poll cadence per window. Independent of App.tsx's 1 s dashboard loop (D10) —
  * two loops in one component tree would double the load on a host that sleeps.
- * The 7-day window is manual-only: it never changes on its own.
+ *
+ * Kept in step with the device: the ESP32 posts a batch every 1 s, so a 10 s
+ * poll discarded nine of every ten readings and made a live chart look static.
+ * The short windows now poll at 2 s; longer windows stay slower because there
+ * is no new data arriving for them at a useful rate.
  */
 export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
-  '15m': 10_000,
-  '1h': 10_000,
-  '6h': 30_000,
-  '24h': 30_000,
+  '15m': 1_000,
+  '1h': 1_000,
+  '6h': 5_000,
+  '24h': 15_000,
   '7d': null,
 }
 
-export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 13 }, (_, i) => i + 1)
+/** Testing rig: 5 wired channels (MUST_READ.md, until 31 Oct 2026). */
+export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 5 }, (_, i) => i + 1)
 
 /**
- * Grouped by rail so the chart reads structurally rather than as 13 arbitrary
- * hues: blue/teal ramp for the 220 V mains bus (CH1-8), amber for the 110 V
- * step-down (CH9), violets/plums for the 5 V USB rails (CH10-13). All are >= 3:1
- * against --surface #ffffff, and none reads as --accent #0677ad when used as a fill.
+ * Grouped by rail so the chart reads structurally rather than as arbitrary
+ * hues: blue/teal ramp for the 220 V outlets (CH1-CH4), violet for the 5 V
+ * USB rail (CH5). Colors for CH6-CH13 are retained so the full rig restores
+ * without touching this table. All are >= 3:1 against --surface #ffffff, and
+ * none reads as --accent #0677ad when used as a fill.
  */
 export const CHANNEL_COLORS: string[] = [
   '#0677ad', // CH1  mains
@@ -82,15 +88,15 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
     tone: 'simulated',
     banner:
       'Simulated — not measured. No PZEM-004T is wired; the ESP32 synthesises these readings ' +
-      '(SIMULATE_METERS = 1). Per-channel volts are nominal ratings (CH1–CH8 220 V, CH9 110 V, ' +
-      'CH10–CH13 5 V). Current is derived as P/V; per-channel watts are the mains total distributed ' +
-      'across energized channels by allowance.',
+      '(SIMULATE_METERS = 1). Per-channel volts are nominal ratings (CH1–CH4 220 V, CH5 5 V). ' +
+      'Current is derived as P/V; per-channel watts are the mains total distributed ' +
+      'across energized channels by allowance. The USB rail counts toward P_total.',
   },
   Metered: {
     tone: 'measured',
     banner:
-      'One meter, thirteen channels. CH1–CH8 volts are read from the single mains PZEM-004T v3.0 on ' +
-      'the common feed. CH9 (110 V) and CH10–CH13 (5 V USB) report their nominal rating — they are not ' +
+      'One meter, five channels. CH1–CH4 volts are read from the single mains PZEM-004T v3.0 on ' +
+      'the common feed. CH5 (5 V USB) reports its nominal rating — it is not ' +
       'individually metered. Per-channel current and watts are derived by distributing the measured mains ' +
       'total across energized channels, weighted by each channel’s allowance. This is an estimation ' +
       'method for DSM research, not revenue-grade metering.',
@@ -102,10 +108,10 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
 }
 
 export const VOLTS_CAPTION_METERED =
-  'CH1–CH8 carry the single mains PZEM-004T v3.0 reading; the mains total is distributed across energized channels by allowance.'
+  'CH1–CH4 carry the single mains PZEM-004T v3.0 reading; the mains total is distributed across energized channels by allowance.'
 
 export const VOLTS_CAPTION =
-  'CH9 (110 V) and CH10–CH13 (5 V USB) appear as flat lines because those channels report their nominal rating. They are not individually metered.'
+  'CH5 (5 V USB) appears as a flat line because the channel reports its nominal rating. It is not individually metered, but it counts toward P_total.'
 
 export const AMPS_CAPTION =
   'Current is not sampled. It is derived per channel as P_branch / V_branch, so it is only as trustworthy as the derived power.'
