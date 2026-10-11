@@ -1,4 +1,4 @@
-import { Bolt, FlaskConical, Power } from 'lucide-react'
+import { Bolt, Power } from 'lucide-react'
 import type { AppView } from '../types/dashboard'
 
 /**
@@ -108,20 +108,6 @@ export function AppTopBar({
 
         {/* ---- Status ------------------------------------------------------ */}
         <div className="flex shrink-0 items-center gap-space-sm">
-          {/* Testing rig badge (MUST_READ.md): 5 channels, P_limit capped at
-              1200 W, in force until 31 Oct 2026. Removed with the rig restore.
-              It is a configuration fact, not an alarm, so it wears a neutral
-              pill: a warning-coloured tag here would read as a live fault and
-              sit permanently in the operator's peripheral vision. */}
-          <span
-            className="hidden h-5 items-center gap-1.5 whitespace-nowrap rounded-sm border border-outline-variant bg-surface-container px-2 font-body-sm text-body-sm text-on-surface-variant lg:inline-flex"
-            title="Testing configuration until 31 Oct 2026"
-          >
-            <FlaskConical size={12} aria-hidden="true" />
-            Test rig ·{' '}
-            <span className="font-metric-value text-metric-value">5 ch · P_limit 1200 W</span>
-          </span>
-
           {/* Device state is reported honestly: offline means no recent telemetry,
               and the design's "System Normal" pill must not imply otherwise. */}
           <span

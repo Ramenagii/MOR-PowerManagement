@@ -306,6 +306,44 @@ function bandEdge(value: number): string {
   return value.toFixed(Math.abs(value) < 100 ? 1 : 0)
 }
 
+/**
+ * What kind of socket this is, for someone who does not know electrical
+ * engineering. `railLabel` names the rail in the engineer's order — the voltage
+ * first — because that is what distinguishes the branches. A newcomer reads
+ * left to right, so the DEVICE leads and the voltage becomes a qualifier:
+ * "Mains socket (220 V)", not "220 V mains". Same fact, legible in one pass.
+ */
+function socketLabel(volts: number): string {
+  const rail = railOf(volts)
+  if (rail === '220') return 'Mains socket (220 V)'
+  if (rail === '110') return 'Step-down socket (110 V)'
+  return `USB socket (${Math.round(volts)} V)`
+}
+
+/**
+ * The window's standard deviation, said as a word.
+ *
+ * The card used to print a bare σ next to a number, which is a fact about the
+ * shape of a distribution rather than an answer to any question an operator
+ * actually asks. "Steadiness: steady / varying" answers the real question —
+ * is this channel holding still or is it moving — with no algebra and no
+ * Greek. The underlying spread is still one hover away on the chart's bars.
+ *
+ * Steady means σ under a tenth of the mean: a channel whose readings scatter
+ * by less than a tenth of their own level is not doing anything interesting.
+ * A dead channel can report a mean of exactly 0, where the ratio is undefined,
+ * so the zero-mean case falls back to an equality test — a flat 0 W load is
+ * steady, anything moving off zero is not.
+ */
+const STEADY_SIGMA_RATIO = 0.1
+
+function steadiness(stats: { count: number; mean: number | null; stddev: number | null }): string {
+  if (stats.count === 0 || stats.mean === null) return 'not enough readings yet'
+  if (stats.stddev === null) return 'only one reading so far'
+  if (stats.mean === 0) return stats.stddev === 0 ? 'steady' : 'varying'
+  return stats.stddev < stats.mean * STEADY_SIGMA_RATIO ? 'steady' : 'varying'
+}
+
 type DistributionCell = {
   index: number
   count: number
@@ -313,8 +351,10 @@ type DistributionCell = {
   peak: boolean
   /** Tooltip text — the per-bin story, sample count plus band range in W. */
   title: string
-  /** Axis text. Empty means "this column draws no label", which keeps the
-   *  three anchors (min, modal band, max) aligned to the bars they describe. */
+  /** Axis text, in plain words rather than band edges. Empty means "this column
+   *  draws no label", which keeps the three anchors (Lowest, Most readings,
+   *  Highest) aligned to the bars they describe. The numeric band edges live in
+   *  the words block above the chart, where there is room to read them. */
   label: string
 }
 
@@ -336,8 +376,12 @@ type DistributionChart = {
  * height on a zero-sample bin reads as data that is not there, which is the
  * exact opposite of what a distribution is for.
  *
- * Only three axis labels are drawn (minimum, modal band, maximum) so the axis
- * stays readable at card width instead of becoming eight overlapping numbers.
+ * Only three axis labels are drawn, and they are WORDS — Lowest, Most readings,
+ * Highest — rather than band edges. Eight overlapping numbers was never
+ * readable at card width, and `21.1–21.8 W` is a phrase only an engineer has a
+ * use for; "Most readings" tells a newcomer the same thing, which is that the
+ * tall bar is where this channel spends its life. The exact band numbers are
+ * still in each bar's tooltip and in the words block above the chart.
  */
 function buildDistribution(
   values: Array<number | null>,
@@ -355,8 +399,6 @@ function buildDistribution(
   // A flat series (a nominal 5 V rail) collapses to a single zero-width band;
   // every edge is the same number, so there is only ever one label to draw.
   const binWidth = (hist.max - hist.min) / counts.length
-  const peakLower = hist.min + peakIndex * binWidth
-  const peakUpper = peakLower + binWidth
   const lastIndex = counts.length - 1
 
   const cells: DistributionCell[] = counts.map((count, index) => {
@@ -366,13 +408,15 @@ function buildDistribution(
 
     let label = ''
     if (binWidth === 0) {
-      label = `${bandEdge(hist.min)} W`
+      // A flat series collapses every edge onto one number, so there is only one
+      // band to name — and it is the only one that holds any samples at all.
+      label = index === 0 ? 'Most readings' : ''
     } else if (isPeak) {
-      label = `${bandEdge(peakLower)}–${bandEdge(peakUpper)} W`
+      label = 'Most readings'
     } else if (index === 0) {
-      label = `${bandEdge(hist.min)} W`
+      label = 'Lowest'
     } else if (index === lastIndex) {
-      label = `${bandEdge(hist.max)} W`
+      label = 'Highest'
     }
 
     return {
@@ -445,14 +489,25 @@ export function ChannelInventoryView() {
   }, [])
 
   useEffect(() => {
-    void load(false)
-    const timer = window.setInterval(() => {
+    let cancelled = false
+    let timer = 0
+    // Self-scheduling rather than setInterval, matching App.tsx: a request
+    // that outlasts the interval must not stack a second one on top of it.
+    const tick = () => {
+      if (cancelled) return
       // Paused rather than abandoned when hidden, for the same reason
       // TelemetryView does it: the host sleeps, so don't spend its wake budget.
-      if (!document.hidden) void load(true)
-    }, REFRESH_MS)
+      if (!document.hidden) void load(true).finally(() => {
+        if (!cancelled) timer = window.setTimeout(tick, REFRESH_MS)
+      })
+      else timer = window.setTimeout(tick, REFRESH_MS)
+    }
+    void load(false).finally(() => {
+      if (!cancelled) timer = window.setTimeout(tick, REFRESH_MS)
+    })
     return () => {
-      window.clearInterval(timer)
+      cancelled = true
+      window.clearTimeout(timer)
       abortRef.current?.abort()
     }
   }, [load])
@@ -946,6 +1001,10 @@ export function ChannelInventoryView() {
             const statusView = STATUS_VIEWS[outlet?.status ?? 'Disconnected']
             const view = provenanceView(reading.channel.provenance)
             const stats = describeSeries(reading.channel.watts)
+            // The roster owns the human name; the telemetry channel carries a
+            // fallback. Either way the name leads the card and the CH id follows
+            // it, so the person's vocabulary comes before the machine's.
+            const channelName = outlet?.name ?? reading.channel.name
             // The distribution is the same chart grammar as the Telemetry view's
             // aggregate load distribution, scaled to card width. It returns null
             // when a channel reported nothing in the window, so a dead branch has
@@ -973,83 +1032,78 @@ export function ChannelInventoryView() {
               <article
                 key={reading.channel.outletId}
                 className="ant-card p-space-md flex flex-col gap-space-sm"
-                aria-label={`${outlet?.name ?? reading.channel.name} · ${statusView.label}`}
+                aria-label={`${channelName} · ${statusView.label}`}
               >
-                {/* Header: identity plus the ONE stateful chip on the card. Status
-                    is the only thing here that is a verdict about the plant rather
-                    than a fact about the channel. */}
-                <header className="flex items-start justify-between gap-space-sm">
-                  <span className="font-metric-value text-metric-value font-semibold text-on-surface">
-                    {`CH${String(reading.channel.outletId).padStart(2, '0')}`}
-                  </span>
-                  <span className={`${statusView.tagClass} shrink-0`}>{statusView.label}</span>
-                </header>
+                {/* 1 — IDENTITY. The name is what a person recognises ("the one by
+                    the kettle"), so it leads and CH02 is demoted to a quiet mono
+                    aside: the machine's name for the same socket, useful when
+                    cross-referencing a log but not when reading the card. The
+                    status tag stays top right, because status is the only thing
+                    here that is a verdict about the plant rather than a fact
+                    about the channel, and it is what the eye should land on
+                    last. */}
+                <div className="flex flex-col gap-0.5">
+                  <header className="flex items-start justify-between gap-space-sm">
+                    <h3
+                      className="font-title-lg text-title-lg text-on-surface truncate"
+                      title={channelName}
+                    >
+                      {channelName}
+                    </h3>
+                    <div className="flex shrink-0 items-center gap-2 pt-0.5">
+                      <span className="font-metric-value text-metric-value text-outline">
+                        {`CH${String(reading.channel.outletId).padStart(2, '0')}`}
+                      </span>
+                      <span className={statusView.tagClass}>{statusView.label}</span>
+                    </div>
+                  </header>
 
-                <div className="min-w-0">
-                  <h3
-                    className="font-title-lg text-title-lg text-on-surface truncate"
-                    title={outlet?.name ?? reading.channel.name}
-                  >
-                    {outlet?.name ?? reading.channel.name}
-                  </h3>
-                  {/* Rail and shed priority are static metadata, so they share one
-                      neutral line instead of each earning a chip. */}
+                  {/* 2 — WHAT KIND OF THING THIS IS. One sentence, no jargon: the
+                      socket, its voltage, and how urgently the grid protects it.
+                      Rail and shed priority are static metadata, so they share this
+                      line instead of each earning a chip. */}
                   <p
                     className={`${METADATA_LINE} truncate`}
                     title="Shed order: Low priority is shed first"
                   >
-                    {`${railLabel(reading.channel.ratedVoltageVolts)} · Priority: ${outlet?.priority ?? 'Unknown'}`}
+                    {`${socketLabel(reading.channel.ratedVoltageVolts)} · Priority: ${outlet?.priority ?? 'Unknown'}`}
                   </p>
                 </div>
 
-                {/* Core live matrix: V / A / W. Units are in the label, not
-                    duplicated after the figure, so the column stays scannable.
-                    Every figure here is a live sample that updates while the
-                    operator watches, so all three ride the tabular metric
-                    token — a proportional digit would jitter on every poll. */}
-                <div className="grid grid-cols-3 gap-1 bg-surface-container-low rounded-md py-2 px-1 text-center">
-                  <div>
-                    <div className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">Voltage</div>
-                    <div className="font-metric-value text-metric-value font-semibold text-on-surface">
-                      {`${fmtVolts(reading.volts)} V`}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">Current</div>
-                    <div
-                      className={`font-metric-value text-metric-value font-semibold ${
-                        reading.amps === null ? 'text-on-surface-variant' : 'text-on-surface'
-                      }`}
-                    >
-                      {`${fmtAmps(reading.amps)} A`}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">Power</div>
-                    <div
-                      className={`font-metric-value text-metric-value font-semibold ${
-                        hasReading ? (overAllowance ? 'text-error' : 'text-on-surface') : 'text-on-surface-variant'
-                      }`}
-                    >
-                      {`${fmtWatts(reading.watts)} W`}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Load allowance. The provenance that decides whether this bar is solid or
-                    hatched lives in the footer, so this line stays two figures and
-                    one ratio — the only numbers a load meter needs to be read. */}
+                {/* 3 — THE HERO. One number answers "how much is this using right
+                    now", so it is the only figure on the card at display size and
+                    everything below it is deliberately smaller. The sentence under
+                    it is what makes the number mean something: "allowance" only
+                    means anything once you are told it is a limit on what this
+                    outlet is allowed to draw. The meter stays glued to this block,
+                    because it is the picture of exactly this ratio. */}
                 <div>
-                  <div className="flex justify-between items-baseline gap-2 mb-1">
-                    <span className="font-metric-value text-metric-value text-on-surface-variant truncate">
-                      {hasReading && hasAllowance
-                        ? `${fmtWatts(reading.watts)} W of ${fmtWatts(allowance)} W allowance`
-                        : hasAllowance
-                          ? `Allowance ${fmtWatts(allowance)} W · no sample in window`
-                          : 'No allowance set'}
+                  <p
+                    className={`font-metric-display text-metric-display flex items-baseline gap-1 ${
+                      overAllowance ? 'text-error' : 'text-on-surface'
+                    }`}
+                  >
+                    {fmtWatts(reading.watts)}
+                    <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
+                      W
+                    </span>
+                  </p>
+                  <div className="flex items-baseline justify-between gap-2 mt-1">
+                    <span className="min-w-0 truncate font-body-sm text-body-sm text-on-surface-variant">
+                      {hasAllowance ? (
+                        <>
+                          {'of the '}
+                          <span className="font-metric-value text-metric-value text-on-surface">
+                            {`${fmtWatts(allowance)} W`}
+                          </span>
+                          {' this outlet is allowed to draw'}
+                        </>
+                      ) : (
+                        'No draw limit set for this outlet'
+                      )}
                     </span>
                     <span
-                      className={`font-metric-value text-metric-value font-semibold shrink-0 ${
+                      className={`shrink-0 font-metric-value text-metric-value font-semibold ${
                         overAllowance
                           ? 'text-error'
                           : rawPercent >= 85
@@ -1057,11 +1111,11 @@ export function ChannelInventoryView() {
                             : 'text-on-surface-variant'
                       }`}
                     >
-                      {hasReading && hasAllowance ? fmtPercent(rawPercent) : '—'}
+                      {hasReading && hasAllowance ? `${fmtPercent(rawPercent)} used` : hasAllowance ? 'no reading' : '—'}
                     </span>
                   </div>
                   <div
-                    className="ant-meter"
+                    className="ant-meter mt-2"
                     role="meter"
                     aria-valuenow={hasReading && hasAllowance ? Math.round(rawPercent) : undefined}
                     aria-valuemin={0}
@@ -1083,39 +1137,86 @@ export function ChannelInventoryView() {
                   )}
                 </div>
 
-                {/* Window statistics, folded into ONE line instead of a second
-                    four-up grid. Gaps are skipped, never read as zero, and every
-                    figure is rendered at 1 dp so a quiet channel still shows the
-                    spread it actually had. */}
-                <p className="flex flex-wrap items-baseline gap-x-3 font-body-sm text-body-sm text-on-surface-variant">
-                  {(
-                    [
-                      ['Min', stats.min],
-                      ['Mean', stats.mean],
-                      ['Max', stats.max],
-                      ['σ', stats.stddev],
-                    ] as const
-                  ).map(([label, value]) => (
-                    <span key={label} className="whitespace-nowrap">
-                      {label}
-                      <span className="ml-1 font-metric-value text-metric-value text-on-surface">
-                        {fmtWatts(value)}
-                      </span>
-                    </span>
-                  ))}
-                </p>
+                {/* 4 — THE THREE READINGS, in the words a non-engineer uses.
+                    "Voltage / Current / Power" are the units; "Supply / Current in
+                    use / Power drawn" are what those units are FOR. Units stay in
+                    the figure, and every figure rides the tabular metric token so
+                    nothing jitters while the operator watches it stream. */}
+                <div className="grid grid-cols-3 gap-1 bg-surface-container-low rounded-md py-2 px-1 text-center">
+                  <div>
+                    <div className="font-body-sm text-body-sm text-on-surface-variant">Supply</div>
+                    <div className="font-metric-value text-metric-value font-semibold text-on-surface">
+                      {`${fmtVolts(reading.volts)} V`}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-body-sm text-body-sm text-on-surface-variant">Current in use</div>
+                    <div
+                      className={`font-metric-value text-metric-value font-semibold ${
+                        reading.amps === null ? 'text-on-surface-variant' : 'text-on-surface'
+                      }`}
+                    >
+                      {`${fmtAmps(reading.amps)} A`}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="font-body-sm text-body-sm text-on-surface-variant">Power drawn</div>
+                    <div
+                      className={`font-metric-value text-metric-value font-semibold ${
+                        hasReading ? (overAllowance ? 'text-error' : 'text-on-surface') : 'text-on-surface-variant'
+                      }`}
+                    >
+                      {`${fmtWatts(reading.watts)} W`}
+                    </div>
+                  </div>
+                </div>
 
-                {/* Distribution over the window — the Telemetry view's chart,
-                    scaled to a card. Bars rise from a shared baseline rule and
-                    scale to the modal bin; the modal bin wears solid primary, the
-                    other populated bins wear the lighter primary tint, and an
-                    empty bin wears nothing at all. The baseline rule plus the
-                    absent bars are what make a gap read as "nothing in this
-                    band" rather than as a short sample. */}
+                {/* 5 — HOW IT HAS BEEN BEHAVING, over the window. "Min / Mean / Max
+                    / σ" is four unexplained tokens; the same four facts as words
+                    are a sentence a newcomer can act on. σ is not printed as a
+                    number — it is the one figure on this card that means nothing
+                    without knowing what a standard deviation is — so it becomes the
+                    verdict it actually supports. Gaps are skipped, never read as
+                    zero, so a dead channel says so rather than showing 0.0. */}
+                <div className="flex flex-col gap-0.5">
+                  <p className="flex flex-wrap items-baseline gap-x-3 font-body-sm text-body-sm text-on-surface-variant">
+                    {(
+                      [
+                        ['Lowest seen', stats.min],
+                        ['Typical', stats.mean],
+                        ['Highest', stats.max],
+                      ] as const
+                    ).map(([label, value]) => (
+                      <span key={label} className="whitespace-nowrap">
+                        {label}
+                        <span className="ml-1 font-metric-value text-metric-value text-on-surface">
+                          {fmtWatts(value)}
+                        </span>
+                      </span>
+                    ))}
+                  </p>
+                  <p className="font-body-sm text-body-sm text-on-surface-variant">
+                    {'Steadiness: '}
+                    <span className="text-on-surface">{steadiness(stats)}</span>
+                  </p>
+                </div>
+
+                {/* 6 — THE DISTRIBUTION, and the chart itself is unchanged: bars rise
+                    from one shared baseline rule and scale to the modal bin, the
+                    modal bin wears solid primary, other populated bins wear the
+                    lighter primary tint, and an empty bin wears nothing at all.
+                    The baseline plus the absent bars are what make a gap read as
+                    "nothing in this band" rather than as a short sample. What
+                    changed is the prose around it — a line saying what the chart
+                    IS, and three anchor words instead of three band numbers. */}
                 {chart && (
                   <figure className="m-0 flex flex-col gap-1">
+                    <p className="font-body-sm text-body-sm text-on-surface-variant">
+                      {`How the load was distributed across ${chart.total} reading${chart.total === 1 ? '' : 's'} in this window`}
+                    </p>
+
                     <div
-                      className="flex h-20 items-end gap-1 border-b border-outline-variant"
+                      className="flex h-16 items-end gap-1 border-b border-outline-variant"
                       role="img"
                       aria-label={`Power distribution across ${chart.total} samples in the window. Modal band holds ${fmtPercent(chart.peakShare)} of them.`}
                     >
@@ -1137,15 +1238,15 @@ export function ChannelInventoryView() {
                       ))}
                     </div>
 
-                    {/* Three anchors only — minimum, modal band, maximum. They sit
-                        in the same flex track as the bars, so each label is
-                        genuinely under the column it describes rather than floated
-                        on a shared justify-between. */}
+                    {/* Three anchors only, named in words — Lowest, Most readings,
+                        Highest — in the same flex track as the bars, so each label
+                        is genuinely under the column it describes rather than
+                        floated on a shared justify-between. */}
                     <div className="flex gap-1">
                       {chart.cells.map((cell) => (
                         <span
                           key={cell.index}
-                          className={`min-w-0 flex-1 whitespace-nowrap text-center font-metric-value text-metric-value ${
+                          className={`min-w-0 flex-1 whitespace-nowrap text-center font-body-sm text-body-sm ${
                             cell.peak ? 'font-semibold text-primary' : 'text-outline'
                           }`}
                         >
@@ -1155,18 +1256,19 @@ export function ChannelInventoryView() {
                     </div>
 
                     <figcaption className="flex items-baseline justify-between gap-2 font-body-sm text-body-sm text-on-surface-variant">
-                      <span>Load distribution</span>
+                      <span>Most readings fell in one narrow band</span>
                       <span className="font-metric-value text-metric-value text-outline">
-                        {`${chart.total} sample${chart.total === 1 ? '' : 's'} · modal band ${fmtPercent(chart.peakShare)}`}
+                        {fmtPercent(chart.peakShare)}
                       </span>
                     </figcaption>
                   </figure>
                 )}
 
-                {/* Footer: provenance as a dot plus neutral text — never a filled
-                    chip — and sample coverage. The API's provenanceNote is kept
-                    verbatim and clamped to one line: the backend owns that wording,
-                    and a paragraph here pushed the card past 400 px. */}
+                {/* 7 — Footer: provenance as a dot plus neutral text — never a filled
+                    chip — and sample coverage, which answers "how much of this
+                    window is real?". The API's provenanceNote is kept verbatim
+                    and clamped to one line: the backend owns that wording, and a
+                    paragraph here pushes the card past its height budget. */}
                 <footer className="mt-auto pt-2 border-t border-outline-variant flex items-center justify-between gap-2">
                   <span
                     className={`inline-flex min-w-0 items-center gap-1.5 ${PROVENANCE_LINE}`}
@@ -1224,10 +1326,11 @@ export function ChannelInventoryView() {
               A <strong className="text-on-surface">solid</strong> allowance bar means the figure came
               from a meter. A <strong className="text-on-surface">hatched</strong> bar means the figure
               was inferred — no meter is fitted on that branch. Live figures are the most recent
-              non-null bucket of the {series?.windowLabel ?? '15 min'} window; min / mean / max / σ
-              cover that same window, skipping gaps rather than treating them as zero. This view is a
-              live snapshot — the trend charts and the longer windows (up to 7 days) are on the
-              Telemetry tab.
+              non-null bucket of the {series?.windowLabel ?? '15 min'} window; &ldquo;lowest seen&rdquo;,
+              &ldquo;typical&rdquo; and &ldquo;highest&rdquo; cover that same window, skipping gaps rather
+              than treating them as zero, and &ldquo;steadiness&rdquo; is the spread behind the typical
+              value stated as a verdict rather than as a symbol. This view is a live snapshot — the
+              trend charts and the longer windows (up to 7 days) are on the Telemetry tab.
             </p>
           </div>
 

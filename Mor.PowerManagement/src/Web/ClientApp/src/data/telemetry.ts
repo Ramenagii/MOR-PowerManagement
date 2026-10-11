@@ -19,10 +19,10 @@ export const TELEMETRY_WINDOWS: Array<{ id: TelemetryWindow; label: string }> = 
  * is no new data arriving for them at a useful rate.
  */
 export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
-  '15m': 2_000,
-  '1h': 2_000,
-  '6h': 10_000,
-  '24h': 30_000,
+  '15m': 1_000,
+  '1h': 1_000,
+  '6h': 5_000,
+  '24h': 15_000,
   '7d': null,
 }
 

@@ -55,14 +55,10 @@
 #define DEVICE_API_KEY "vuZAWog0U6MnqHF58TK3DhCzO9Je2atQ"
 
 // ---- Timing ----
-// Telemetry is 1 Hz so the dashboard reads as live rather than as a slow poll.
-// The device posts 5 channels per second; retention is handled server-side, and
-// 15 s config sync is plenty because thresholds rarely move mid-session.
+// Telemetry is 1 Hz so the console reads as live rather than as a slow poll.
 #define TELEMETRY_INTERVAL_MS 1000UL
 #define CONFIG_INTERVAL_MS 15000UL
-// Serial per-channel snapshot. Deliberately independent of the telemetry
-// interval so the rig stays observable with no backend reachable.
-#define SNAPSHOT_INTERVAL_MS 5000UL
+// Serial per-channel snapshot at 4 Hz, set in the .ino.
 
 // ---------------------------------------------------------------------------
 // RAW TEST MODE (temporary — see MUST_READ.md section 11)

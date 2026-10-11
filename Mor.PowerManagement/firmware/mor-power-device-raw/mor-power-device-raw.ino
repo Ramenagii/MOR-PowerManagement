@@ -1,39 +1,3 @@
-/*
-  ============================================================================
-  MOR / LoadWise — RAW SENSOR TEST SKETCH
-  ============================================================================
-
-  Purpose: validate the measurement chain on the bench BEFORE any relay
-  control or framework rule is involved. This sketch deliberately contains
-  NO relays and NO rules — it only reads the INA226 and the four ZMCT103C
-  current channels, and prints them.
-
-  Hardware
-    - INA226   @ 0x40 — DC monitor (bus / shunt / current / power)
-    - ADS1015  @ 0x48 — 4-channel ADC, one ZMCT103C per mains branch
-    - I2C      SDA = GPIO 8, SCL = GPIO 9, 400 kHz
-    - CTs      A0..A3 = CH1..CH4
-
-  Why it is shaped this way
-    - The sampling task is pinned to core 0 so a 727 ms acquisition pass over
-      four channels can never delay serial output on core 1.
-    - RMS is single-pass over 600 samples using E[x^2] - mean^2, which removes
-      the CT's DC bias without a separate offset window.
-    - The filter is adaptive: a change larger than ADAPTIVE_STEP_THRESHOLD snaps
-      through immediately, so load steps are not smoothed into staleness.
-
-  Flash (COM10 is the CH343 UART bridge; COM11 native-USB is NOT connected):
-    arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device-raw
-    arduino-cli upload  -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device-raw
-    arduino-cli monitor -p COM10 --config baudrate=115200
-
-  Build with USB CDC On Boot DISABLED: with it enabled Serial is routed to the
-  ESP32-S3 native USB port (COM11) and nothing appears on the CH343.
-
-  Libraries: INA226, Adafruit ADS1X15 (+ Adafruit BusIO), ArduinoJson not needed.
-  ============================================================================
-*/
-
 #include <Wire.h>
 #include <INA226.h>
 #include <Adafruit_ADS1X15.h>
@@ -104,41 +68,16 @@ void setup() {
 
   // Initialize Fast-Mode I2C (400 kHz)
   Wire.begin(I2C_SDA, I2C_SCL);
-  // BENCH NOTE: 400 kHz FAILS on this wiring - the INA226 stops acknowledging
-  // and the sketch halts with "INA226 module not detected at 0x40". The breadboard
-  // Dupont runs with 4.7k-10k pull-ups, which cannot meet the 400 kHz rise-time
-  // budget. 100 kHz (the ESP32 default) reads both sensors reliably, and the
-  // 600-sample acquisition pass has plenty of headroom at that rate.
-  // To go back to 400 kHz: shorten the leads to under 10 cm and fit ~2.2k
-  // pull-ups, then verify before trusting the readings.
-  Wire.setClock(100000);
+  Wire.setClock(400000);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
-  // Bus inventory first. When a sensor goes missing this answers the only
-  // question that matters - is ANYTHING on the bus - instead of halting on a
-  // single NACK with no diagnosis.
-  uint8_t foundDevices = 0;
-  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
-    Wire.beginTransmission(addr);
-    if (Wire.endTransmission() == 0) {
-      Serial.printf("i2c: device responding at 0x%02X\n", addr);
-      foundDevices++;
-    }
-  }
-  if (foundDevices == 0) {
-    Serial.println("i2c: NOTHING responded. Check: sensor VCC (3.3V), common GND,");
-    Serial.println("      SDA->GPIO8 / SCL->GPIO9 continuity, and that pull-ups exist.");
-  }
-
   // Initialize INA226 Power Monitor (Rob Tillaart Library)
   if (!ina226.begin()) {
-    // Reported, not fatal: the branch CTs are on the other device and are still
-    // worth reading. Mains values stay at whatever the last successful read was.
-    Serial.println("Error: INA226 module not detected at 0x40! (branch CTs may still work)");
-  } else {
-    ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
+    Serial.println("Error: INA226 module not detected at 0x40!");
+    while (1) { delay(10); }
   }
+  ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
 
   // Initialize ADS1015 ADC for ZMCT103C sensors
   if (!ads.begin(ADS1015_ADDRESS, &Wire)) {
@@ -212,7 +151,7 @@ void sensorTask(void *pvParameters) {
 
       currentAmpsCH4 = updateFilteredAmps(raw4, currentAmpsCH4);
       wattageCH4 = currentAmpsCH4 * AC_VOLTAGE;
-
+      
       xSemaphoreGive(dataMutex);
     }
 
@@ -294,5 +233,5 @@ void printSerialTelemetry() {
   Serial.print("  CH1 (A0) -> "); Serial.print(a1, 3); Serial.print(" A | "); Serial.print(w1, 1); Serial.println(" W");
   Serial.print("  CH2 (A1) -> "); Serial.print(a2, 3); Serial.print(" A | "); Serial.print(w2, 1); Serial.println(" W");
   Serial.print("  CH3 (A2) -> "); Serial.print(a3, 3); Serial.print(" A | "); Serial.print(w3, 1); Serial.println(" W");
-  Serial.print("  CH4 (A3) -> "); Serial.print(a4, 3); Serial.print(" A | "); Serial.print(a4 * AC_VOLTAGE, 1); Serial.println(" W");
+  Serial.print("  CH4 (A3) -> "); Serial.print(a4, 3); Serial.print(" A | "); Serial.print(w4, 1); Serial.println(" W");
 }

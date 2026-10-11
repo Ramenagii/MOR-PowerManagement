@@ -47,8 +47,13 @@ type Session = 'checking' | 'authed' | 'login' | 'offline'
  * Pacing. The ESP32 posts every 1 s, so a 5 s dashboard poll threw away four
  * out of five readings and made the console feel stalled. These are kept in
  * step with the device cadence; the device remains the clock.
+ *
+ * 500 ms rather than 1 s: the database is cloud-hosted, so each state request
+ * costs roughly 180 ms of round trip. Polling at 1 s meant the number on screen
+ * was on average ~700 ms stale on top of the device's own 1 s posting interval,
+ * which read as a lagging dashboard rather than a live one.
  */
-const DASHBOARD_POLL_MS = 1000
+const DASHBOARD_POLL_MS = 500
 
 // The intro overlay used to hold the whole app behind it for 3.6 s, which read
 // as a hang on every load. It is a brand beat, not a wait: long enough to read,
@@ -140,10 +145,30 @@ function App() {
 
   useEffect(() => {
     if (session !== 'authed') return
-    const timer = window.setInterval(() => {
-      void refreshFromBackend().catch(() => setBackendOnline(false))
-    }, DASHBOARD_POLL_MS)
-    return () => window.clearInterval(timer)
+    // Self-scheduling, not setInterval: a Neon hiccup that takes longer than
+    // the poll interval must never stack a second request on top of the first,
+    // because each late arrival triggers its own full re-render and the console
+    // reads as stuttering. Hidden tabs pause entirely instead of polling a
+    // screen nobody is looking at.
+    let cancelled = false
+    let timer = 0
+    const tick = () => {
+      if (cancelled) return
+      if (document.hidden) {
+        timer = window.setTimeout(tick, DASHBOARD_POLL_MS)
+        return
+      }
+      void refreshFromBackend()
+        .catch(() => setBackendOnline(false))
+        .finally(() => {
+          if (!cancelled) timer = window.setTimeout(tick, DASHBOARD_POLL_MS)
+        })
+    }
+    timer = window.setTimeout(tick, 0)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [session, refreshFromBackend])
 
   useEffect(() => {
