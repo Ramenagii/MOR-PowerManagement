@@ -2,7 +2,9 @@ using Mor.PowerManagement.Application.Common.Interfaces;
 
 namespace Mor.PowerManagement.Application.Power.Queries.GetPolicies;
 
-// The POL-01..POL-08 policy repository shown in the dashboard policies view.
+// The FR-01..FR-12 framework rule repository shown in the dashboard
+// framework (policies) view. Ordered by precedence, not alphabetically,
+// because precedence is the conflict-resolution order the ECA loop uses.
 public record GetPoliciesQuery : IRequest<IReadOnlyList<ControlPolicyDto>>;
 
 public record ControlPolicyDto(
@@ -10,7 +12,11 @@ public record ControlPolicyDto(
     string Code,
     string Name,
     string Condition,
-    string Action);
+    string Action,
+    string? LegacyCode,
+    string RuleFamily,
+    int Precedence,
+    bool Enabled);
 
 public class GetPoliciesQueryHandler : IRequestHandler<GetPoliciesQuery, IReadOnlyList<ControlPolicyDto>>
 {
@@ -23,7 +29,9 @@ public class GetPoliciesQueryHandler : IRequestHandler<GetPoliciesQuery, IReadOn
 
     public async Task<IReadOnlyList<ControlPolicyDto>> Handle(GetPoliciesQuery request, CancellationToken cancellationToken)
         => await _context.ControlPolicies
-            .OrderBy(p => p.Code)
-            .Select(p => new ControlPolicyDto(p.Id, p.Code, p.Name, p.Condition, p.Action))
+            .Where(p => p.Enabled)
+            .OrderBy(p => p.Precedence)
+            .Select(p => new ControlPolicyDto(
+                p.Id, p.Code, p.Name, p.Condition, p.Action, p.LegacyCode, p.RuleFamily, p.Precedence, p.Enabled))
             .ToListAsync(cancellationToken);
 }

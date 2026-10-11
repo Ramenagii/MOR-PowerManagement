@@ -183,16 +183,29 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.Property<string>("CreatedBy")
                         .HasColumnType("text");
 
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset>("LastModified")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("LastModifiedBy")
                         .HasColumnType("text");
 
+                    b.Property<string>("LegacyCode")
+                        .HasColumnType("text");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
+
+                    b.Property<int>("Precedence")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RuleFamily")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.HasKey("Id");
 

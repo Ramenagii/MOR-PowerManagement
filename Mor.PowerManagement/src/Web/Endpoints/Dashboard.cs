@@ -14,7 +14,9 @@ namespace Mor.PowerManagement.Web.Endpoints;
 // Dashboard surface used by the React SPA (cookie auth, like the Todo endpoints).
 public class Dashboard : IEndpointGroup
 {
-    private const int MaxChannels = 13;
+    // Testing rig: 5 wired channels (MUST_READ.md, until 31 Oct 2026).
+    // Restore to 13 with the full rig.
+    private const int MaxChannels = 5;
 
     public static void Map(RouteGroupBuilder groupBuilder)
     {
@@ -44,7 +46,7 @@ public class Dashboard : IEndpointGroup
     [EndpointDescription(
         "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), " +
         "aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a " +
-        "provenance label: only CH1-CH8 voltage is ever metered, from the single mains PZEM-004T on the common " +
+        "provenance label: only the 220 V channels (CH1-CH4) voltage is ever metered, from the single mains PZEM-004T on the common " +
         "feed; per-channel current and power are derived by distributing the mains total across energized " +
         "channels weighted by allowance. Empty buckets are returned as null, never zero.")]
     // BadRequest<string> rather than bare BadRequest: the 400 body names the
@@ -117,8 +119,8 @@ public class Dashboard : IEndpointGroup
         return true;
     }
 
-    [EndpointSummary("Get control policies")]
-    [EndpointDescription("Returns the POL-01..POL-08 event-condition-action policy repository.")]
+    [EndpointSummary("Get framework rules")]
+    [EndpointDescription("Returns the FR-01..FR-12 event-condition-action framework rule repository, in precedence order.")]
     public static async Task<Ok<IReadOnlyList<ControlPolicyDto>>> GetPolicies(ISender sender)
     {
         var policies = await sender.Send(new GetPoliciesQuery());
@@ -127,7 +129,7 @@ public class Dashboard : IEndpointGroup
     }
 
     [EndpointSummary("Request outlet activation")]
-    [EndpointDescription("Runs the POL-02/POL-03 pre-activation assessment for an outlet and records the decision.")]
+    [EndpointDescription("Runs the FR-04/FR-05 pre-activation assessment for an outlet and records the decision.")]
     public static async Task<Ok<OutletActivationResult>> RequestActivation(ISender sender, int id)
     {
         var result = await sender.Send(new RequestOutletActivationCommand { OutletId = id });
@@ -145,7 +147,7 @@ public class Dashboard : IEndpointGroup
     }
 
     [EndpointSummary("Apply selective load response")]
-    [EndpointDescription("Disconnects the lowest-priority energized outlets first (POL-05).")]
+    [EndpointDescription("Disconnects the lowest-priority energized outlets first (FR-07).")]
     public static async Task<Ok<SelectiveResponseResult>> ApplySelectiveResponse(ISender sender, ApplySelectiveResponseCommand? command)
     {
         var result = await sender.Send(command ?? new ApplySelectiveResponseCommand());
@@ -175,7 +177,7 @@ public class Dashboard : IEndpointGroup
 
     /// <summary>
     /// Defense-demo scenario ingest. Stores a telemetry batch through the same
-    /// IngestTelemetry command the ESP32 uses, so the policy engine evaluates it
+    /// IngestTelemetry command the ESP32 uses, so the framework engine evaluates it
     /// and the resulting events are genuine rather than written by the browser.
     ///
     /// This exists because /api/Device/telemetry is gated on the X-Device-Key
