@@ -8,12 +8,18 @@ using Mor.PowerManagement.Application.Power.Queries.GetDashboardState;
 using Mor.PowerManagement.Application.Power.Queries.GetPolicies;
 using Mor.PowerManagement.Application.Power.Queries.GetTelemetrySeries;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace Mor.PowerManagement.Web.Endpoints;
 
 // Dashboard surface used by the React SPA (cookie auth, like the Todo endpoints).
 public class Dashboard : IEndpointGroup
 {
+    private static class DashboardCacheKeys
+    {
+        public const string State = "dashboard:state";
+    }
+
     // Testing rig: 5 wired channels (MUST_READ.md, until 31 Oct 2026).
     // Restore to 13 with the full rig.
     private const int MaxChannels = 5;
@@ -35,9 +41,21 @@ public class Dashboard : IEndpointGroup
 
     [EndpointSummary("Get dashboard state")]
     [EndpointDescription("Returns outlets with live load, totals, system state, thresholds and recent events.")]
-    public static async Task<Ok<DashboardStateVm>> GetState(ISender sender)
+    public static async Task<Ok<DashboardStateVm>> GetState(ISender sender, IMemoryCache cache)
     {
-        var state = await sender.Send(new GetDashboardStateQuery());
+        // The console polls this endpoint twice a second while the database is
+        // cloud-hosted (~180 ms per round trip), so every poll paid a visible
+        // lag. A 1 s absolute-expired cache means overlapping polls from the
+        // dashboard and the inventory view share one query, and the worst case
+        // staleness is one polling interval. Mutations (activation, shed,
+        // thresholds) evict it immediately, so a button press never reads stale.
+        var state = await cache.GetOrCreateAsync(
+            DashboardCacheKeys.State,
+            async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1);
+                return await sender.Send(new GetDashboardStateQuery());
+            });
 
         return TypedResults.Ok(state);
     }
@@ -46,13 +64,14 @@ public class Dashboard : IEndpointGroup
     [EndpointDescription(
         "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), " +
         "aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a " +
-        "provenance label: only the 220 V channels (CH1-CH4) voltage is ever metered, from the single mains PZEM-004T on the common " +
-        "feed; per-channel current and power are derived by distributing the mains total across energized " +
-        "channels weighted by allowance. Empty buckets are returned as null, never zero.")]
+        "provenance label: the 220 V mains channels (CH1-CH4) report voltage from the INA226 on the mains " +
+        "feed, and their current is measured on each channel's own ADS1015 input via its branch CT sensor; " +
+        "the USB rail has no current sensor and reports its nominal rating. Empty buckets are returned as " +
+        "null, never zero.")]
     // BadRequest<string> rather than bare BadRequest: the 400 body names the
     // valid values so a bad request is self-explanatory.
     public static async Task<Results<Ok<TelemetrySeriesVm>, BadRequest<string>>> GetTelemetry(
-        ISender sender, string? window, string? channels)
+        ISender sender, IMemoryCache cache, string? window, string? channels)
     {
         // Validated before dispatch so a bad window surfaces as a plain 400
         // rather than a ValidationException through the exception handler.
@@ -71,17 +90,36 @@ public class Dashboard : IEndpointGroup
             }
         }
 
-        var series = await sender.Send(new GetTelemetrySeriesQuery
+        // Same reasoning as the state endpoint, but the aggregation queries are
+        // heavier (they bucket thousands of rows), so the TTL follows the
+        // window: short windows expire fast enough to track live load, long
+        // ones barely change between polls.
+        var cacheKey = $"dashboard:telemetry:{parsedWindow}:{string.Join(",", outletIds)}";
+        var ttl = parsedWindow switch
         {
-            Window = parsedWindow,
-            OutletIds = outletIds,
-        });
+            TelemetryWindow.Minutes15 => TimeSpan.FromSeconds(2),
+            TelemetryWindow.Hour1 => TimeSpan.FromSeconds(5),
+            TelemetryWindow.Hours6 => TimeSpan.FromSeconds(30),
+            _ => TimeSpan.FromMinutes(1),
+        };
+
+        var series = await cache.GetOrCreateAsync(
+            cacheKey,
+            async entry =>
+            {
+                entry.AbsoluteExpirationRelativeToNow = ttl;
+                return await sender.Send(new GetTelemetrySeriesQuery
+                {
+                    Window = parsedWindow,
+                    OutletIds = outletIds,
+                });
+            });
 
         return TypedResults.Ok(series);
     }
 
     // Accepts whitespace, duplicates and any order (E5); rejects anything
-    // non-numeric, out of the 1..13 rig range, or longer than the rig.
+    // non-numeric, outside the rig's 1..5 channel range, or longer than the rig.
     private static bool TryParseChannels(string value, out IReadOnlyList<int> ids, out string error)
     {
         ids = Array.Empty<int>();
@@ -130,47 +168,52 @@ public class Dashboard : IEndpointGroup
 
     [EndpointSummary("Request outlet activation")]
     [EndpointDescription("Runs the FR-04/FR-05 pre-activation assessment for an outlet and records the decision.")]
-    public static async Task<Ok<OutletActivationResult>> RequestActivation(ISender sender, int id)
+    public static async Task<Ok<OutletActivationResult>> RequestActivation(ISender sender, IMemoryCache cache, int id)
     {
         var result = await sender.Send(new RequestOutletActivationCommand { OutletId = id });
+        cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.Ok(result);
     }
 
     [EndpointSummary("Disconnect an outlet")]
     [EndpointDescription("Opens the outlet relay and zeroes its live load (manual toggle-off path).")]
-    public static async Task<Ok<int>> DisconnectOutlet(ISender sender, int id)
+    public static async Task<Ok<int>> DisconnectOutlet(ISender sender, IMemoryCache cache, int id)
     {
         var outletId = await sender.Send(new DisconnectOutletCommand { OutletId = id });
+        cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.Ok(outletId);
     }
 
     [EndpointSummary("Apply selective load response")]
     [EndpointDescription("Disconnects the lowest-priority energized outlets first (FR-07).")]
-    public static async Task<Ok<SelectiveResponseResult>> ApplySelectiveResponse(ISender sender, ApplySelectiveResponseCommand? command)
+    public static async Task<Ok<SelectiveResponseResult>> ApplySelectiveResponse(ISender sender, IMemoryCache cache, ApplySelectiveResponseCommand? command)
     {
         var result = await sender.Send(command ?? new ApplySelectiveResponseCommand());
+        cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.Ok(result);
     }
 
     [EndpointSummary("Update outlet policy")]
     [EndpointDescription("Updates priority, allowance, schedule or idle limit for an outlet. The ID in the URL must match the ID in the payload.")]
-    public static async Task<Results<NoContent, BadRequest>> UpdateOutletPolicy(ISender sender, int id, UpdateOutletPolicyCommand command)
+    public static async Task<Results<NoContent, BadRequest>> UpdateOutletPolicy(ISender sender, IMemoryCache cache, int id, UpdateOutletPolicyCommand command)
     {
         if (id != command.OutletId) return TypedResults.BadRequest();
 
         await sender.Send(command);
+        cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.NoContent();
     }
 
     [EndpointSummary("Update system thresholds")]
     [EndpointDescription("Updates capacity, warning/critical limits and standby/idle tuning values.")]
-    public static async Task<NoContent> UpdateThresholds(ISender sender, UpdateThresholdsCommand command)
+    public static async Task<NoContent> UpdateThresholds(ISender sender, IMemoryCache cache, UpdateThresholdsCommand command)
     {
         await sender.Send(command);
+        cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.NoContent();
     }
