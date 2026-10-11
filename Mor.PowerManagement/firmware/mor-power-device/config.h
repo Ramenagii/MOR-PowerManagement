@@ -17,21 +17,39 @@
 
 // ---- Wi-Fi ----
 // Credentials live in NVS flash (written on first setup), so the repo never
-// holds a real password. These are first-boot seeds only.
+// holds a real password. The values in config.h are first-boot seeds only and
+// are ignored once NVS holds a working network.
+//
+// config.local.h is where real credentials go, and it is git-ignored so a
+// password can never reach the repository by accident. Copy
+// config.local.h.example to config.local.h and fill it in.
+#if __has_include("config.local.h")
+#include "config.local.h"
+#endif
+
+#ifndef WIFI_SSID
 #define WIFI_SSID ""
+#endif
+
+#ifndef WIFI_PASS
 #define WIFI_PASS ""
+#endif
 
 // Saved-network store: up to WIFI_SLOTS SSID/password pairs in NVS.
 #define WIFI_SLOTS 3
 #define WIFI_JOIN_TIMEOUT_MS 12000UL
 
 // ---- Backend (ASP.NET Core Web API) ----
-// Cloud deployment (public, any-device access).
-#define BACKEND_HOST "mor-powermanagement.onrender.com"
-#define BACKEND_PORT 443
+// LAN bench: point the device at the PC running the backend. The cloud host
+// still runs the full 13-channel rig and re-seeds it on every start, which
+// silently overwrites the 5-channel testing configuration that MUST_READ.md
+// defines for this phase. Talking to the LAN backend keeps the testing rig and
+// the dashboard in the same place.
+#define BACKEND_HOST "192.168.18.47"
+#define BACKEND_PORT 5211
 #define BACKEND_BASE "/api"
 // 1 = https (host has a real cert), 0 = plain http for the LAN bench.
-#define BACKEND_USE_TLS 1
+#define BACKEND_USE_TLS 0
 #define DEVICE_ID "mor-prototype-01"
 // Must match the backend Device:ApiKey when key enforcement is turned on.
 #define DEVICE_API_KEY "vuZAWog0U6MnqHF58TK3DhCzO9Je2atQ"
@@ -64,9 +82,13 @@
 // physically wired to, so they are fixed by the hardware, not chosen.
 #define I2C_SDA_PIN 8
 #define I2C_SCL_PIN 9
-// Fast mode: the 600-sample acquisition pass reads four channels back to back,
-// and at 100 kHz that pass cannot complete inside a cycle.
-#define I2C_CLOCK_HZ 400000
+// I2C bus speed. 100 kHz is what this wiring sustains RIGHT NOW: measured on
+// the current hardware, a 400 kHz build found NEITHER the INA226 (0x40) nor
+// the ADS1015 (0x48), while a 100 kHz build found both. The standalone sketch
+// ran at 400 kHz earlier in the day, but the modules have since been unplugged
+// and re-seated, and the current wiring no longer tolerates the fast rate.
+// Revisit only with short leads and stronger pull-ups, verified by a bus scan.
+#define I2C_CLOCK_HZ 100000
 
 // ---- INA226: mains bus meter on the common 220 V feed ----
 // Provides the authoritative V / A / W for the whole extension, replacing the
@@ -78,6 +100,13 @@
 // Re-check with a multimeter after touching the resistor ladder and update this
 // one number — it is the only calibration constant in the voltage path.
 #define INA226_MAIN_VOLT_DIVIDER 9.46f
+
+// Shunt calibration, exactly as the validated bench sketch sets it: 8 A full
+// scale on a 10 mOhm shunt. The INA226 derives current from the shunt voltage,
+// so the wrong shunt value scales EVERY current and watt reading - this was
+// reporting 0 A and 0 W while the sensor itself was fine.
+#define INA226_MAX_CURRENT_AMPS 8.0f
+#define INA226_SHUNT_OHM 0.010f
 // Used only when the INA226 is not answering at all, so the rig still reports a
 // plausible voltage instead of reading 0 V on every channel.
 #define FALLBACK_MAINS_VOLTS 228.0f

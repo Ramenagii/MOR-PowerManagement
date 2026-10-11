@@ -104,16 +104,41 @@ void setup() {
 
   // Initialize Fast-Mode I2C (400 kHz)
   Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(400000);
+  // BENCH NOTE: 400 kHz FAILS on this wiring - the INA226 stops acknowledging
+  // and the sketch halts with "INA226 module not detected at 0x40". The breadboard
+  // Dupont runs with 4.7k-10k pull-ups, which cannot meet the 400 kHz rise-time
+  // budget. 100 kHz (the ESP32 default) reads both sensors reliably, and the
+  // 600-sample acquisition pass has plenty of headroom at that rate.
+  // To go back to 400 kHz: shorten the leads to under 10 cm and fit ~2.2k
+  // pull-ups, then verify before trusting the readings.
+  Wire.setClock(100000);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
+  // Bus inventory first. When a sensor goes missing this answers the only
+  // question that matters - is ANYTHING on the bus - instead of halting on a
+  // single NACK with no diagnosis.
+  uint8_t foundDevices = 0;
+  for (uint8_t addr = 0x08; addr <= 0x77; addr++) {
+    Wire.beginTransmission(addr);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("i2c: device responding at 0x%02X\n", addr);
+      foundDevices++;
+    }
+  }
+  if (foundDevices == 0) {
+    Serial.println("i2c: NOTHING responded. Check: sensor VCC (3.3V), common GND,");
+    Serial.println("      SDA->GPIO8 / SCL->GPIO9 continuity, and that pull-ups exist.");
+  }
+
   // Initialize INA226 Power Monitor (Rob Tillaart Library)
   if (!ina226.begin()) {
-    Serial.println("Error: INA226 module not detected at 0x40!");
-    while (1) { delay(10); }
+    // Reported, not fatal: the branch CTs are on the other device and are still
+    // worth reading. Mains values stay at whatever the last successful read was.
+    Serial.println("Error: INA226 module not detected at 0x40! (branch CTs may still work)");
+  } else {
+    ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
   }
-  ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
 
   // Initialize ADS1015 ADC for ZMCT103C sensors
   if (!ads.begin(ADS1015_ADDRESS, &Wire)) {

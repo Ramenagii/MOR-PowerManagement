@@ -793,9 +793,28 @@ uint8_t scanI2CBus(const char* label) {
 void setup() {
   Serial.begin(115200);
   Serial.println("\nMOR power-management prototype starting");
-#if !RELAY_OUTPUT_ENABLED || !RULES_ENABLED || !TELEMETRY_ENABLED
-  Serial.println("RAW TEST MODE: relays, rules and telemetry are disabled - console only");
+// Report exactly which subsystems are off. An OR condition with a fixed sentence
+// claimed telemetry was disabled even when only the relays were, which sent the
+// reader looking for the wrong fault.
+  {
+    Serial.print("MODE:");
+#if !RELAY_OUTPUT_ENABLED
+    Serial.print(" relays OFF");
+#else
+    Serial.print(" relays ON");
 #endif
+#if !RULES_ENABLED
+    Serial.print(", rules OFF");
+#else
+    Serial.print(", rules ON");
+#endif
+#if !TELEMETRY_ENABLED
+    Serial.print(", telemetry OFF");
+#else
+    Serial.print(", telemetry ON");
+#endif
+    Serial.println();
+  }
 
   // Restore the stored policy BEFORE touching the relay pins, so each channel
   // is driven straight to its last desired state. (The old order powered every
@@ -858,7 +877,8 @@ void setup() {
     Serial.println("--- pin hunt done ---");
     Wire.end();
     delay(20);
-    Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(I2C_CLOCK_HZ);
     delay(50);
   }
 #endif
@@ -882,11 +902,12 @@ void setup() {
                   INA226_ADDR, I2C_SDA_PIN, I2C_SCL_PIN, FALLBACK_MAINS_VOLTS);
     mainsMeterOnline = false;
   } else {
-    // configure(shunt_ohm, current_LSB_mA, zero_offset_mA, bus_V_scaling_e4).
-    // The shunt is 0.1 ohm / 100 mA LSB. Bus scaling is left at 1.0 (10000)
-    // because the 220 V divider is applied in firmware; the field is a uint16
-    // scaled by 1e4 and cannot represent a ratio above 6.5535.
-    mainsMeter.configure(0.1, 0.1, 0, 10000);
+    // Shunt calibration: 8 A full scale on a 10 mOhm shunt, matching the
+    // validated bench sketch. The INA226 measures current from the shunt
+    // voltage, so an incorrect shunt scales every current and watt figure.
+    // (configure() was previously used here with a 0.1 ohm / 100 mA LSB pair
+    // and produced 0 A and 0 W on every channel.)
+    mainsMeter.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
     mainsMeterOnline = true;
     Serial.printf("INA226 online at 0x%02X (mains meter, divider %.1fx)\n",
                   INA226_ADDR, INA226_MAIN_VOLT_DIVIDER);
