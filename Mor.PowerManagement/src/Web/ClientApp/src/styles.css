@@ -2530,6 +2530,22 @@ body {
   background: var(--tertiary-container);
 }
 
+/* Testing-rig badge in the top bar (MUST_READ.md, until 31 Oct 2026). */
+.app-rig-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--tertiary-container);
+  border-radius: var(--radius);
+  background: var(--tertiary-container);
+  color: var(--on-tertiary-container, var(--ink));
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .app-state-pill.critical .app-state-dot {
   background: var(--error);
 }

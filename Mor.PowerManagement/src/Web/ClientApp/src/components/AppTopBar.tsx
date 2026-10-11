@@ -1,4 +1,4 @@
-import { Bolt, Power } from 'lucide-react'
+import { Bolt, FlaskConical, Power } from 'lucide-react'
 import type { AppView } from '../types/dashboard'
 
 /**
@@ -8,11 +8,20 @@ import type { AppView } from '../types/dashboard'
  * top of the viewport rather than a collapsed drawer: with six views a drawer
  * costs two clicks per navigation and hides the whole map of the app. The
  * tab set is kept in step with ViewMenu's ordering so both read the same.
+ *
+ * Ported to the Ant standard: flat-first surface, hairline bottom rule,
+ * underline tabs (active = primary text + a 2px primary baseline), and every
+ * control on the shared 32px (h-8) height box so the bar reads as one row.
+ *
+ * The bar itself stays 60px tall rather than shrinking to its 32px controls:
+ * ChannelInventoryView (already ported, not editable here) offsets its own
+ * content by --page-margin + 44px through the legacy `.design-main` rule, which
+ * assumes a 60px bar. Trimming the bar would open a 20px hole under that view.
  */
 const TABS: Array<{ id: AppView; label: string }> = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'channels', label: 'Channel Inventory' },
-  { id: 'telemetry', label: 'Telemetry & Analytics' },
+  { id: 'telemetry', label: 'Telemetry' },
   { id: 'admin', label: 'Policy Admin' },
   { id: 'policies', label: 'Policies' },
   { id: 'hardware', label: 'Hardware' },
@@ -26,6 +35,26 @@ type AppTopBarProps = {
   userEmail: string | null
 }
 
+/**
+ * Status colour for the load itself. Offline never borrows the load colour —
+ * an unknown state must not read as a healthy one, so it falls back to the
+ * tertiary token exactly as the legacy bar did.
+ *
+ * The normal/healthy dot is deliberately NOT green. Green is not a state
+ * colour anywhere in this console: "nothing is wrong" is the absence of an
+ * alarm, so it wears the neutral outline token and the bar keeps amber and
+ * red as the only two things it can shout about. `.ant-dot-normal` is still
+ * `bg-secondary` in ant.css, which is shared and deliberately untouched, so
+ * the neutral is applied here as a utility (the utilities layer wins over the
+ * components layer ant-dot lives in) rather than by editing shared CSS.
+ */
+function stateDot(systemState: string, deviceOnline: boolean): string {
+  if (!deviceOnline) return 'ant-dot ant-dot-warning'
+  if (systemState === 'Critical') return 'ant-dot ant-dot-critical'
+  if (systemState === 'Warning') return 'ant-dot ant-dot-warning'
+  return 'ant-dot bg-outline-variant'
+}
+
 export function AppTopBar({
   activeView,
   onChange,
@@ -33,59 +62,97 @@ export function AppTopBar({
   deviceOnline,
   userEmail,
 }: AppTopBarProps) {
-  const tone = systemState.toLowerCase()
-
   return (
-    <header className="app-topbar">
-      <div className="app-topbar-brand">
-        <span className="app-topbar-mark" aria-hidden="true">
-          <Bolt size={20} />
-        </span>
-        <span className="app-topbar-title">MOR Power</span>
-        <span className="app-topbar-version">v2.4</span>
-      </div>
-
-      <nav className="app-topbar-tabs" aria-label="Console sections">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`app-topbar-tab ${activeView === tab.id ? 'is-active' : ''}`}
-            aria-current={activeView === tab.id ? 'page' : undefined}
-            onClick={() => onChange(tab.id)}
+    <header className="sticky top-0 z-40 h-[60px] border-b border-surface-container bg-surface-container-lowest">
+      <div className="mx-auto flex h-full w-full max-w-[1440px] items-center gap-space-md px-margin">
+        {/* ---- Identity ---------------------------------------------------- */}
+        <div className="flex shrink-0 items-center gap-space-sm">
+          <span
+            className="grid h-8 w-8 place-items-center rounded-md bg-primary text-on-primary"
+            aria-hidden="true"
           >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+            <Bolt size={18} />
+          </span>
+          <span className="hidden whitespace-nowrap font-title-lg text-title-lg font-semibold text-on-surface sm:inline">
+            MOR Power
+          </span>
+          <span className="hidden whitespace-nowrap rounded-sm bg-surface-container px-1.5 py-0.5 font-metric-value text-metric-value text-on-surface-variant md:inline">
+            v2.4
+          </span>
+        </div>
 
-      <div className="app-topbar-spacer" />
-
-      <div className="app-topbar-actions">
-        {/* Device state is reported honestly: offline means no recent telemetry,
-            and the design's "System Normal" pill must not imply otherwise. */}
-        <span
-          className={`app-state-pill ${deviceOnline ? tone : 'warning'}`}
-          title={
-            deviceOnline
-              ? 'ESP32 reported telemetry recently'
-              : 'No ESP32 telemetry in the last 30 seconds'
-          }
+        {/* ---- Tabs -------------------------------------------------------- */}
+        <nav
+          aria-label="Console sections"
+          className="flex h-full min-w-0 flex-1 items-stretch gap-space-lg overflow-x-auto"
         >
-          <span className="app-state-dot" />
-          {deviceOnline ? `System ${systemState}` : 'Device offline'}
-        </span>
+          {TABS.map((tab) => {
+            const active = activeView === tab.id
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                aria-current={active ? 'page' : undefined}
+                onClick={() => onChange(tab.id)}
+                className={`shrink-0 whitespace-nowrap border-b-2 font-title-md text-title-md transition-colors ${
+                  active
+                    ? 'border-primary font-semibold text-primary'
+                    : 'border-transparent font-medium text-on-surface-variant hover:border-outline-variant hover:text-primary'
+                }`}
+              >
+                {tab.label}
+              </button>
+            )
+          })}
+        </nav>
 
-        {/*
-          The design shows an "Emergency Trip" button. There is no such command
-          in the API, and wiring a fake one would put a false control on the
-          defense screen. POL-01 fault isolation is reachable through the
-          scenario panel instead, so the button is omitted rather than faked.
-        */}
+        {/* ---- Status ------------------------------------------------------ */}
+        <div className="flex shrink-0 items-center gap-space-sm">
+          {/* Testing rig badge (MUST_READ.md): 5 channels, P_limit capped at
+              1200 W, in force until 31 Oct 2026. Removed with the rig restore.
+              It is a configuration fact, not an alarm, so it wears a neutral
+              pill: a warning-coloured tag here would read as a live fault and
+              sit permanently in the operator's peripheral vision. */}
+          <span
+            className="hidden h-5 items-center gap-1.5 whitespace-nowrap rounded-sm border border-outline-variant bg-surface-container px-2 font-body-sm text-body-sm text-on-surface-variant lg:inline-flex"
+            title="Testing configuration until 31 Oct 2026"
+          >
+            <FlaskConical size={12} aria-hidden="true" />
+            Test rig ·{' '}
+            <span className="font-metric-value text-metric-value">5 ch · P_limit 1200 W</span>
+          </span>
 
-        <span className="app-avatar" title={userEmail ?? 'Signed out'} aria-hidden="true">
-          {userEmail ? userEmail.slice(0, 1).toUpperCase() : <Power size={16} />}
-        </span>
+          {/* Device state is reported honestly: offline means no recent telemetry,
+              and the design's "System Normal" pill must not imply otherwise. */}
+          <span
+            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-outline-variant bg-surface-container-low px-2.5 font-body-sm text-body-sm text-on-surface"
+            title={
+              deviceOnline
+                ? 'ESP32 reported telemetry recently'
+                : 'No ESP32 telemetry in the last 30 seconds'
+            }
+          >
+            <span className={stateDot(systemState, deviceOnline)} aria-hidden="true" />
+            <span className="hidden sm:inline">
+              {deviceOnline ? `System ${systemState}` : 'Device offline'}
+            </span>
+            <span className="sm:hidden">{deviceOnline ? systemState : 'Offline'}</span>
+          </span>
+
+          {/*
+            The design shows an "Emergency Trip" button. There is no such command
+            in the API, and wiring a fake one would put a false control on the
+            defense screen. FR-01 fault isolation is reachable through the
+            scenario panel instead, so the button is omitted rather than faked.
+          */}
+
+          <span
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary font-title-md text-title-md font-semibold text-on-primary"
+            title={userEmail ?? 'Signed out'}
+          >
+            {userEmail ? userEmail.slice(0, 1).toUpperCase() : <Power size={16} aria-hidden="true" />}
+          </span>
+        </div>
       </div>
     </header>
   )
