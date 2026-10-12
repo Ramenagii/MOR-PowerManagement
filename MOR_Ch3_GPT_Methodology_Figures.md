@@ -120,7 +120,7 @@ flowchart TB
         REPO[("Policy Repository<br/>P_limit, priority_level,<br/>standby timeout")]
         TEL[("Telemetry store<br/>P_total, relay states")]
         LOG[("Event log<br/>activation denied, load shed")]
-        AUTH["Identity and roles<br/>Administrator, Student Assistant"]
+        AUTH["Configuration validation<br/>outlet roles: instructor-use,<br/>student-use, general-use"]
         AUTH --> REPO
     end
 
@@ -195,71 +195,85 @@ flowchart LR
 
 ## Figure 11 — Proposed System Input–Process–Output Flowchart
 
+> **Revised after verification.** The first draft used GPT's output-state vocabulary
+> (`Activation-Pending`, `ON-Unverified`, `ON-Verified`, `Fault/Restricted`) and a
+> priority/contribution tie-break rule. Verified against the Ch. 3 Revision tab: every one of those
+> terms occurs **zero times**, and Table 5 defines only *action* identifiers. That version was not
+> justifiable from your Chapter 3, so it has been rewritten below using only constructs your
+> manuscript actually defines — POL-01…POL-08, the ACT_* action space, `P_total`/`P_limit`,
+> the 500 ms inrush stabilisation, and the precedence hierarchy.
+>
+> If you *want* the richer state model, it has to be written into §3.5.1.3 first, and then this
+> figure can be redrawn to match. A figure cannot be the only place a design exists.
+
 Inputs and authorization on the left, validity checks and activation in the centre, selective response
-and physical verification on the right. This figure specifies **required** behaviour.
+and physical verification on the right.
 
 ```mermaid
 flowchart LR
-    subgraph L["INPUT AND AUTHORIZATION"]
-        direction TB
-        I1[/"Physical electrical measurements"/]
-        I2[/"Operator request or configuration"/]
-        I3[/"Schedule boundary or idle timer"/]
-        AUTH["Authorize role and action<br/>Administrator, Student Assistant"]
-        I2 --> AUTH
-        I3 --> AUTH
+    subgraph L["INPUTS AND CONFIGURATION"]
+        I1[/"Aggregate measurement<br/>PZEM-004T"/]
+        I2[/"Branch measurement<br/>ZMCT103C, node i"/]
+        I3[/"Operator configuration<br/>outlet role and O_priority_i"/]
+        I4[/"Idle timer<br/>standby_timeout_min"/]
+        POL["Policy Repository<br/>P_limit, priority_level,<br/>standby timeout"]
+        I3 --> POL
+        POL --> I1
     end
 
-    subgraph M["VALIDITY CHECKS AND ACTIVATION"]
-        direction TB
-        V1{"Reading fresh and valid?"}
-        V2{"Fault or ineligible<br/>schedule state?"}
-        V3{"Within current bound<br/>and allowance?"}
-        V4["Reserve one pending<br/>activation"]
-        V5[/"Issue activation command"/]
-        V6["Activation-Pending<br/>to ON-Unverified"]
-        V1 -- "No" --> VX["Reject and log reason"]
-        V2 -- "Yes" --> VX
-        V3 -- "No" --> VX
+    subgraph M["VALIDITY AND ACTIVATION - precedence tiers 1 and 3"]
+        V1{"POL-01<br/>S_fault == TRUE?"}
+        V2["ACT_FAULT<br/>open all relays, isolate,<br/>set lockout flags"]
+        V3{"POL-02 / POL-03<br/>headroom available?"}
+        V4["ACT_ALLOW(i)<br/>close relay i"]
+        V5["ACT_DENY(i)<br/>log insufficient capacity"]
+        V6["POL-04<br/>wait 500 ms inrush stabilisation,<br/>re-read P_total"]
+        V7{"P_total > P_limit?"}
+        V8["ACT_SHED(i)<br/>isolate the offending load"]
         V1 -- "Yes" --> V2
-        V2 -- "No" --> V3
-        V3 -- "Yes" --> V4 --> V5 --> V6
+        V1 -- "No" --> V3
+        V3 -- "Yes" --> V4 --> V6 --> V7
+        V3 -- "No" --> V5
+        V7 -- "Yes" --> V8
     end
 
-    subgraph R["SELECTIVE RESPONSE AND VERIFICATION"]
-        direction TB
-        S1{"Over operating limit?"}
-        S2["Apply fault precedence and<br/>routine-interruption eligibility"]
-        S3["Sort candidates deterministically<br/>priority, then contribution, then output ID"]
-        S4["Command one output<br/>and verify before the next"]
-        S5{"Limit restored?"}
-        S6["Report unresolved excess<br/>escalate; do not claim protection"]
-        SV{"Fresh post-command<br/>observation matches?"}
-        SV -- "Yes" --> OK["ON-Verified, release reservation"]
-        SV -- "No" --> CORR["Apply approved corrective action"]
-        S1 -- "No" --> OK2["Continue normal operation"]
-        S1 -- "Yes" --> S2 --> S3 --> S4 --> S5
-        S5 -- "Yes" --> OK2
-        S5 -- "No" --> S6
+    subgraph R["SELECTIVE RESPONSE - precedence tier 2"]
+        S1{"POL-05 / POL-06 / POL-07<br/>P_total > P_limit?"}
+        S2["ACT_SHED(i) where O_priority_i == 1<br/>low priority first"]
+        S3{"Over limit<br/>after stabilisation?"}
+        S4["ACT_SHED(i) where O_priority_i == 2<br/>medium priority"]
+        S5["ACT_PRESERVE(i) where O_priority_i == 3<br/>high priority insulated"]
+        S6["POL-08 standby management<br/>ACT_SHED(i) after idle timeout"]
+        S1 -- "Yes" --> S2 --> S3
+        S3 -- "Yes" --> S4 --> S5
+        S1 -- "No" --> S6
     end
 
-    LG[("Write /logs/events<br/>connector L")]
-    VER{"Verification path<br/>connector V"}
-    ACQ[/"Next acquisition cycle<br/>connector A"/]
+    OUT["Push telemetry to Firebase<br/>P_total, P_branch_i, relay states,<br/>fault and lockout flags"]
+    LGN[("Write /logs/events<br/>ACTIVATION_DENIED, LOAD_SHED")]
 
     I1 --> V1
-    AUTH --> V1
-    I1 --> S1
-    VX --> LG
-    OK --> LG
-    OK2 --> LG
-    S6 --> LG
-    CORR --> LG
-    V6 --> VER
-    VER --> SV
-    SV --> ACQ
-    ACQ -.->|"acquisition continues"| I1
-    LG --> ACQ
+    I2 --> V1
+    I4 --> S6
+    V1 --> OUT
+    V2 --> OUT
+    V3 --> OUT
+    V4 --> OUT
+    V5 --> OUT
+    V6 --> OUT
+    V7 --> OUT
+    V8 --> OUT
+    S1 --> OUT
+    S2 --> OUT
+    S3 --> OUT
+    S4 --> OUT
+    S5 --> OUT
+    S6 --> OUT
+    OUT --> LGN
+    V5 --> LGN
+    V8 --> LGN
+    S2 --> LGN
+    S4 --> LGN
 ```
 
 > Connectors **A**, **V**, **L** are Mermaid-only labels standing in for the off-page connectors GPT
