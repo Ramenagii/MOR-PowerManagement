@@ -1,38 +1,3 @@
-/*
-  ============================================================================
-  MOR / LoadWise — ESP32-S3 power monitoring firmware
-  ============================================================================
-
-  Built directly on the validated bench sketch. The measurement engine below is
-  the same code that produced the proven readings; this file adds only what the
-  dashboard needs on top of it:
-
-    1. Wi-Fi (credentials from config.local.h, git-ignored)
-    2. POST /api/Device/telemetry every second
-    3. GET  /api/Device/config to pick up P_limit and priorities
-
-  Deliberately NOT in this file, during the sensing phase:
-    - relay driving        (RELAY_OUTPUT_ENABLED 0)
-    - FR-01..FR-12 rules   (RULES_ENABLED 0)
-
-  Because nothing here trips a protective rule, the shared I2C bus between the
-  core-0 ADS1015 task and the core-1 INA226 read cannot cause a fault - a
-  garbled transaction would at worst print or report one odd sample.
-
-  Hardware
-    INA226  0x40   voltage reference (24 V rail behind a divider) + DC monitoring
-    ADS1015 0x48   4-channel ADC, one ZMCT103C per mains branch (CH1-CH4)
-    I2C     SDA = GPIO 8, SCL = GPIO 9
-
-  Flash
-    arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-    arduino-cli upload  -p COM12 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-
-  Build with USB CDC On Boot DISABLED: with it enabled, Serial is routed to the
-  ESP32-S3 native USB port instead of the CH343 bridge the board is using.
-  ============================================================================
-*/
-
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -117,9 +82,13 @@ void setup() {
   // Create Mutex for cross-core memory protection
   dataMutex = xSemaphoreCreateMutex();
 
-  // Initialize Fast-Mode I2C (400 kHz)
+  // Initialize Standard-Mode I2C (100 kHz).
+  // config.h:81-86 records a 400 kHz build finding NEITHER the INA226 (0x40)
+  // nor the ADS1015 (0x48) on the current bench wiring, while a 100 kHz build
+  // found both. Fast mode silently cost us both sensors, so the bus runs
+  // standard mode. Raise only after a re-test confirms enumeration.
   Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(400000);
+  Wire.setClock(100000);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
@@ -216,19 +185,27 @@ void sensorTask(void *pvParameters) {
     float raw3 = applyPiecewiseCalibration(readChannelRMS(2, CALIBRATION_FACTOR));
     float raw4 = applyPiecewiseCalibration(readChannelRMS(3, CALIBRATION_FACTOR));
 
-    // Safely update shared global states under mutex protection
+    // Safely update shared global states under mutex protection.
+    // Watts use the MEASURED mains voltage from the INA226 divider, not the
+    // AC_VOLTAGE nominal. MUST_READ.md:422-425 records the old behaviour:
+    // watts were amps x 238 V while the bench meter read ~228 V, biasing every
+    // power figure high by roughly 4%. AC_VOLTAGE is now only a fallback for
+    // when the INA226 is not answering.
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      float vMeasured = inaBusVoltage_V * INA226_MAIN_VOLT_DIVIDER;
+      if (!(vMeasured > 1.0f)) vMeasured = AC_VOLTAGE;
+
       currentAmpsCH1 = updateFilteredAmps(raw1, currentAmpsCH1);
-      wattageCH1 = currentAmpsCH1 * AC_VOLTAGE;
+      wattageCH1 = currentAmpsCH1 * vMeasured;
 
       currentAmpsCH2 = updateFilteredAmps(raw2, currentAmpsCH2);
-      wattageCH2 = currentAmpsCH2 * AC_VOLTAGE;
+      wattageCH2 = currentAmpsCH2 * vMeasured;
 
       currentAmpsCH3 = updateFilteredAmps(raw3, currentAmpsCH3);
-      wattageCH3 = currentAmpsCH3 * AC_VOLTAGE;
+      wattageCH3 = currentAmpsCH3 * vMeasured;
 
       currentAmpsCH4 = updateFilteredAmps(raw4, currentAmpsCH4);
-      wattageCH4 = currentAmpsCH4 * AC_VOLTAGE;
+      wattageCH4 = currentAmpsCH4 * vMeasured;
 
       xSemaphoreGive(dataMutex);
     }
@@ -349,7 +326,11 @@ bool postTelemetry() {
 
   JsonDocument doc;
   doc["deviceId"] = DEVICE_ID;
-  doc["sFault"] = false;                  // no protective rules run yet
+  // Field name MUST match IngestTelemetryCommand.FaultFlag
+  // (IngestTelemetry.cs:33). Posting "sFault" never bound, so the fault branch
+  // at IngestTelemetry.cs:151 was unreachable and the device could not report
+  // a fault even when it had detected one.
+  doc["FaultFlag"] = false;               // no protective rules run yet
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   JsonArray readings = doc["readings"].to<JsonArray>();
@@ -403,6 +384,12 @@ bool syncConfig() {
   WiFiClient client;
   HTTPClient http;
   if (!http.begin(client, backendUrl("/Device/config"))) return false;
+
+  // DeviceApiKeyEndpointFilter guards this whole endpoint group, so the GET
+  // needs the same credential the POST already sends. Without it the call
+  // returned 401 and the device silently kept its compiled-in defaults,
+  // which is how the console and the device could disagree about P_limit.
+  if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
 
   int code = http.GET();
   if (code != 200) {
