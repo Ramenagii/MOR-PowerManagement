@@ -33,6 +33,7 @@ import {
   toAreaPath,
   toPaths,
 } from '../utils/telemetry'
+import { Disclosure } from './Disclosure'
 
 export type ScenarioNotice = {
   /**
@@ -104,11 +105,38 @@ type DispatchMode = 'injection' | 'readonly'
 type VectorSpec = {
   id: string
   name: string
-  /** What this vector physically does to the rig, in the terms the builder uses. */
+  /**
+   * What this vector physically does to the rig, in the terms the builder uses.
+   * Card copy, so it is two lines: the sentence it was cut from is kept whole
+   * in `detail` and printed once under the grid.
+   */
   intent: string
-  /** The honest expectation — a claim about the engine, never a promised number. */
-  expectation: string
-  /** The endpoint this vector really hits. */
+  /**
+   * The honest expectation — a claim about the engine, never a promised
+   * number. Card copy, two lines, same deal with `detail`.
+   */
+  expects: string
+  /**
+   * The full mechanism sentence and the full expectation sentence, verbatim.
+   *
+   * These are the words the card's two-line versions were cut from. They are
+   * not shortened into nothing and not replaced with a friendlier claim: they
+   * moved into the "Full vector brief" disclosure under the grid, so trimming
+   * the card is a relocation rather than a deletion, and the hedge is intact —
+   * "should" is still "should" everywhere it appears below.
+   */
+  detail: string
+  /**
+   * The endpoint this vector really hits, as one string.
+   *
+   * Deliberately not split into a method line and a path line: the split was
+   * tried and it is worse. Printing `POST` alone leaves the full route on a
+   * line that is one token too long for SIM-02's activation path at console
+   * widths, which pushed that card's list a line past the other five. As one
+   * `break-all` string both routes break to two lines at every width the
+   * console is actually laid out at, and the characters are unchanged either
+   * way.
+   */
   endpoint: string
   icon: LucideIcon
   /** Plain descriptor. Metadata, so it is neutral text — never a coloured pill. */
@@ -683,9 +711,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-01',
         name: 'Normal operation baseline',
-        intent:
-          'Replays every energized channel at the draw it is already reporting, with no injected watts and no shed channels.',
-        expectation: 'The engine should store the batch and raise nothing, because no threshold is crossed.',
+        intent: 'Replays every energized channel at its reported draw. No injected watts, no sheds.',
+        expects: 'Engine should store the batch and raise nothing; no threshold crossed.',
+        detail:
+          'Replays every energized channel at the draw it is already reporting, with no injected watts and no shed channels. The engine should store the batch and raise nothing, because no threshold is crossed.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: CircleCheckBig,
         label: 'Nominal',
@@ -696,10 +725,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-02',
         name: 'Activation request',
-        intent:
-          'Sends a real activation request for the bench outlet through the outlet activation route, with no telemetry batch.',
-        expectation:
-          'The backend admits or denies it from its own projected-load check. If it is denied, the reason comes back in the event log.',
+        intent: 'Sends a real activation request for the bench outlet. No telemetry batch.',
+        expects: 'Admitted or denied by the server’s own projected-load check.',
+        detail:
+          'Sends a real activation request for the bench outlet through the outlet activation route, with no telemetry batch. The backend admits or denies it from its own projected-load check. If it is denied, the reason comes back in the event log.',
         endpoint: 'POST /api/Dashboard/outlets/{id}/activation',
         icon: Zap,
         label: 'Capacity gate',
@@ -709,10 +738,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-03',
         name: 'Capacity block rehearsal',
-        intent:
-          'Drives every non-disconnected channel to 82% of its current draw, so the rig sits inside the warning band before the next activation attempt.',
-        expectation:
-          'A following activation request should be genuinely refused, because the load really is near the threshold.',
+        intent: 'Drives every live channel to 82% of its draw, inside the warning band.',
+        expects: 'The next activation request is refused — the load really is near the limit.',
+        detail:
+          'Drives every non-disconnected channel to 82% of its current draw, so the rig sits inside the warning band before the next activation attempt. A following activation request should be genuinely refused, because the load really is near the threshold.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: ShieldCheck,
         label: 'Warning band',
@@ -723,10 +752,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-04',
         name: 'Post-activation overload',
-        intent:
-          'Takes every live channel to 105% of its draw and adds a 900 W injection on one channel, forcing the measured total past the critical threshold.',
-        expectation:
-          'The server sheds on its own terms. Which channels it drops, and what it reports as total watts, is the engine\'s answer — not this screen\'s.',
+        intent: 'Takes every live channel to 105% of its draw and adds a 900 W injection on one channel.',
+        expects: 'The server sheds on its own terms; which channels drop is the engine’s answer.',
+        detail:
+          'Takes every live channel to 105% of its draw and adds a 900 W injection on one channel, forcing the measured total past the critical threshold. The server sheds on its own terms. Which channels it drops, and what it reports as total watts, is the engine\'s answer — not this screen\'s.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: TriangleAlert,
         label: 'Critical shed',
@@ -737,9 +766,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-05',
         name: 'Selective response',
-        intent:
-          'Sheds the two lowest-priority energized channels, ordered by the same Low → Critical rank the policy engine uses.',
-        expectation: 'Load drops by exactly the shed channels\' contribution. The remainder stays energized.',
+        intent: 'Sheds the two lowest-priority energized channels, in the engine’s own rank order.',
+        expects: 'Load drops by exactly the shed channels; the rest stay energized.',
+        detail:
+          'Sheds the two lowest-priority energized channels, ordered by the same Low → Critical rank the policy engine uses. Load drops by exactly the shed channels\' contribution. The remainder stays energized.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: ClipboardList,
         label: 'Priority shed',
@@ -749,10 +779,10 @@ export function ScenarioPanel({
       {
         id: 'SIM-06',
         name: 'Idle timeout cutoff',
-        intent:
-          'Reports the low-draw channels at 5% of their draw and closes their relays, so the server\'s idle timer sees a genuine low-load period.',
-        expectation:
-          'The idle timer runs on the server\'s own clock. This vector supplies the readings it reads; it cannot shorten the wait.',
+        intent: 'Reports low-draw channels at 5% of their draw and closes their relays.',
+        expects: 'The idle timer runs on the server’s clock; this cannot shorten the wait.',
+        detail:
+          'Reports the low-draw channels at 5% of their draw and closes their relays, so the server\'s idle timer sees a genuine low-load period. The idle timer runs on the server\'s own clock. This vector supplies the readings it reads; it cannot shorten the wait.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: Power,
         label: 'Standby',
@@ -906,9 +936,9 @@ export function ScenarioPanel({
                   return (
                     <article
                       key={vector.id}
-                      className="flex flex-col justify-between gap-space-md rounded-md border border-outline-variant bg-surface-container-low p-space-md transition-colors hover:bg-surface-container"
+                      className="flex h-full flex-col gap-space-sm rounded-md border border-outline-variant bg-surface-container-low p-space-md transition-colors hover:bg-surface-container"
                     >
-                      <div className="flex flex-col gap-1.5">
+                      <div className="flex flex-col gap-1">
                         <div className="flex items-center justify-between gap-space-sm">
                           <span className="font-metric-value text-metric-value font-semibold uppercase tracking-wide text-on-surface">
                             {vector.id}
@@ -925,26 +955,40 @@ export function ScenarioPanel({
                           </span>
                         </div>
                         <h3 className="font-title-md text-title-md text-on-surface">{vector.name}</h3>
-                        <p className="font-body-sm text-body-sm text-on-surface-variant">{vector.intent}</p>
-                        <div className="mt-1 flex flex-col gap-1 rounded bg-surface-container-lowest px-space-sm py-2">
-                          <div className="flex justify-between gap-space-sm">
-                            <span className="font-body-sm text-body-sm text-outline">Expects</span>
-                            <span className="max-w-[26ch] text-right font-body-sm text-body-sm text-on-surface-variant">
-                              {vector.expectation}
-                            </span>
-                          </div>
-                          <div className="flex justify-between gap-space-sm">
-                            <span className="font-body-sm text-body-sm text-outline">Endpoint</span>
-                            <span className="font-metric-value text-metric-value text-on-surface">
-                              {vector.endpoint}
-                            </span>
-                          </div>
-                        </div>
+                        {/* Clamped at two lines. A card that grows to its longest
+                            sentence makes every other card in the row grow with
+                            it, which is how a six-card grid ended up taller than
+                            the trace beside it. The full sentence is in the
+                            brief under the grid. */}
+                        <p className="line-clamp-2 font-body-sm text-body-sm text-on-surface-variant">
+                          {vector.intent}
+                        </p>
                       </div>
 
+                      {/* A definition list, not two right-aligned paragraphs.
+                          Values sit left-aligned in a fixed-width key column, so
+                          the rows read down the card and every card's list starts
+                          at the same x — the old 26ch right-aligned cell wrapped
+                          to a different number of lines per vector, which is what
+                          made the row height unpredictable. Every value is capped
+                          at two lines, so no vector's copy can dictate the row. */}
+                      <dl className="grid grid-cols-[54px_minmax(0,1fr)] gap-x-2 gap-y-1.5 rounded bg-surface-container-lowest px-space-sm py-2">
+                        <dt className="font-body-sm text-body-sm text-outline">Expects</dt>
+                        <dd className="line-clamp-2 font-body-sm text-body-sm text-on-surface-variant">
+                          {vector.expects}
+                        </dd>
+                        <dt className="font-body-sm text-body-sm text-outline">Endpoint</dt>
+                        <dd className="break-all font-metric-value text-metric-value text-on-surface">
+                          {vector.endpoint}
+                        </dd>
+                      </dl>
+
+                      {/* `mt-auto`, not `justify-between` on a two-child column:
+                          the button belongs to the bottom edge of the card, so
+                          every row's six run buttons sit on one line. */}
                       <button
                         type="button"
-                        className={`${vector.buttonClass} w-full`}
+                        className={`${vector.buttonClass} mt-auto w-full`}
                         disabled={controlsDisabled}
                         onClick={() => requestRun(vector)}
                       >
@@ -955,6 +999,28 @@ export function ScenarioPanel({
                   )
                 })}
               </div>
+
+              {/* The sentences the card copy was cut from, in full and verbatim,
+                  printed once for all six vectors. The clamp above is a ceiling
+                  nothing currently reaches; this is where the wording survives if
+                  a future string grows past it. */}
+              <Disclosure
+                label="Full vector brief"
+                summary={`What each vector does to the rig and what the engine should do back — ${vectors.length} vectors, untrimmed`}
+              >
+                <dl className="flex flex-col gap-3">
+                  {vectors.map((vector) => (
+                    <div key={`brief-${vector.id}`} className="flex flex-col gap-0.5">
+                      <dt className="font-metric-value text-metric-value font-semibold uppercase tracking-wide text-on-surface">
+                        {`${vector.id} · ${vector.name}`}
+                      </dt>
+                      <dd className="font-body-sm text-body-sm text-on-surface-variant">
+                        {vector.detail}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </Disclosure>
 
               {dispatchBlocked && (
                 <p className="wash-advisory flex items-start gap-space-sm px-space-md py-space-sm font-body-sm text-body-sm text-on-surface">

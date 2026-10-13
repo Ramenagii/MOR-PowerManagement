@@ -5,7 +5,6 @@ import {
   ApiError,
   activateOutlet,
   checkSession,
-  disconnectOutlet,
   fetchDashboardState,
   ingestScenario,
   logout,
@@ -380,55 +379,6 @@ function App() {
     setIntroKey((current) => current + 1)
   }
 
-  const toggleOutletLocal = (id: number) => {
-    const outlet = outlets.find((item) => item.id === id)
-    if (!outlet) return
-
-    if (isEnergizedOutlet(outlet.status)) {
-      setOutlets((current) =>
-        current.map((item) =>
-          item.id === id ? { ...item, status: 'Disconnected', watts: 0 } : item,
-        ),
-      )
-      addEvent('Manual relay action', `${outlet.name} was disconnected from the dashboard.`, 'info')
-      return
-    }
-
-    const projectedLoad = load + outlet.allowance
-    if (projectedLoad > thresholds.critical) {
-      addEvent(
-        'Manual activation blocked',
-        `${outlet.name} was restricted because projected load exceeds the configured threshold.`,
-        'warning',
-      )
-      return
-    }
-
-    setOutlets((current) =>
-      current.map((item) => {
-        if (item.id !== id) return item
-        // Mirrors the backend activation estimate: the 90W floor applies only
-        // to mains channels, never to the 110V or 5V rails.
-        const estimate = Math.round(item.allowance * 0.72)
-        return {
-          ...item,
-          status: 'Active',
-          watts: item.volts >= 220 ? Math.max(90, estimate) : estimate,
-        }
-      }),
-    )
-    addEvent('Manual relay action', `${outlet.name} was activated after capacity assessment.`, 'success')
-  }
-
-  const toggleOutlet = (id: number) => {
-    const outlet = outlets.find((item) => item.id === id)
-    if (!outlet) return
-    const action = isEnergizedOutlet(outlet.status)
-      ? () => disconnectOutlet(id)
-      : () => activateOutlet(id)
-    void runLive(action, () => toggleOutletLocal(id))
-  }
-
   const handleLogout = () => {
     void logout()
       .catch(() => undefined)
@@ -743,8 +693,10 @@ function App() {
 
                   {/* --- Controlled channels --------------------------------------
                       `faulted` is handed to every card so each one can hold its
-                      figure at "no reading" rather than showing a measured zero,
-                      and disable the relay command with the reason attached. */}
+                      figure at "no reading" rather than showing a measured zero.
+                      There is no relay command to disable here: the card carries
+                      no control, and the reason it does not is stated once in
+                      the disclosure below the grid. */}
                   <section className="ant-card overflow-hidden" aria-label="Outlet-level monitoring">
                     <div className="ant-card-header">
                       <div className="flex min-w-0 items-center gap-2">
@@ -760,12 +712,7 @@ function App() {
                     <div className="ant-card-body">
                       <div className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-3">
                         {outlets.map((outlet) => (
-                          <OutletCard
-                            key={outlet.id}
-                            outlet={outlet}
-                            faulted={faulted}
-                            onToggle={toggleOutlet}
-                          />
+                          <OutletCard key={outlet.id} outlet={outlet} faulted={faulted} />
                         ))}
                       </div>
                     </div>
@@ -781,7 +728,7 @@ function App() {
                     <div className="border-t border-outline-variant">
                       <Disclosure
                         label="Control and metering notes"
-                        summary={`Why the relay buttons are disabled, and where each channel's numbers come from — ${outlets.length} cards, 4 notes`}
+                        summary={`Why the outlet cards carry no relay control, and where each channel's numbers come from — ${outlets.length} cards, 4 notes`}
                       >
                         <dl className="flex flex-col gap-3">
                           <Note

@@ -1,12 +1,17 @@
-import { Power } from 'lucide-react'
 import type { Outlet, OutletStatus } from '../types/dashboard'
 import { formatWatts, isEnergizedOutlet } from '../utils/dashboard'
 
+/**
+ * No relay control. Not "a control that is switched off" — no control.
+ *
+ * `onToggle` used to be a prop of this card and it is deliberately gone: the
+ * only element that ever consumed it was a permanently disabled button, so
+ * keeping the prop would have kept a command path wired to nothing.
+ */
 type OutletCardProps = {
   outlet: Outlet
   /** The rig has latched a hardware fault, so no figure here is attributable. */
   faulted: boolean
-  onToggle: (id: number) => void
 }
 
 /**
@@ -33,34 +38,43 @@ function channelLabel(id: number): string {
 }
 
 /**
- * The one control on this card is DISABLED, and the reason is printed under it
- * rather than hidden in a tooltip.
+ * There is no relay control on this card, and the reason is printed in the slot
+ * where one would have been rather than hidden in a tooltip.
  *
  * `POST /outlets/{id}/activation` exists and does update policy state, so the
- * button is not faking a network call — but `RELAY_OUTPUT_ENABLED` is 0 and
- * `RULES_ENABLED` is 0, so nothing on the device moves a contact. A button that
- * says "Disconnect" over a live-enough-looking card is a claim about hardware
- * this build cannot make, and a defense panel that shows it is worse than a
- * panel with no button at all. Disabled, with the reason in text, is the
- * honest version.
+ * button that used to sit here was not faking a network call — but
+ * `RELAY_OUTPUT_ENABLED` is 0 and `RULES_ENABLED` is 0, so nothing on the
+ * device moves a contact. A disabled button in that position was the worst of
+ * the honest options: full width, primary-styled, the largest element on the
+ * card, permanently inert. A reader scanning the grid was reading the visual
+ * position of the card's main action, not a claim the card could act on — and a
+ * control that can never fire should not hold the place of one. So the control
+ * is gone and the slot carries a one-line status instead. The activation route
+ * is still reachable, from the Scenario panel's SIM-02 vector, where dispatching
+ * is the entire purpose of the control.
  *
  * WHY THE SHORT STRING AND NOT THE PARAGRAPH:
  *
- *   This sentence is identical on every card, and the grid prints it thirteen
- *   times on the full rig. One reason given thirteen times is not thirteen
- *   reasons, it is a wall — and a wall of caveats is a screen nobody reads the
- *   numbers on. So the card carries the LABEL ("not driven"), keeps the full
- *   sentence wired to the button for assistive tech, and the Dashboard states
- *   the paragraph once in a disclosure below the grid. The words are unchanged
- *   and they are still on the same screen.
+ *   This sentence is identical on every card, and the grid prints it on all
+ *   thirteen channels of the full rig. One reason given thirteen times is not
+ *   thirteen reasons, it is a wall — and a wall of caveats is a screen nobody
+ *   reads the numbers on. So the card carries the LABEL ("not driven") and the
+ *   Dashboard states the full sentence once, in a disclosure immediately below
+ *   the grid. The words are unchanged and they are still on the same screen.
  */
 export const RELAY_UNAVAILABLE =
   'RELAY_OUTPUT_ENABLED is 0 — relay outputs are not driven in this build, so this writes policy state only. No contact moves.'
 
 /**
- * The short form printed under the disabled button. A label, not prose — it is
- * the same claim as RELAY_UNAVAILABLE compressed to the part a reader needs
- * to know that the control is inert.
+ * The short form printed in the card footer. A label, not prose — it is the
+ * same claim as RELAY_UNAVAILABLE compressed to the part a reader needs in
+ * order to tell an absent control from one that merely cannot act yet.
+ *
+ * Constant, with nothing appended under a latched fault: a clause that appeared
+ * on faulted cards and not on healthy ones would make the footer the one band
+ * on the card whose height depends on state, which is the misalignment this
+ * footer exists to remove. The fault clause is already stated in full, once, in
+ * the Dashboard disclosure below the grid.
  */
 const RELAY_UNAVAILABLE_SHORT = 'Relays not driven in this build'
 
@@ -103,7 +117,7 @@ function formatAmps(watts: number, volts: number): string | null {
  *      behind an ADS1015, and a nominal rating on the USB rail, which has no CT
  *      wired to it at all.
  */
-export function OutletCard({ outlet, faulted, onToggle }: OutletCardProps) {
+export function OutletCard({ outlet, faulted }: OutletCardProps) {
   const isEnergized = isEnergizedOutlet(outlet.status)
   const status = STATUS_VIEWS[outlet.status]
   const isMains = outlet.volts >= 220
@@ -288,30 +302,33 @@ export function OutletCard({ outlet, faulted, onToggle }: OutletCardProps) {
         </div>
       </dl>
 
-      {/* Disabled, and the reason is a label rather than a tooltip. A control that
-          cannot act and does not say why is indistinguishable from a control
-          that is merely slow — so the label below the button carries the claim,
-          and the full sentence stays attached to the button for assistive tech
-          and is stated once for the whole grid in the Dashboard's disclosure
-          directly below. */}
-      <div className="mt-auto flex flex-col gap-1.5">
-        <button
-          type="button"
-          className="ant-btn ant-btn-disabled w-full"
-          onClick={() => onToggle(outlet.id)}
-          disabled
-          aria-describedby={`relay-note-${outlet.id}`}
-        >
-          <Power size={16} aria-hidden="true" />
-          {isEnergized ? 'Disconnect' : 'Request activation'}
-        </button>
-        <p
-          id={`relay-note-${outlet.id}`}
-          className="font-body-sm text-body-sm text-on-surface-variant"
+      {/* Footer: a status, not a control.
+          The relay command this card used to offer is gone rather than
+          disabled — RELAY_OUTPUT_ENABLED is 0, so the control could never fire
+          and a permanently dead button holding the card's main-action position
+          told a reader more about the layout than about the rig. What is left
+          is one line, above the same hairline as the table above it, saying
+          that no contact moves. It is the same line on every card and it is
+          never extended, so `mt-auto` lands the footer at one height across
+          the grid; the fault clause lives once, in the Dashboard disclosure
+          directly below.
+
+          The value wraps rather than truncates. It is one line anywhere the
+          card is wider than the sentence — every desktop and tablet layout,
+          and the single-column phone layout — and two lines in the 480–620px
+          band, where the outlet grid is two columns and the cards are about
+          226px. Both lines show in that band, and every card lands on the
+          same one, because the string is the same string. An ellipsis would
+          have been the cheaper option and the dishonest one: it clips the
+          only honest sentence this card still carries. */}
+      <div className="mt-auto flex min-w-0 items-baseline justify-between gap-2 border-t border-outline-variant pt-2">
+        <span className="shrink-0 font-body-sm text-body-sm text-on-surface-variant">Relay</span>
+        <span
+          className="min-w-0 text-right font-body-sm text-body-sm text-on-surface-variant line-clamp-2"
+          title={RELAY_UNAVAILABLE}
         >
           {RELAY_UNAVAILABLE_SHORT}
-          {faulted ? ' — and the prototype is isolated by the latched fault' : ''}
-        </p>
+        </span>
       </div>
     </article>
   )
