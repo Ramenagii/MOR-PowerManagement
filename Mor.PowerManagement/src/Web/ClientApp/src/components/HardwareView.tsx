@@ -9,6 +9,7 @@ import {
   TriangleAlert,
   Zap,
 } from 'lucide-react'
+import { Disclosure } from './Disclosure'
 
 /**
  * Hardware -- the bill of materials and the wiring basis for the testing rig.
@@ -559,25 +560,39 @@ export function HardwareView() {
             </article>
           </div>
 
-          <div className="grid grid-cols-1 gap-space-md md:grid-cols-2">
-            <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
-              <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
-                Branch sensors must sit on their assigned outlet live branch only. Clamping live and
-                neutral together cancels the magnetic field and produces near-zero readings — the
-                classic reason a channel reads zero while the load is plainly on.
-              </p>
+          {/*
+            Two caveats that used to sit permanently at the foot of this card,
+            each in its own wash. They are true and they matter, but they are
+            notes about the build rather than steps in the wiring, and printed
+            open they compete with the parts list above them for the same
+            attention. A disclosure keeps them one click away on a page someone
+            reads top to bottom, and off the critical path when they are not
+            looking for them.
+          */}
+          <Disclosure
+            label="Wiring caveats"
+            summary="Two caveats about the sensing chain: CT placement, and the retired PZEM-004T"
+          >
+            <div className="grid grid-cols-1 gap-space-md md:grid-cols-2">
+              <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
+                <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  Branch sensors must sit on their assigned outlet live branch only. Clamping live and
+                  neutral together cancels the magnetic field and produces near-zero readings — the
+                  classic reason a channel reads zero while the load is plainly on.
+                </p>
+              </div>
+              <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
+                <Activity size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  The PZEM-004T v3.0 is retired and is not fitted to this rig. The roster still
+                  carries a &ldquo;PZEM-01 &hellip; mains bus&rdquo; label on its meterChannel field from before
+                  the ADS1015 conversion; it is a stale seed value, not a device, and the console does
+                  not render it as a sensor name.
+                </p>
+              </div>
             </div>
-            <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
-              <Activity size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
-                The PZEM-004T v3.0 is retired and is not fitted to this rig. The roster still
-                carries a &ldquo;PZEM-01 … mains bus&rdquo; label on its meterChannel field from before the
-                ADS1015 conversion; it is a stale seed value, not a device, and the console does not
-                render it as a sensor name.
-              </p>
-            </div>
-          </div>
+          </Disclosure>
         </div>
       </section>
 

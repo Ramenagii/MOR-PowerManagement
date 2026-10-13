@@ -16,7 +16,13 @@ import { HardwareView } from './components/HardwareView'
 import { LoadingScreen } from './components/LoadingScreen'
 import { LoginGate } from './components/LoginGate'
 import { MetricCard } from './components/MetricCard'
-import { OutletCard } from './components/OutletCard'
+import {
+  OutletCard,
+  RELAY_UNAVAILABLE,
+  branchSensorNote,
+  NOMINAL_RAIL_NOTE,
+} from './components/OutletCard'
+import { Disclosure } from './components/Disclosure'
 import { PoliciesView } from './components/PoliciesView'
 import { PolicyAdminView } from './components/PolicyAdminView'
 import { ScenarioPanel } from './components/ScenarioPanel'
@@ -101,6 +107,16 @@ function trackPercent(value: number, max: number): number {
  */
 const FAULT_HATCH =
   'repeating-linear-gradient(135deg, rgba(255,255,255,0.82) 0 3px, rgba(255,255,255,0) 3px 8px)'
+
+/** A dt/dd pair inside the disclosure — one explanation, labelled. */
+function Note({ label, body }: { label: string; body: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="font-label-sm text-label-sm uppercase text-on-surface-variant">{label}</dt>
+      <dd className="max-w-[76ch] font-body-sm text-body-sm text-on-surface-variant">{body}</dd>
+    </div>
+  )
+}
 
 function App() {
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
@@ -716,12 +732,12 @@ function App() {
                         </div>
                       </div>
 
-                      <p className="font-body-sm text-body-sm text-outline">
-                        Ticks are placed at {warningTrack.toFixed(0)}% and {criticalTrack.toFixed(0)}% of
-                        P_limit. This panel refetches {DASHBOARD_POLL_MS} ms after the last request
-                        settles, from GET /api/Dashboard/state, so the figure on screen trails the
-                        device&rsquo;s own 1 s posting interval by up to one poll cycle.
-                      </p>
+                      {/* The poll arithmetic moves to the disclosure below the
+                          outlet grid. It is a true statement about this panel's
+                          freshness, but it is not a reading and it does not
+                          belong under a meter — one line of process note on a
+                          dashboard is how the meter ends up explaining itself
+                          instead of being read. */}
                     </div>
                   </section>
 
@@ -752,6 +768,44 @@ function App() {
                           />
                         ))}
                       </div>
+                    </div>
+
+                    {/* --- Control and metering notes, stated once -------------
+                        Every paragraph below used to be printed once per card in
+                        the grid above. Three sentences, repeated five times, is
+                        not five explanations — it is fifteen lines of wall between
+                        the operator and the figures, and the figures are the
+                        reason the page is open. Each is identical across the
+                        grid, so each is said once here, immediately after the
+                        cards it qualifies, behind a control that says so. */}
+                    <div className="border-t border-outline-variant">
+                      <Disclosure
+                        label="Control and metering notes"
+                        summary={`Why the relay buttons are disabled, and where each channel's numbers come from — ${outlets.length} cards, 4 notes`}
+                      >
+                        <dl className="flex flex-col gap-3">
+                          <Note
+                            label="Relay outputs"
+                            body={
+                              <>
+                                {RELAY_UNAVAILABLE}
+                                {faulted
+                                  ? ' The prototype is also isolated by the latched fault.'
+                                  : ''}
+                              </>
+                            }
+                          />
+                          <Note
+                            label="Mains branches (CH1–CH4)"
+                            body={branchSensorNote(220)}
+                          />
+                          <Note label="USB rail (CH5)" body={NOMINAL_RAIL_NOTE} />
+                          <Note
+                            label="Metering panel"
+                            body={`Ticks are placed at ${warningTrack.toFixed(0)}% and ${criticalTrack.toFixed(0)}% of P_limit. This panel refetches ${DASHBOARD_POLL_MS} ms after the last request settles, from GET /api/Dashboard/state, so the figure on screen trails the device's own 1 s posting interval by up to one poll cycle.`}
+                          />
+                        </dl>
+                      </Disclosure>
                     </div>
                   </section>
 

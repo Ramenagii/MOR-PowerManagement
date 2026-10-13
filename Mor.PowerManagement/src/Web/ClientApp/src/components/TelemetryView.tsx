@@ -49,6 +49,7 @@ import {
   type Unit,
 } from '../utils/telemetry'
 import { ChannelHeatmap } from './ChannelHeatmap'
+import { Disclosure } from './Disclosure'
 import { TimeSeriesChart, type ChartSeries, type ThresholdLine } from './TimeSeriesChart'
 import { detectSensorFault, faultConsequence, type SensorFault } from '../utils/sensorFault'
 
@@ -762,7 +763,13 @@ export function TelemetryView() {
         </p>
       </div>
 
-      {/* ---------------- Provenance nameplate ---------------- */}
+      {/* ---------------- Provenance nameplate ----------------
+          The rig shape stays visible: that is a fact a glance needs. The
+          explanation of it, the per-channel notes and the exclusion record
+          move behind one disclosure — this page is the one an examiner opens
+          with "were those numbers measured?", and the record has to be a click
+          away and complete, not so permanent that the statistics it qualifies
+          are pushed off the screen. */}
       <div className={`flex flex-col gap-space-sm rounded-lg border p-space-md ${BANNER_FRAME}`}>
         <div className="flex flex-wrap items-baseline gap-x-space-sm gap-y-1">
           <span className="font-label-md text-label-md uppercase text-on-surface-variant">
@@ -776,33 +783,70 @@ export function TelemetryView() {
                 : 'Provenance not reported by the device'}
           </span>
         </div>
-        <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-          {meterCopy.banner}
-        </p>
 
-        {/*
-          The API's own per-channel note is rendered verbatim and in full. This
-          is the most defensible sentence anywhere in this console: it is the
-          only statement about a reading that is written by the code that
-          produced it, not by the UI. It used to be truncated to fit a card.
-        */}
-        {channels.length > 0 && (
-          <dl className="flex flex-col gap-1 border-t border-outline-variant pt-2">
-            {channels.map((channel) => (
-              <div key={channel.outletId} className="flex flex-col sm:flex-row sm:gap-2">
-                <dt className="shrink-0 font-metric-value text-metric-value font-medium text-on-surface sm:w-24">
-                  {`CH${channel.outletId}`}
-                  <span className="ml-1.5 font-body-sm text-body-sm font-normal text-outline">
-                    {PROVENANCE_GLYPH[channel.provenance] ?? '○'}
-                  </span>
-                </dt>
-                <dd className="font-body-sm text-body-sm text-on-surface-variant">
-                  {channel.provenanceNote}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        <Disclosure
+          label="Reading provenance and exclusions"
+          defaultOpen={faulted}
+          summary={`What these readings are, and are not — ${channels.length > 0 ? `the device's own note for each of the ${channels.length} channels, ` : ''}the shared-volts caveat, and ${NOT_MEASURED.length} quantities this build does not measure`}
+        >
+          <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
+            {meterCopy.banner}
+          </p>
+
+          {/*
+            The API's own per-channel note is rendered verbatim and in full. This
+            is the most defensible sentence anywhere in this console: it is the
+            only statement about a reading that is written by the code that
+            produced it, not by the UI. It used to be truncated to fit a card,
+            and then it was five permanent paragraphs — this is the third
+            arrangement, and the only one where all five fit without the chart
+            having to scroll past them.
+          */}
+          {channels.length > 0 && (
+            <dl className="flex flex-col gap-1 border-t border-outline-variant pt-2">
+              {channels.map((channel) => (
+                <div key={channel.outletId} className="flex flex-col sm:flex-row sm:gap-2">
+                  <dt className="shrink-0 font-metric-value text-metric-value font-medium text-on-surface sm:w-24">
+                    {`CH${channel.outletId}`}
+                    <span className="ml-1.5 font-body-sm text-body-sm font-normal text-outline">
+                      {PROVENANCE_GLYPH[channel.provenance] ?? '○'}
+                    </span>
+                  </dt>
+                  <dd className="font-body-sm text-body-sm text-on-surface-variant">
+                    {channel.provenanceNote}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
+
+          <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
+            {SHARED_VOLTS_NOTE} Retention:{' '}
+            <span className="font-metric-value text-metric-value">{TELEMETRY_RETENTION_DAYS}</span>{' '}
+            days of raw samples are stored; older samples are pruned. Pruning runs only while the host
+            is awake, so history can be shorter than that.
+          </p>
+
+          {/* The exclusion record, stated so "absent" stays distinguishable from
+              "forgot to render". Every entry once appeared on this console as a
+              plausible figure. */}
+          <div className="rounded-lg border border-outline-variant px-space-md py-space-sm">
+            <p className="font-title-md text-title-md text-on-surface">
+              Not measured — no figure is shown for these
+            </p>
+            <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
+              {NOT_MEASURED.map((item) => (
+                <div key={item.label} className="flex flex-col">
+                  <dt className="font-body-sm text-body-sm text-on-surface">
+                    <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
+                    {item.label}
+                  </dt>
+                  <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </Disclosure>
       </div>
 
       {status === 'unauthorized' ? (
@@ -1386,32 +1430,13 @@ export function TelemetryView() {
             </dl>
           </div>
 
-          <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-            {SHARED_VOLTS_NOTE} Retention:{' '}
-            <span className="font-metric-value text-metric-value">{TELEMETRY_RETENTION_DAYS}</span>{' '}
-            days of raw samples are stored; older samples are pruned. Pruning runs only while the host is
-            awake, so history can be shorter than that.
-          </p>
-
-          {/* The same absent-quantity list the inventory carries, so a reader who
-              lands on either view first meets the same statement. Every entry
-              here once appeared on this console as a plausible figure. */}
-          <div className="rounded-lg border border-outline-variant px-space-md py-space-sm">
-            <p className="font-title-md text-title-md text-on-surface">
-              Not measured — no figure is shown for these
-            </p>
-            <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
-              {NOT_MEASURED.map((item) => (
-                <div key={item.label} className="flex flex-col">
-                  <dt className="font-body-sm text-body-sm text-on-surface">
-                    <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
-                    {item.label}
-                  </dt>
-                  <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
+          {/*
+            The shared-volts caveat and the exclusion record used to sit here as
+            two permanent blocks at the foot of the page. They are now in the
+            provenance disclosure at the top, which is where a reader looking for
+            "were these numbers measured?" actually starts — and where they can
+            be read before the charts rather than after every chart.
+          */}
         </>
       )}
     </section>

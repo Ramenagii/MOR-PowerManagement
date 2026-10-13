@@ -43,9 +43,39 @@ function channelLabel(id: number): string {
  * this build cannot make, and a defense panel that shows it is worse than a
  * panel with no button at all. Disabled, with the reason in text, is the
  * honest version.
+ *
+ * WHY THE SHORT STRING AND NOT THE PARAGRAPH:
+ *
+ *   This sentence is identical on every card, and the grid prints it thirteen
+ *   times on the full rig. One reason given thirteen times is not thirteen
+ *   reasons, it is a wall — and a wall of caveats is a screen nobody reads the
+ *   numbers on. So the card carries the LABEL ("not driven"), keeps the full
+ *   sentence wired to the button for assistive tech, and the Dashboard states
+ *   the paragraph once in a disclosure below the grid. The words are unchanged
+ *   and they are still on the same screen.
  */
-const RELAY_UNAVAILABLE =
+export const RELAY_UNAVAILABLE =
   'RELAY_OUTPUT_ENABLED is 0 — relay outputs are not driven in this build, so this writes policy state only. No contact moves.'
+
+/**
+ * The short form printed under the disabled button. A label, not prose — it is
+ * the same claim as RELAY_UNAVAILABLE compressed to the part a reader needs
+ * to know that the control is inert.
+ */
+const RELAY_UNAVAILABLE_SHORT = 'Relays not driven in this build'
+
+/**
+ * The sensor story per rail, as prose. Moved off the card's tooltip and into
+ * the Dashboard's disclosure: a tooltip is unreachable by keyboard and
+ * disappears the moment the pointer moves, and this sentence is the answer to
+ * "where do these numbers come from?" on the page that shows the most numbers.
+ */
+export function branchSensorNote(ratedVolts: number): string {
+  return `Branch current is metered by an ADS1015 front end reading the ZMCT103C clamped on this branch. The ${ratedVolts} V figure shown is the channel's rated rail, not a live sample.`
+}
+
+export const NOMINAL_RAIL_NOTE =
+  'The USB rail carries no CT and no ADC input. Its figure is the rail nominal rating, which is not a measurement of draw.'
 
 /** Current below 10 A is worth two decimals; above that the third digit is noise. */
 function formatAmps(watts: number, volts: number): string | null {
@@ -97,9 +127,7 @@ export function OutletCard({ outlet, faulted, onToggle }: OutletCardProps) {
           : 'bg-outline-variant'
 
   const sensor = isMains ? 'ADS1015 + ZMCT103C on this branch' : 'No sensor — nominal rating'
-  const sensorNote = isMains
-    ? `Branch current is metered by an ADS1015 front end reading the ZMCT103C clamped on this branch. The ${outlet.volts} V figure shown is the channel's rated rail, not a live sample.`
-    : 'The USB rail carries no CT and no ADC input. Its figure is the rail nominal rating, which is not a measurement of draw.'
+  const sensorNote = isMains ? branchSensorNote(outlet.volts) : NOMINAL_RAIL_NOTE
 
   const loadLabel = faulted ? 'No reading' : `${Math.round(outlet.watts).toLocaleString()}`
 
@@ -260,9 +288,12 @@ export function OutletCard({ outlet, faulted, onToggle }: OutletCardProps) {
         </div>
       </dl>
 
-      {/* Disabled, and the reason is a paragraph rather than a tooltip. A
-          control that cannot act and does not say why is indistinguishable from
-          a control that is merely slow. */}
+      {/* Disabled, and the reason is a label rather than a tooltip. A control that
+          cannot act and does not say why is indistinguishable from a control
+          that is merely slow — so the label below the button carries the claim,
+          and the full sentence stays attached to the button for assistive tech
+          and is stated once for the whole grid in the Dashboard's disclosure
+          directly below. */}
       <div className="mt-auto flex flex-col gap-1.5">
         <button
           type="button"
@@ -278,8 +309,8 @@ export function OutletCard({ outlet, faulted, onToggle }: OutletCardProps) {
           id={`relay-note-${outlet.id}`}
           className="font-body-sm text-body-sm text-on-surface-variant"
         >
-          {RELAY_UNAVAILABLE}
-          {faulted ? ' The prototype is also isolated by the latched fault.' : ''}
+          {RELAY_UNAVAILABLE_SHORT}
+          {faulted ? ' — and the prototype is isolated by the latched fault' : ''}
         </p>
       </div>
     </article>

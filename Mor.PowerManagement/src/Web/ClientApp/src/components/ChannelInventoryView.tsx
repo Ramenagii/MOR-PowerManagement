@@ -4,13 +4,13 @@ import {
   BarChart3,
   ChevronDown,
   Gauge,
-  Info,
   RefreshCw,
   Search,
   ShieldCheck,
   TriangleAlert,
   X,
 } from 'lucide-react'
+import { Disclosure } from './Disclosure'
 import {
   ApiError,
   fetchDashboardState,
@@ -68,14 +68,24 @@ import { RAIL_FILTERS, railLabel, railOf, type RailFilter } from './policyAdmin'
  *
  * A derived number is never rendered as a measured one: the hatch, the wording
  * and the un-green provenance dot all say so at a glance, so a panelist asking
- * "is this measured?" gets the true answer without reading the banner.
+ * "is this measured?" gets the true answer without opening anything.
  *
  * Density discipline: this grid renders exactly ONE tag per channel — its
  * status, which is the only genuinely stateful thing on the card. Rail, relay
  * and shed priority are static metadata and read as a muted line; provenance
- * reads as a coloured dot beside neutral text. Everything else on this screen
- * that used to be a chip is now plain text, so the only colours left are the
- * status dot, the hatch, and the allowance bar.
+ * reads as a coloured dot beside a two-word label. Everything else on this
+ * screen that used to be a chip is now plain text, so the only colours left are
+ * the status dot, the hatch, and the allowance bar.
+ *
+ * PROSE DISCIPLINE, which is the rule this file is now built around:
+ *
+ *   A card carries CLAIMS (the dot, the label, the verdict word, the figures)
+ *   and never EXPLANATIONS. Every sentence behind a claim lives in one of the
+ *   two disclosures at the foot of the page, stated once for the whole grid
+ *   rather than repeated per channel. Five copies of the same caveat is not
+ *   five pieces of honesty, it is a wall — and a wall is why nobody reads the
+ *   cards underneath it. Nothing was deleted to achieve this; the words moved,
+ *   and each disclosure's summary line says what is behind it.
  *
  * Everything on this screen comes from the API. Nothing is hardcoded to the
  * mockup's 13-channel rig or its 2,500 W cap -- the real rig is 5 channels
@@ -122,6 +132,12 @@ const PRIORITY_RANK: Record<Priority, number> = {
  * The verdict is carried by a small coloured DOT plus NEUTRAL text, never by a
  * filled tag: a filled chip per card turned the grid into a fruit salad and
  * the colour carried no more information than the word next to it.
+ *
+ * `note` is no longer printed on the card. It is the paragraph this file used
+ * to repeat once per channel, and it now lives in the per-channel disclosure
+ * at the foot of the page, where one row per channel states the console's
+ * verdict and the API's own claim side by side. The card keeps the dot and the
+ * label, which are the parts that have to survive a glance.
  *
  * "Measured" is the ordinary case, so its dot is the neutral outline token, not
  * the shared `ant-dot-normal` green. Green is not a state colour in this
@@ -806,11 +822,14 @@ export function ChannelInventoryView() {
         </section>
       )}
 
+      {/* --- Metering mode --------------------------------------------------
+          The configured mode is a one-line fact about the rig and it stays on
+          screen. The sentence explaining what that mode MEANS is rig-level
+          provenance prose, and rig-level provenance prose lives in the
+          disclosure at the foot of this page — not repeated above the cards
+          the reader came for. */}
       <section
-        className={`ant-card p-space-md mb-space-lg flex items-start gap-space-sm border-l-4 ${
-          // Only a simulated mode is a fault worth a red rail. "Metered" is the
-          // configured intent and wears the neutral edge; whether the device
-          // managed to honour it is the rail above.
+        className={`ant-card px-space-md py-space-sm mb-space-lg flex items-center gap-space-sm border-l-4 ${
           mode === 'Simulated' ? 'border-l-error' : 'border-l-outline-strong'
         }`}
         aria-label="Metering mode"
@@ -818,18 +837,13 @@ export function ChannelInventoryView() {
         <AlertTriangle
           size={18}
           aria-hidden
-          className={`shrink-0 mt-0.5 ${
+          className={`shrink-0 ${
             mode === 'Simulated' ? 'text-error' : mode === 'Metered' ? 'text-on-surface-variant' : 'text-outline'
           }`}
         />
-        <div className="min-w-0">
-          <p className="font-title-md text-title-md text-on-surface">
-            {`Metering mode: ${METERING_MODE_LABEL[mode] ?? mode}`}
-          </p>
-          <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
-            {provenance.banner}
-          </p>
-        </div>
+        <p className="min-w-0 font-title-md text-title-md text-on-surface">
+          {`Metering mode: ${METERING_MODE_LABEL[mode] ?? mode}`}
+        </p>
       </section>
 
       {/* --- Stat strip ------------------------------------------------------
@@ -947,9 +961,11 @@ export function ChannelInventoryView() {
             <p className="font-metric-value text-metric-value text-on-surface-variant mt-auto">
               {`${railCountsByFilter['220']} channel${railCountsByFilter['220'] === 1 ? '' : 's'} · 1 shared reading`}
             </p>
-            <p className="font-body-sm text-body-sm text-outline">
-              One reading repeated on every mains channel — not a per-branch measurement.
-            </p>
+            {/* No paragraph here. "One reading repeated on every mains channel —
+                not a per-branch measurement" is SHARED_VOLTS_NOTE, said in fewer
+                words, and the full sentence is in the disclosure at the foot of
+                this page. Printing a third copy of it under a summary card is how
+                a four-word caveat becomes a wall. */}
           </div>
         </article>
 
@@ -1152,11 +1168,10 @@ export function ChannelInventoryView() {
             const outlet = byId.get(reading.channel.outletId)
             const statusView = STATUS_VIEWS[outlet?.status ?? 'Disconnected']
             // The API's own provenance label is kept, but it is not what the
-            // card is allowed to CLAIM while the device is in fault. `view` is
-            // what gets drawn; `apiView` is what the provenance block below
-            // names, so the discrepancy stays auditable.
-            const apiView = provenanceView(reading.channel.provenance)
-            const view = faulted ? FAULTED_VIEW : apiView
+            // card is allowed to CLAIM while the device is in fault. The
+            // per-channel disclosure at the foot of the page names both, so the
+            // discrepancy stays auditable.
+            const view = faulted ? FAULTED_VIEW : provenanceView(reading.channel.provenance)
             const suppressed = faulted
             const stats = describeSeries(reading.channel.watts)
             // The roster owns the human name; the telemetry channel carries a
@@ -1412,14 +1427,17 @@ export function ChannelInventoryView() {
 
                 {/* The one-line reason behind the verdict above. Rendered only
                     when there is something to explain: "No load" on its own is
-                    a claim, this is the evidence for it. */}
-                {verdict.detail && (
+                    a claim, this is the evidence for it.
+
+                    Under a latched fault it is withheld. The sentence it would
+                    carry is identical on every card, and the card already says
+                    the same thing twice — in the meter caption and in the faulted
+                    rail. Five identical paragraphs is not honesty, it is a
+                    chorus; the sentence itself is in the per-channel disclosure
+                    at the foot of this page, stated once. */}
+                {!suppressed && verdict.detail && (
                   <p
-                    className={`rounded px-2 py-1.5 font-body-sm text-body-sm ${
-                      suppressed
-                        ? 'border border-error-fixed bg-error-container text-on-surface'
-                        : 'bg-surface-container-low text-on-surface-variant'
-                    }`}
+                    className="rounded bg-surface-container-low px-2 py-1.5 font-body-sm text-body-sm text-on-surface-variant"
                     title={verdict.detail}
                   >
                     {verdict.detail}
@@ -1443,11 +1461,9 @@ export function ChannelInventoryView() {
                     <p className="font-body-sm text-body-sm text-on-surface">
                       Behaviour over the window is not summarised
                     </p>
-                    <p className="font-body-sm text-body-sm text-on-surface-variant">
-                      A channel with no sensor answering produces a flat zero line. Plotting that
-                      as a distribution would present the absence of a measurement as the shape of a
-                      load.
-                    </p>
+                    {/* The reason a flat-zero distribution is not drawn lives in
+                        the per-channel disclosure, once, instead of on all five
+                        cards. The label above is the operator-facing fact. */}
                   </div>
                 ) : (
                   <div className="flex flex-col gap-0.5">
@@ -1537,26 +1553,27 @@ export function ChannelInventoryView() {
                   </figure>
                 )}
 
-                {/* 7 — PROVENANCE, in full.
-                    This used to be one clamped line in the footer. Clamping the
-                    API's provenanceNote is the wrong call on the one field the
-                    backend bothers to write per channel: it is the sentence
-                    that says whether this card's numbers were measured, and a
-                    sentence cut off at the ellipsis does not survive a panel
-                    asking "is that real?". It is now rendered whole, above the
-                    footer, as its own block.
+                {/* 7 — PROVENANCE: the dot and the word, and nothing else.
+                    This used to be a rendered paragraph per channel. Five
+                    channels times a sentence is five paragraphs of the same
+                    caveat, and it pushed the card's own numbers off the card.
 
-                    Under a fault this block does double duty, and deliberately.
-                    It states the console's verdict, then quotes the backend's
-                    own claim verbatim underneath it, so the disagreement is on
-                    the card rather than in a changelog. Hiding what the API says
-                    would be the dishonest half of this fix. */}
+                    What stays here is the claim, which is the part a glance has
+                    to carry: the coloured dot, the label, and the explicit
+                    "not measured" marker. The sentence behind it is stated once
+                    per channel in the disclosure at the foot of this page, and
+                    `title` keeps it one hover away in place. The API's own
+                    per-channel `provenanceNote` is quoted in full in the same
+                    disclosure, so the console's verdict and the device's claim
+                    remain side by side — which is the whole point of showing the
+                    second one at all. */}
                 <div
                   className={`rounded px-2.5 py-2 ${
                     suppressed
                       ? 'prov-rail prov-rail--faulted border border-error-fixed bg-error-container'
                       : 'bg-surface-container-low'
                   }`}
+                  title={view.note}
                 >
                   <p className="flex items-center gap-1.5 font-body-sm text-body-sm font-medium text-on-surface">
                     <span className={view.dotClass} aria-hidden />
@@ -1571,21 +1588,6 @@ export function ChannelInventoryView() {
                       </span>
                     )}
                   </p>
-                  <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
-                    {view.note}
-                  </p>
-                  {suppressed && (
-                    <>
-                      <p className="mt-1.5 font-label-sm text-label-sm uppercase text-on-surface-variant">
-                        What the API reports for this channel
-                      </p>
-                      <p className="font-body-sm text-body-sm text-on-surface-variant">
-                        {apiView.label} —{' '}
-                        {reading.channel.provenanceNote ||
-                          'The backend did not supply a provenance note for this channel.'}
-                      </p>
-                    </>
-                  )}
                 </div>
 
                 {/* 8 — Footer: the relay channel as CONFIGURATION, plus sample
@@ -1611,124 +1613,191 @@ export function ChannelInventoryView() {
         </div>
       )}
 
-      {/* --- Provenance footnote -----------------------------------------------
-          This bar is the most defensible thing on the page, so it is given the
-          most space and the most specific language. It answers three separate
-          questions that the rest of the UI only gestures at:
+      {/* --- Provenance: one quiet disclosure, not a wall -------------------
+          This is the most defensible material on the page, and it is also,
+          word for word, the reason a reader bounced off it. Roughly 400 words
+          of caveats sitting permanently below the grid means nobody reads the
+          grid either — and a caveat nobody reads protects nothing.
 
-            1. What is physically on the bench? (ADS1015 + ZMCT103C per branch,
-               one shared voltage reading, a nominal-only USB rail.)
-            2. Which reading is not a per-branch measurement? (volts — there is
-               one of them, shown four times.)
-            3. What is deliberately NOT here? (THD, power factor, frequency,
-               energy, contact state — with the reason for each.)
+          So it keeps every word and changes where it lives: one muted summary
+          line, a real button, and the whole record behind it. A reader who
+          never opens it still gets the three things that matter at a glance —
+          the metering mode above, the hatched meters, and the per-card
+          provenance dot — because those are visual, not prose. A reader who
+          does open it gets the complete record, which is what an examiner or a
+          panelist actually came for. Nothing was deleted. */}
+      <Disclosure
+        label="Reading provenance"
+        className="mb-space-lg"
+        defaultOpen={faulted}
+        summary={
+          <>
+            What these numbers are, and are not — the sensing chain, the
+            exclusion list, and the rules for reading a bar ({METERING_MODE_LABEL[mode] ?? mode})
+          </>
+        }
+      >
+        {/* The rig-wide mode statement, in the backend's own vocabulary for the
+            mode. It moves here rather than sitting under the one-line mode
+            strip above, because it is rig-level reasoning and the strip above
+            is a reading. */}
+        <p className="max-w-[84ch] font-body-sm text-body-sm text-on-surface-variant">
+          {provenance.banner}
+        </p>
 
-          Point 3 is the one that used to be quietly wrong. Every entry below
-          used to appear somewhere in this console as a plausible number: a
-          1.2% THD, a 0.95 lagging power factor, a 60.0 Hz line frequency, a
-          kWh total computed from a field the firmware sets to 0.0. None of
-          them had a sensor behind it. They are listed as absent rather than
-          quietly dropped, because a reader who has seen one of them in an
-          earlier draft deserves to be told it was never a measurement. */}
-      <section className="ant-card mb-space-lg" aria-label="Reading provenance">
-        <div className="ant-card-header px-space-md py-space-sm">
-          <div className="flex items-center gap-space-sm">
-            <Info size={16} className="text-on-surface-variant" aria-hidden />
-            <h2 className="font-title-lg text-title-lg text-on-surface">What these numbers are, and are not</h2>
-          </div>
-          <span className="font-body-sm text-body-sm text-on-surface-variant">
-            {`Mode: ${METERING_MODE_LABEL[mode] ?? mode}`}
-          </span>
+        {/* The sensing chain, named. */}
+        <div className="rounded-md border border-outline-variant bg-surface-container-low px-3 py-2.5">
+          <p className="font-title-md text-title-md text-on-surface">What is on the bench</p>
+          <ul className="mt-1.5 flex flex-col gap-1 font-body-sm text-body-sm text-on-surface-variant">
+            <li>
+              <strong className="font-medium text-on-surface">CH1–CH4 current</strong> is read
+              directly: a ZMCT103C on each branch into that branch&rsquo;s own ADS1015 analogue
+              input (AIN0–AIN3). It is not apportioned from a mains total.
+            </li>
+            <li>{SHARED_VOLTS_NOTE}</li>
+            <li>
+              <strong className="font-medium text-on-surface">CH5 (5 V USB)</strong> has no
+              sensor on its branch. Its figure is the rail&rsquo;s nominal rating, hatched
+              everywhere it appears, and it is never presented as a measured zero.
+            </li>
+          </ul>
         </div>
-        <div className="ant-card-body p-space-md">
-          {/* The sensing chain, named. */}
-          <div className="mb-space-md rounded-md border border-outline-variant bg-surface-container-low px-3 py-2.5">
-            <p className="font-title-md text-title-md text-on-surface">What is on the bench</p>
-            <ul className="mt-1.5 flex flex-col gap-1 font-body-sm text-body-sm text-on-surface-variant">
-              <li>
-                <strong className="font-medium text-on-surface">CH1–CH4 current</strong> is read
-                directly: a ZMCT103C on each branch into that branch&rsquo;s own ADS1015 analogue
-                input (AIN0–AIN3). It is not apportioned from a mains total.
-              </li>
-              <li>{SHARED_VOLTS_NOTE}</li>
-              <li>
-                <strong className="font-medium text-on-surface">CH5 (5 V USB)</strong> has no
-                sensor on its branch. Its figure is the rail&rsquo;s nominal rating, hatched
-                everywhere it appears, and it is never presented as a measured zero.
-              </li>
-            </ul>
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md mb-space-md">
-            <article>
-              <strong className="font-title-md text-title-md text-on-surface">Volts</strong>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
-                {mode === 'Simulated' ? VOLTS_CAPTION : SHARED_VOLTS_NOTE}
-              </p>
-            </article>
-            <article>
-              <strong className="font-title-md text-title-md text-on-surface">Amps</strong>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">{AMPS_CAPTION}</p>
-            </article>
-            <article>
-              <strong className="font-title-md text-title-md text-on-surface">Watts</strong>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
-                {mode === 'Simulated' ? WATTS_CAPTION_SIMULATED : WATTS_CAPTION}
-              </p>
-            </article>
-          </div>
-
-          {/* Not measured. Present, named, and explained — so "absent" is
-              distinguishable from "forgot to render". */}
-          <div className="mb-space-md rounded-md border border-outline-variant px-3 py-2.5">
-            <p className="font-title-md text-title-md text-on-surface">
-              Not measured by this build — no figure is shown for these
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md">
+          <article>
+            <strong className="font-title-md text-title-md text-on-surface">Volts</strong>
+            <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+              {mode === 'Simulated' ? VOLTS_CAPTION : SHARED_VOLTS_NOTE}
             </p>
-            <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
-              {NOT_MEASURED.map((item) => (
-                <div key={item.label} className="flex flex-col">
-                  <dt className="font-body-sm text-body-sm text-on-surface">
-                    <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
-                    {item.label}
-                  </dt>
-                  <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-
-          <div className="flex items-start gap-space-sm p-space-sm bg-surface-container-low rounded-md">
-            <ShieldCheck size={16} className="shrink-0 mt-0.5 text-on-surface-variant" aria-hidden />
-            <p className="font-body-sm text-body-sm text-on-surface-variant">
-              A <strong className="text-on-surface">solid</strong> allowance bar means the figure came
-              from a sensor. A <strong className="text-on-surface">hatched</strong> bar means the figure
-              was inferred — no sensor is fitted on that branch. Live figures are the most recent
-              non-null bucket of the {series?.windowLabel ?? '15 min'} window; &ldquo;lowest seen&rdquo;,
-              &ldquo;typical&rdquo; and &ldquo;highest&rdquo; cover that same window, skipping gaps rather
-              than treating them as zero, and &ldquo;steadiness&rdquo; is the spread behind the typical
-              value stated as a verdict rather than as a symbol.
-              {/*
-                The roster's own meterChannel string still reads "PZEM-01 … mains
-                bus" on every outlet. That is a stale seeded label from before
-                the ADS1015 conversion, so it is deliberately not rendered as a
-                sensor name anywhere on this view — but it is named here rather
-                than quietly hidden, because someone reading the API response
-                will hit it and should know it is not a device on the rig.
-              */}
-              <span className="mt-1 block text-outline">
-                Note: the roster&rsquo;s <code className="font-code text-code">meterChannel</code>{' '}
-                field still reads &ldquo;PZEM-01 &hellip; mains bus&rdquo;. That label predates the
-                ADS1015 conversion and is not rendered as a sensor name on this page.
-              </span>
+          </article>
+          <article>
+            <strong className="font-title-md text-title-md text-on-surface">Amps</strong>
+            <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">{AMPS_CAPTION}</p>
+          </article>
+          <article>
+            <strong className="font-title-md text-title-md text-on-surface">Watts</strong>
+            <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+              {mode === 'Simulated' ? WATTS_CAPTION_SIMULATED : WATTS_CAPTION}
             </p>
-          </div>
+          </article>
+        </div>
 
-          <p className="font-metric-value text-metric-value text-outline mt-space-sm flex items-center gap-1.5">
-            <BarChart3 size={12} aria-hidden />
-            {`${readings.length} channels in roster · ${series?.channels.length ?? 0} reporting telemetry · ${series?.truncated ? 'series truncated' : 'series complete'}`}
+        {/* Not measured. Present, named, and explained — so "absent" is
+            distinguishable from "forgot to render". */}
+        <div className="rounded-md border border-outline-variant px-3 py-2.5">
+          <p className="font-title-md text-title-md text-on-surface">
+            Not measured by this build — no figure is shown for these
+          </p>
+          <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
+            {NOT_MEASURED.map((item) => (
+              <div key={item.label} className="flex flex-col">
+                <dt className="font-body-sm text-body-sm text-on-surface">
+                  <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
+                  {item.label}
+                </dt>
+                <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+
+        <div className="flex items-start gap-space-sm p-space-sm bg-surface-container-low rounded-md">
+          <ShieldCheck size={16} className="shrink-0 mt-0.5 text-on-surface-variant" aria-hidden />
+          <p className="font-body-sm text-body-sm text-on-surface-variant">
+            A <strong className="text-on-surface">solid</strong> allowance bar means the figure came
+            from a sensor. A <strong className="text-on-surface">hatched</strong> bar means the figure
+            was inferred — no sensor is fitted on that branch. Live figures are the most recent
+            non-null bucket of the {series?.windowLabel ?? '15 min'} window; &ldquo;lowest seen&rdquo;,
+            &ldquo;typical&rdquo; and &ldquo;highest&rdquo; cover that same window, skipping gaps rather
+            than treating them as zero, and &ldquo;steadiness&rdquo; is the spread behind the typical
+            value stated as a verdict rather than as a symbol.
+            {/*
+              The roster's own meterChannel string still reads "PZEM-01 … mains
+              bus" on every outlet. That is a stale seeded label from before
+              the ADS1015 conversion, so it is deliberately not rendered as a
+              sensor name anywhere on this view — but it is named here rather
+              than quietly hidden, because someone reading the API response
+              will hit it and should know it is not a device on the rig.
+            */}
+            <span className="mt-1 block text-outline">
+              Note: the roster&rsquo;s <code className="font-code text-code">meterChannel</code>{' '}
+              field still reads &ldquo;PZEM-01 &hellip; mains bus&rdquo;. That label predates the
+              ADS1015 conversion and is not rendered as a sensor name on this page.
+            </span>
           </p>
         </div>
-      </section>
+
+        <p className="font-metric-value text-metric-value text-outline flex items-center gap-1.5">
+          <BarChart3 size={12} aria-hidden />
+          {`${readings.length} channels in roster · ${series?.channels.length ?? 0} reporting telemetry · ${series?.truncated ? 'series truncated' : 'series complete'}`}
+        </p>
+      </Disclosure>
+
+      {/* --- Per-channel provenance: once, not once per card ------------------
+          The card keeps the dot and the label, which is the part that has to
+          survive at a glance. The sentences behind them are identical in shape
+          across five cards, so they are collected here as one list keyed by
+          channel — and under a fault the device's own `provenanceNote` is quoted
+          beside the console's verdict, because the whole reason to show the
+          second one is that the two disagree. */}
+      <Disclosure
+        label="Per-channel provenance"
+        className="mb-space-lg"
+        defaultOpen={faulted}
+        summary={`Per-channel provenance — what the device reports for each of the ${readings.length} channels, and why this view sometimes disagrees`}
+      >
+        <dl className="flex flex-col gap-3">
+          {readings.map((reading) => {
+            const apiView = provenanceView(reading.channel.provenance)
+            const view = faulted ? FAULTED_VIEW : apiView
+            return (
+              <div key={`prov-${reading.channel.outletId}`} className="flex flex-col gap-0.5">
+                <dt className="flex flex-wrap items-center gap-x-2 gap-y-0.5 font-body-sm text-body-sm font-medium text-on-surface">
+                  <span className="font-metric-value text-metric-value">
+                    {`CH${String(reading.channel.outletId).padStart(2, '0')}`}
+                  </span>
+                  <span className={view.dotClass} aria-hidden />
+                  {view.label}
+                  {view.measured ? null : (
+                    <span className="font-body-sm text-body-sm font-normal text-tertiary">
+                      · not measured
+                    </span>
+                  )}
+                </dt>
+                <dd className="max-w-[84ch] font-body-sm text-body-sm text-on-surface-variant">
+                  {view.note}
+                </dd>
+                {faulted && (
+                  <dd className="max-w-[84ch] font-body-sm text-body-sm text-on-surface-variant">
+                    <span className="font-label-sm text-label-sm uppercase text-outline">
+                      What the API reports for this channel
+                    </span>
+                    <br />
+                    {apiView.label} —{' '}
+                    {reading.channel.provenanceNote ||
+                      'The backend did not supply a provenance note for this channel.'}
+                  </dd>
+                )}
+              </div>
+            )
+          })}
+        </dl>
+
+        {/* The two sentences the cards no longer each carry under a latched
+            fault. One copy, stated once, is the same information as five. */}
+        {faulted && (
+          <>
+            <p className="max-w-[84ch] font-body-sm text-body-sm text-on-surface-variant">
+              The device has latched a hardware fault and isolated the prototype. No sensor is
+              answering on this branch, so this is an absent figure rather than a measured zero.
+            </p>
+            <p className="max-w-[84ch] font-body-sm text-body-sm text-on-surface-variant">
+              A channel with no sensor answering produces a flat zero line. Plotting that as a
+              distribution would present the absence of a measurement as the shape of a load.
+            </p>
+          </>
+        )}
+      </Disclosure>
     </section>
   )
 }

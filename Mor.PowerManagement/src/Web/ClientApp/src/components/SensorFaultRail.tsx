@@ -1,5 +1,6 @@
 import { CircuitBoard, Radio, TriangleAlert } from 'lucide-react'
 import { faultConsequence, type SensorFault } from '../utils/sensorFault'
+import { Disclosure } from './Disclosure'
 
 type SensorFaultRailProps = {
   fault: SensorFault | null
@@ -23,16 +24,25 @@ type SensorFaultRailProps = {
  * modal and not a card in the grid, because all three of those are dismissible
  * or scrollable, and this must not be either.
  *
- * WHAT IT SAYS, AND WHY EACH LINE IS THERE:
+ * WHAT IS ON THE RAIL, AND WHY EACH LINE IS THERE:
  *
- *   · the backend's own sentence, verbatim — it is the only statement about
- *     this fault written by the code that raised it
- *   · the device/sensor split — the two facts that make "0 W" unreadable, and
- *     the specific confusion a reader arrives with ("it says online")
- *   · the consequence in one sentence, because that is the misread to prevent
- *   · a pointer to the check, NOT the check itself. Which sensor is missing is
- *     a diagnosis; the API does not contain it and this console will not
- *     invent it from a symptom.
+ *   · the headline, because it is the claim being made about the rig
+ *   · the consequence in one sentence, because "0 W is not an idle rig" is the
+ *     misread this whole surface exists to prevent
+ *   · the device/sensor split as TWO VALUES — posting on schedule, not being
+ *     read. That is the specific confusion a reader arrives with ("it says
+ *     online"), and it survives without a paragraph under each cell
+ *   · the backend's own sentence, verbatim, because it is the only statement
+ *     about this fault written by the code that raised it
+ *   · the action, because a rail that names a fault and stops is a dead end
+ *
+ * WHAT IS NOT ON THE RAIL:
+ *
+ *   The reasoning. Why a posting device still has no readings, which part is
+ *   missing and where to start looking are all still here — they are one
+ *   disclosure below the action, not deleted. A fault is the moment an operator
+ *   reads, and a rail that spends its budget on its own justification is a rail
+ *   that hides the fault behind the essay about it.
  */
 export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailProps) {
   if (!fault) return null
@@ -86,31 +96,22 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
           </span>
         </div>
 
-        {/* --- The two facts the "0 W" reading cannot survive --------------- */}
-        <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-error-fixed bg-[#FBD9D5] md:grid-cols-3">
+        {/* --- The two facts the "0 W" reading cannot survive ---------------
+            Values, not explanations. "Posting on schedule" beside "Not being
+            read" is the whole claim; the paragraph that used to sit under each
+            cell repeated that claim in more words on the one screen where
+            screen space is the scarcest thing in the console. */}
+        <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-error-fixed bg-[#FBD9D5] md:grid-cols-2">
           <Fact
             icon={<Radio size={14} aria-hidden="true" />}
             label="ESP32 controller"
             value={fault.devicePosting ? 'Posting on schedule' : 'Not posting'}
-            note={
-              fault.devicePosting
-                ? 'The device is alive and its heartbeat is current. That is the fact that makes the zeros below easy to misread.'
-                : 'No current heartbeat, so nothing below this point is live either way.'
-            }
             tone={fault.devicePosting ? 'info' : 'critical'}
           />
           <Fact
             icon={<TriangleAlert size={14} aria-hidden="true" />}
             label="Metering sensors"
             value="Not being read"
-            note="The device latched a hardware fault and isolated itself. Which part is missing is a diagnosis, not something this API reports."
-            tone="critical"
-          />
-          <Fact
-            icon={<CircuitBoard size={14} aria-hidden="true" />}
-            label="Consequence"
-            value={`${fault.channelsAffected} channels unattributable`}
-            note="Sensed channels are held at 'no reading' rather than rendered as a measured zero."
             tone="critical"
           />
         </dl>
@@ -121,22 +122,56 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
             From the event log, verbatim
           </p>
           <p className="mt-1 font-metric-value text-metric-value text-on-surface">{fault.detail}</p>
-          <p className="mt-1.5 font-body-sm text-body-sm text-on-surface-variant">
-            {fault.title} — no clearing event has been written since, so the fault is still latched.
-          </p>
         </div>
 
-        {/* --- Where to look next ------------------------------------------- */}
+        {/* --- Where to look next -------------------------------------------
+            A pointer to the check, NOT the check itself. Which sensor is
+            missing is a diagnosis; the API does not contain it and this console
+            will not invent it from a symptom. */}
         <div className="flex flex-wrap items-center gap-3">
           <button type="button" className="ant-btn ant-btn-default" onClick={onInspectHardware}>
             <CircuitBoard size={16} aria-hidden="true" />
             Check the bus and the parts list
           </button>
-          <p className="max-w-[64ch] font-body-sm text-body-sm text-on-surface-variant">
-            Start with I2C presence for the ADS1015 and the INA226 on SDA GPIO 8 / SCL GPIO 9 — an
-            absent address probe on a shared bus is the usual cause, not the sensors themselves.
-          </p>
         </div>
+
+        {/* --- The reasoning, one click away -------------------------------- */}
+        <Disclosure
+          tone="critical"
+          label="Why this fault is latched, and what to check first"
+          summary="Why this rail says what it says, and the first thing to check"
+        >
+          <dl className="flex flex-col gap-2">
+            <Note
+              label="ESP32 controller"
+              tone={fault.devicePosting ? 'info' : 'critical'}
+              body={
+                fault.devicePosting
+                  ? 'The device is alive and its heartbeat is current. That is the fact that makes the zeros below easy to misread.'
+                  : 'No current heartbeat, so nothing below this point is live either way.'
+              }
+            />
+            <Note
+              label="Metering sensors"
+              tone="critical"
+              body="The device latched a hardware fault and isolated itself. Which part is missing is a diagnosis, not something this API reports."
+            />
+            <Note
+              label="Consequence"
+              tone="critical"
+              body={`${fault.channelsAffected} channels are unattributable. Sensed channels are held at 'no reading' rather than rendered as a measured zero.`}
+            />
+          </dl>
+
+          <p className="max-w-[64ch] font-body-sm text-body-sm text-on-surface-variant">
+            Start with I2C presence for the ADS1015 and the INA226 on SDA GPIO 8 / SCL GPIO 9 — an absent
+            address probe on a shared bus is the usual cause, not the sensors themselves.
+          </p>
+
+          <p className="max-w-[64ch] font-body-sm text-body-sm text-on-surface-variant">
+            {fault.title} — no clearing event has been written since, so the fault is still latched.
+          </p>
+        </Disclosure>
       </div>
     </section>
   )
@@ -146,13 +181,11 @@ function Fact({
   icon,
   label,
   value,
-  note,
   tone,
 }: {
   icon: React.ReactNode
   label: string
   value: string
-  note: string
   tone: 'info' | 'critical'
 }) {
   return (
@@ -163,16 +196,29 @@ function Fact({
         </span>
         {label}
       </dt>
-      <dd className="flex flex-col gap-1">
-        <span className="flex items-center gap-1.5 font-title-md text-title-md text-on-surface">
-          <span
-            className={`ant-dot ${tone === 'critical' ? 'ant-dot-critical' : 'ant-dot-info'}`}
-            aria-hidden="true"
-          />
-          {value}
-        </span>
-        <span className="font-body-sm text-body-sm text-on-surface-variant">{note}</span>
+      <dd className="flex items-center gap-1.5 font-title-md text-title-md text-on-surface">
+        <span
+          className={`ant-dot ${tone === 'critical' ? 'ant-dot-critical' : 'ant-dot-info'}`}
+          aria-hidden="true"
+        />
+        {value}
       </dd>
+    </div>
+  )
+}
+
+/** A dt/dd pair inside the disclosure — the explanation a cell no longer carries. */
+function Note({ label, body, tone }: { label: string; body: string; tone: 'info' | 'critical' }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      <dt className="flex items-center gap-1.5 font-label-sm text-label-sm uppercase text-on-surface-variant">
+        <span
+          className={`ant-dot ${tone === 'critical' ? 'ant-dot-critical' : 'ant-dot-info'}`}
+          aria-hidden="true"
+        />
+        {label}
+      </dt>
+      <dd className="max-w-[76ch] font-body-sm text-body-sm text-on-surface-variant">{body}</dd>
     </div>
   )
 }
