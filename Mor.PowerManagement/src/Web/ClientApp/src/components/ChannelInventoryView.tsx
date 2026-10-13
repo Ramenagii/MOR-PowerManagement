@@ -1629,7 +1629,6 @@ export function ChannelInventoryView() {
       <Disclosure
         label="Reading provenance"
         className="mb-space-lg"
-        defaultOpen={faulted}
         summary={
           <>
             What these numbers are, and are not — the sensing chain, the
@@ -1743,7 +1742,6 @@ export function ChannelInventoryView() {
       <Disclosure
         label="Per-channel provenance"
         className="mb-space-lg"
-        defaultOpen={faulted}
         summary={`Per-channel provenance — what the device reports for each of the ${readings.length} channels, and why this view sometimes disagrees`}
       >
         <dl className="flex flex-col gap-3">

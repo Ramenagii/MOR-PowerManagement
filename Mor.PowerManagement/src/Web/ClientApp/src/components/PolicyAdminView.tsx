@@ -671,8 +671,27 @@ export function PolicyAdminView() {
 
   return (
     <section className="flex flex-col gap-space-lg" aria-label="Policy Administration">
-      {/* Operational breadcrumb, title and page-level toolbar */}
-      <div className="flex flex-col gap-space-md lg:flex-row lg:items-end lg:justify-between">
+      {/* Operational breadcrumb, title and page-level toolbar
+
+          THE ROW BREAKS AT 2xl, NOT AT lg, AND THAT IS THE WHOLE FIX.
+
+          This header used to go side-by-side at `lg` (1024px). At the real
+          measurement width — 1368px, which is `xl` in this project's own
+          breakpoints (xl = 1200, 2xl = 1440) — the left block wanted 768px of
+          `max-w-3xl` description and the right block wanted about 430px of
+          buttons, and the 1304px content column had roughly 75px between them.
+          That is not slack. It is enough room only if nothing wraps, so the
+          first thing to give was the button group, and `shrink-0` on that group
+          made sure it was the buttons and not the title that compressed.
+
+          `2xl` is the first width at which the frame is genuinely capped and
+          both blocks have real room: below it the page column grows with the
+          viewport, so the header is stacked and the action group wraps as a
+          unit instead of squeezing. Nothing is hidden at any width — the
+          title, the unsaved count and all three actions are always present and
+          always labelled, and Export collapses to its icon only in the
+          intermediate range where the group is tight, never below that. */}
+      <div className="flex flex-col gap-space-md 2xl:flex-row 2xl:items-end 2xl:justify-between">
         <div className="flex flex-col gap-1">
           <nav
             aria-label="Breadcrumb"
@@ -705,7 +724,11 @@ export function PolicyAdminView() {
             dispatch.
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-space-sm">
+        {/* `shrink-0` is gone. It was the reason the group squeezed rather than
+            wrapped: it refused to give width, so the buttons themselves had to
+            compress. Wrapping as a unit keeps every control at its natural
+            size and moves the whole group to the next line instead. */}
+        <div className="flex flex-wrap items-center gap-space-sm">
           <button
             type="button"
             className="ant-btn ant-btn-default"
@@ -715,9 +738,23 @@ export function PolicyAdminView() {
             <Undo2 size={16} className="text-outline" />
             Discard edits
           </button>
-          <button type="button" className="ant-btn ant-btn-default" onClick={exportPolicy}>
+          {/* Export writes nothing to the device and reads nothing back — it is
+              the lowest-value action of the three, so it is the one that gives
+              up its label first. The button keeps its accessible name at every
+              width (`aria-label` plus `title`), so the icon is never the only
+              thing naming it. */}
+          <button
+            type="button"
+            className="ant-btn ant-btn-default"
+            onClick={exportPolicy}
+            aria-label="Export the current policy configuration as JSON"
+            title="Export the current policy configuration as JSON"
+          >
             <FileDown size={16} className="text-outline" />
-            Export JSON
+            {/* `hidden 2xl:inline`, not `2xl:inline` alone: a span is already
+                inline, so a bare `2xl:inline` would leave the label on screen at
+                every width and collapse nothing. */}
+            <span className="hidden 2xl:inline">Export JSON</span>
           </button>
           <button
             type="button"

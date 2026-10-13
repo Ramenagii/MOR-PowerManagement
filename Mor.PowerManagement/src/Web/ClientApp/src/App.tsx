@@ -9,7 +9,6 @@ import {
   ingestScenario,
   logout,
 } from './api'
-import { EventLogPanel } from './components/EventLogPanel'
 import { ChannelInventoryView } from './components/ChannelInventoryView'
 import { HardwareView } from './components/HardwareView'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -439,6 +438,7 @@ function App() {
           sensorFault={sensorFault}
           deviceOnline={deviceOnline}
           userEmail={userEmail}
+          events={events}
         />
 
         {session === 'offline' && (
@@ -767,7 +767,16 @@ function App() {
                     busy={scenarioBusy}
                   />
 
-                  <EventLogPanel events={events} />
+                  {/*
+                    The event log is NOT here any more. It sat at the bottom of
+                    this column at 1289x640px on every dashboard view — the
+                    tallest block on the page, below the fold for most of the
+                    time, holding eight rows of history the operator had to
+                    scroll past to reach nothing. `App` still owns `events` and
+                    still receives every one from the API; the bar carries them
+                    behind a bell and the log renders unchanged when it is
+                    opened. Nothing was dropped, moved or summarised.
+                  */}
                 </>
               )}
 

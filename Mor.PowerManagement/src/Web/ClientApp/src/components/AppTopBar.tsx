@@ -1,6 +1,9 @@
-import { Bolt, Power } from 'lucide-react'
+import { Power } from 'lucide-react'
 import type { AppView } from '../types/dashboard'
+import type { EventLog } from '../types/dashboard'
 import type { SensorFault } from '../utils/sensorFault'
+import { LoadwiseBrand } from './LoadwiseBrand'
+import { NotificationCentre } from './NotificationCentre'
 
 /**
  * Top navigation bar.
@@ -42,6 +45,8 @@ type AppTopBarProps = {
   sensorFault: SensorFault | null
   deviceOnline: boolean
   userEmail: string | null
+  /** The full log. Held by the bar so the notification centre can carry it. */
+  events: EventLog[]
 }
 
 export function AppTopBar({
@@ -51,6 +56,7 @@ export function AppTopBar({
   sensorFault,
   deviceOnline,
   userEmail,
+  events,
 }: AppTopBarProps) {
   const faulted = sensorFault !== null
 
@@ -58,15 +64,16 @@ export function AppTopBar({
     <header className="sticky top-0 z-40 h-16 border-b border-outline-variant bg-surface-container-lowest">
       <div className="mx-auto flex h-full w-full max-w-[1440px] items-center gap-space-md px-margin">
         {/* ---- Identity ---------------------------------------------------- */}
+        {/* The real mark, not a lucide glyph standing in for it. The bar used to
+            draw a generic `bolt` in a blue square while the loading screen drew
+            the actual console mark — two different logos for the same product,
+            one of them on every page. `LoadwiseBrand variant="header"` is the
+            same component, so the wordmark beside it is guaranteed to name what
+            the mark is. */}
         <div className="flex shrink-0 items-center gap-space-sm">
-          <span
-            className="grid h-8 w-8 place-items-center rounded bg-primary text-on-primary"
-            aria-hidden="true"
-          >
-            <Bolt size={18} />
-          </span>
+          <LoadwiseBrand variant="header" />
           <span className="hidden whitespace-nowrap font-title-lg text-title-lg font-semibold text-on-surface sm:inline">
-            MOR Power
+            Loadwise
           </span>
           {/*
             No build/version chip here, and none should be added. It used to
@@ -104,6 +111,13 @@ export function AppTopBar({
 
         {/* ---- Status ------------------------------------------------------ */}
         <div className="flex shrink-0 items-center gap-space-sm">
+          {/*
+            The log left the dashboard flow and lives here. It was 640px tall in
+            the main column on every view; behind the bell it costs the bar one
+            40px control and gives the page back its first screen.
+          */}
+          <NotificationCentre events={events} />
+
           {/*
             Three states, and the fault one outranks the other two: a faulted
             device that is still posting is the combination an operator is most

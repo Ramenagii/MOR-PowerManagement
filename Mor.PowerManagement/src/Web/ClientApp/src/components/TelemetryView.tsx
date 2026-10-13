@@ -137,6 +137,55 @@ function mono(children: ReactNode) {
   return <span className="font-metric-value text-metric-value font-medium text-on-surface">{children}</span>
 }
 
+/**
+ * Group the device's provenance notes by what they actually say.
+ *
+ * The backend returns one rig-shape sentence for the sensed mains branches and
+ * a different one for the unsensed USB rail, so the four identical notes are a
+ * description of the RIG, not of each channel. Printing them per channel stated
+ * the same thing four times under four different headings, which reads as four
+ * separate findings and is none.
+ *
+ * This groups on the note string itself — no channel ids are hard-coded, so if
+ * the backend ever splits CH1–CH4 into distinct notes each one gets its own
+ * line automatically, and if the rig gains a fifth sensed branch it joins the
+ * shared group rather than duplicating a paragraph.
+ */
+function groupedProvenance(channels: TelemetryChannel[]): Array<{
+  note: string
+  channels: Array<{ outletId: number; provenance: string }>
+  /** True when more than one channel carries this exact note. */
+  shared: boolean
+}> {
+  const byNote = new Map<string, Array<{ outletId: number; provenance: string }>>()
+  for (const channel of channels) {
+    const entry = { outletId: channel.outletId, provenance: channel.provenance }
+    const bucket = byNote.get(channel.provenanceNote)
+    if (bucket) bucket.push(entry)
+    else byNote.set(channel.provenanceNote, [entry])
+  }
+  return [...byNote.entries()].map(([note, bucket]) => ({
+    note,
+    channels: [...bucket].sort((a, b) => a.outletId - b.outletId),
+    shared: bucket.length > 1,
+  }))
+}
+
+/**
+ * `CH1–CH4` for a contiguous run, `CH2, CH5` for anything else.
+ *
+ * The naive join wrote `CH1–CH2–CH3–CH4`, which names four channels correctly
+ * and reads like a range of nonsense. A shared note over contiguous channels IS
+ * a range, so it is written as one.
+ */
+function channelRange(channels: Array<{ outletId: number }>): string {
+  const ids = channels.map((c) => c.outletId)
+  if (ids.length === 1) return `CH${ids[0]}`
+  const contiguous = ids.every((id, i) => i === 0 || id === ids[i - 1] + 1)
+  if (contiguous) return `CH${ids[0]}–CH${ids[ids.length - 1]}`
+  return ids.map((id) => `CH${id}`).join(', ')
+}
+
 /** Thousands-separated, unit-appropriate precision. Never renders NaN/Infinity. */
 function formatMetric(value: number | null, unit: Unit): string {
   if (value === null || !Number.isFinite(value)) return '—'
@@ -786,8 +835,7 @@ export function TelemetryView() {
 
         <Disclosure
           label="Reading provenance and exclusions"
-          defaultOpen={faulted}
-          summary={`What these readings are, and are not — ${channels.length > 0 ? `the device's own note for each of the ${channels.length} channels, ` : ''}the shared-volts caveat, and ${NOT_MEASURED.length} quantities this build does not measure`}
+          summary={`What these readings are, and are not — the device's own provenance note, the shared-volts caveat, and ${NOT_MEASURED.length} quantities this build does not measure`}
         >
           <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
             {meterCopy.banner}
@@ -798,22 +846,38 @@ export function TelemetryView() {
             is the most defensible sentence anywhere in this console: it is the
             only statement about a reading that is written by the code that
             produced it, not by the UI. It used to be truncated to fit a card,
-            and then it was five permanent paragraphs — this is the third
-            arrangement, and the only one where all five fit without the chart
-            having to scroll past them.
+            and then it was five permanent paragraphs.
+
+            It is also, verbatim, THE SAME SENTENCE FOUR TIMES: the backend
+            returns one rig-shape note for the four sensed branches, so CH1–CH4
+            came back with an identical 45-word string and the panel printed it
+            180 words deep with nothing to distinguish the rows. So the notes
+            are grouped by what they actually say. A note shared by more than
+            one channel is printed once, under the channel ids it covers — which
+            is the fact the repetition was accidentally proving — and a channel
+            whose note differs from the rest keeps its own line. Nothing is
+            paraphrased, truncated or dropped; CH5, which genuinely is nominal,
+            is the line that survives on its own.
           */}
           {channels.length > 0 && (
-            <dl className="flex flex-col gap-1 border-t border-outline-variant pt-2">
-              {channels.map((channel) => (
-                <div key={channel.outletId} className="flex flex-col sm:flex-row sm:gap-2">
-                  <dt className="shrink-0 font-metric-value text-metric-value font-medium text-on-surface sm:w-24">
-                    {`CH${channel.outletId}`}
+            <dl className="flex flex-col gap-1.5 border-t border-outline-variant pt-2">
+              {groupedProvenance(channels).map((group) => (
+                <div key={group.note} className="flex flex-col sm:flex-row sm:gap-2">
+                  <dt className="shrink-0 font-metric-value text-metric-value font-medium text-on-surface sm:w-40">
+                    {channelRange(group.channels)}
                     <span className="ml-1.5 font-body-sm text-body-sm font-normal text-outline">
-                      {PROVENANCE_GLYPH[channel.provenance] ?? '○'}
+                      {group.channels.map((c) => PROVENANCE_GLYPH[c.provenance] ?? '○').join('')}
                     </span>
                   </dt>
                   <dd className="font-body-sm text-body-sm text-on-surface-variant">
-                    {channel.provenanceNote}
+                    {group.shared ? (
+                      <>
+                        <span className="text-outline">
+                          One note, returned identically for {group.channels.length} channels:
+                        </span>{' '}
+                      </>
+                    ) : null}
+                    {group.note}
                   </dd>
                 </div>
               ))}

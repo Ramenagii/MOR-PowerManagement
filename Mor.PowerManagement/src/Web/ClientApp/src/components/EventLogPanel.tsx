@@ -1,8 +1,14 @@
-import { AlertTriangle, Bell, CheckCircle2, History, Zap } from 'lucide-react'
+import { AlertTriangle, Bell, CheckCircle2, History, X, Zap } from 'lucide-react'
 import type { EventLog, Severity } from '../types/dashboard'
 
 type EventLogPanelProps = {
   events: EventLog[]
+  /**
+   * Rendered at the end of the header row. The log now lives behind the top
+   * bar's bell, so the header carries the drawer's dismiss control rather than
+   * the body growing a scrollbar next to it.
+   */
+  onDismiss?: () => void
 }
 
 /** How many rows the panel shows. The header states the rest, never hides it. */
@@ -21,6 +27,11 @@ type SeverityView = { dot: string; Icon: typeof Bell }
  * the palette stays neutral + blue + amber + red. `.ant-dot-normal` is still
  * `bg-secondary` in the shared ant.css, so the neutral is applied as a utility
  * here rather than by editing shared CSS.
+ *
+ * This grammar is also why the bell badge stays neutral. Severity now has
+ * exactly one home — this list — and a second coloured badge beside the status
+ * pill in the top bar would put the same signal in two places at two different
+ * scopes, where the operator would have to work out which one is current.
  */
 const SEVERITY_VIEWS: Record<Severity, SeverityView> = {
   info: { dot: 'ant-dot bg-outline', Icon: Bell },
@@ -29,7 +40,21 @@ const SEVERITY_VIEWS: Record<Severity, SeverityView> = {
   critical: { dot: 'ant-dot ant-dot-critical', Icon: Zap },
 }
 
-export function EventLogPanel({ events }: EventLogPanelProps) {
+/**
+ * The log itself.
+ *
+ * It used to be a full-width section in the dashboard flow, where it held the
+ * page at 1289x640px permanently — the tallest block on the screen, showing
+ * eight rows of mostly-historical text that nobody scrolls down to read while
+ * the rig is running. It is now the body of the notification centre in the top
+ * bar: out of the flow, on demand, and exactly as legible as it was.
+ *
+ * Nothing about the entry design moved. Icon tile, title, timestamp, severity
+ * dot and word, and the backend's verbatim `detail` are all here, because the
+ * detail is the one sentence on this console written by the code that raised
+ * the event. What changed is where the reader meets it.
+ */
+export function EventLogPanel({ events, onDismiss }: EventLogPanelProps) {
   const shown = events.slice(0, VISIBLE_EVENTS)
   const hidden = events.length - shown.length
 
@@ -45,11 +70,19 @@ export function EventLogPanel({ events }: EventLogPanelProps) {
             <span className="font-metric-value text-metric-value">{events.length}</span> total
           </span>
         </div>
-        {hidden > 0 && (
-          <span className="shrink-0 font-body-sm text-body-sm text-on-surface-variant">
-            Newest <span className="font-metric-value text-metric-value">{shown.length}</span> shown
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {hidden > 0 && (
+            <span className="font-body-sm text-body-sm text-on-surface-variant">
+              Newest <span className="font-metric-value text-metric-value">{shown.length}</span> shown
+            </span>
+          )}
+          {onDismiss && (
+            <button type="button" className="ant-btn ant-btn-default h-8 px-2" onClick={onDismiss}>
+              <X size={16} className="text-outline" aria-hidden="true" />
+              <span className="sr-only">Close the event log</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {shown.length === 0 ? (
@@ -61,7 +94,7 @@ export function EventLogPanel({ events }: EventLogPanelProps) {
           <p className="max-w-2xl font-body-md text-body-md text-on-surface-variant">
             No relay action, threshold crossing or shed decision has been recorded since this console
             connected. Events appear the moment the policy engine makes one — run a scenario from the
-            simulator above to generate them against the real device.
+            simulator on the dashboard to generate them against the real device.
           </p>
         </div>
       ) : (

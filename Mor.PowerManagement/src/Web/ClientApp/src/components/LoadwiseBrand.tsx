@@ -28,7 +28,7 @@ export function LoadwiseBrand({
         animate={{ opacity: 1 }}
         transition={{ duration: 0.2 }}
       >
-        <svg viewBox="0 0 260 330" role="img" aria-label="MOR Power mark">
+        <svg viewBox="0 0 260 330" role="img" aria-label="Loadwise mark">
           {/* Antenna nodes, drawn first so the body overlaps them. */}
           <circle className="logo-node node-left" cx="78" cy="62" r="26" />
           <circle className="logo-node node-mid" cx="130" cy="28" r="26" />
@@ -61,7 +61,7 @@ export function LoadwiseBrand({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.34, ease: [0.22, 1, 0.36, 1] }}
         >
-          <p>MOR Power</p>
+          <p>Loadwise</p>
           <span>Power Operations Console</span>
         </motion.div>
       )}

@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useId, useState, type ReactNode } from 'react'
 import { ChevronDown } from 'lucide-react'
 
 type DisclosureProps = {
@@ -14,15 +14,6 @@ type DisclosureProps = {
    */
   summary: ReactNode
   children: ReactNode
-  /**
-   * Start expanded, and keep expanding while it stays true.
-   *
-   * Used where the material IS the state of the page — a latched sensor fault —
-   * so burying it behind a click would be the dishonest choice. It is a live
-   * prop rather than a mount-time default because the fault arrives with the
-   * first snapshot, after this component has already mounted.
-   */
-  defaultOpen?: boolean
   /** `critical` wears the error rail. Reserved for the fault surfaces. */
   tone?: 'quiet' | 'critical'
   className?: string
@@ -41,7 +32,7 @@ type DisclosureProps = {
  * So the words are not shortened and not cut. They MOVE behind this control.
  * The rules it keeps:
  *
- *   - One muted summary line, always visible, and it names what is available.
+ *   - ONE MUTED SUMMARY LINE, ALWAYS VISIBLE, AND IT NAMES WHAT IS AVAILABLE.
  *     Not "More info". Not an icon with no affordance.
  *   - A real <button>, so Enter and Space work without a key handler, with
  *     aria-expanded and aria-controls so the state is announced rather than
@@ -50,6 +41,25 @@ type DisclosureProps = {
  *     accessibility tree and out of the layout until it is asked for.
  *   - Every word is still compiled into the bundle. Hiding a caveat does not
  *     delete it, and nothing here is generated at runtime.
+ *
+ * EVERY DISCLOSURE IN THIS CONSOLE STARTS CLOSED. There is no `defaultOpen`
+ * prop, and its absence is deliberate rather than an oversight.
+ *
+ * There used to be one, wired to the latched sensor fault, on the reasoning
+ * that a fault "is the state of the page, so burying it behind a click would be
+ * the dishonest choice". It was measured and it was wrong: because the fault is
+ * almost always latched, `aria-expanded="true"` on first paint was not an
+ * edge case but the normal state, and every panel that used the prop shipped
+ * its full prose open. The Telemetry provenance record alone held the section
+ * at 1289x677px with four identical paragraphs in it. A control that is almost
+ * always open is not a disclosure; it is a slower section.
+ *
+ * The fault itself is still the loudest thing on the screen. It is loud in the
+ * rail and in the status pill, which are not optional and are never collapsed.
+ * What sits behind a disclosure is the reasoning ABOUT the fault — which part
+ * to look at, why the device says it is isolated — and an operator reads that
+ * once, on purpose. Removing the prop rather than clearing the three call
+ * sites means the state cannot come back by accident.
  *
  * It is deliberately not a modal, not a tooltip and not a hover target. A
  * tooltip cannot be tabbed to, a modal interrupts a monitoring screen an
@@ -60,17 +70,10 @@ export function Disclosure({
   label,
   summary,
   children,
-  defaultOpen = false,
   tone = 'quiet',
   className = '',
 }: DisclosureProps) {
-  const [open, setOpen] = useState(defaultOpen)
-  // Once the reader has made a choice, the page stops overriding it.
-  const [touched, setTouched] = useState(false)
-
-  useEffect(() => {
-    if (defaultOpen && !touched) setOpen(true)
-  }, [defaultOpen, touched])
+  const [open, setOpen] = useState(false)
 
   const reactId = useId().replace(/:/g, '')
   const panelId = `disclosure-panel-${reactId}`
@@ -87,10 +90,7 @@ export function Disclosure({
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
-        onClick={() => {
-          setTouched(true)
-          setOpen((current) => !current)
-        }}
+        onClick={() => setOpen((current) => !current)}
         className={`flex w-full items-center gap-2 px-space-md py-2.5 text-left transition-colors ${
           critical ? 'text-error hover:brightness-95' : 'text-on-surface-variant hover:text-on-surface'
         }`}

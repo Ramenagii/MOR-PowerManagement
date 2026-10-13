@@ -19,30 +19,40 @@ type SensorFaultRailProps = {
  * is blind. So when the device has latched a fault the console spends its
  * whole colour budget in one place, above the content, on every view.
  *
- * The grammar is the same one the provenance rails use across the console —
- * a rail, a well, a dot, a word — in its third state. It is not a toast, not a
- * modal and not a card in the grid, because all three of those are dismissible
- * or scrollable, and this must not be either.
+ * IT IS A STRIP, NOT A PANEL.
  *
- * WHAT IS ON THE RAIL, AND WHY EACH LINE IS THERE:
+ * It used to measure 1289x388px full-width: a headline, a paragraph, a
+ * two-cell definition list, a verbatim quote block and a button. That is a
+ * panel, and a panel sitting above every view on every tab is a toll paid on
+ * every page for a fault that changes maybe once a session.
  *
+ * So the permanent part is now one line — the status dot, the claim, when it
+ * latched, and the way out — and everything else is one click away. Loudness
+ * is the colour and the dot, not the area. A rail that shouts in 40px of
+ * critical wash is still shouting; one that shouts in 388px is just in the way.
+ *
+ * WHAT IS ON THE STRIP, AND WHY EACH PIECE IS THERE:
+ *
+ *   · the status dot and the wash, because the fault is the claim
  *   · the headline, because it is the claim being made about the rig
- *   · the consequence in one sentence, because "0 W is not an idle rig" is the
- *     misread this whole surface exists to prevent
- *   · the device/sensor split as TWO VALUES — posting on schedule, not being
- *     read. That is the specific confusion a reader arrives with ("it says
- *     online"), and it survives without a paragraph under each cell
- *   · the backend's own sentence, verbatim, because it is the only statement
- *     about this fault written by the code that raised it
+ *   · the latched age, because "since when" is the first question after "what"
  *   · the action, because a rail that names a fault and stops is a dead end
+ *   · a disclosure, so the reasoning costs nothing until it is wanted
  *
- * WHAT IS NOT ON THE RAIL:
+ * THE VERBATIM QUOTE BLOCK IS GONE, AND WAS NOT RELOCATED.
  *
- *   The reasoning. Why a posting device still has no readings, which part is
- *   missing and where to start looking are all still here — they are one
- *   disclosure below the action, not deleted. A fault is the moment an operator
- *   reads, and a rail that spends its budget on its own justification is a rail
- *   that hides the fault behind the essay about it.
+ * It quoted the fault event's own `detail` string under a heading reading "From
+ * the event log, verbatim" — which became a lie the moment the event log left
+ * the page. It does not need re-homing: that exact string is the `detail` of
+ * the fault event, and the fault event is a row in the notification centre,
+ * which renders the backend's detail verbatim in its entry. It is on the page,
+ * in its context, under the event's own title and timestamp, which is a better
+ * home for it than a quotation of it.
+ *
+ * The device/sensor split survives as VALUES — "Posting on schedule" beside
+ * "Not being read" — inside the disclosure, where the sentence that used to
+ * sit under each cell explains them. The fault is still the moment an operator
+ * reads; the rail just stops spending its budget on its own justification.
  */
 export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailProps) {
   if (!fault) return null
@@ -60,90 +70,66 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
 
   return (
     <section
-      className="wash-critical border-l-4 border-l-error px-space-lg py-space-md"
+      className="wash-critical border-l-4 border-l-error px-space-lg py-2.5"
       role="alert"
       aria-live="polite"
       aria-label="Sensor fault: readings are not attributable"
     >
-      <div className="flex flex-col gap-space-md">
-        {/* --- Headline ----------------------------------------------------
-            Two rows on a compact viewport, one from 768px up. The chip is
-            `shrink-0` and roughly 180px wide, so inline it competes with the
-            headline for the same 350px and squeezes it to one word per line —
-            which is exactly the opposite of what a fault headline needs. */}
-        <div className="flex flex-col gap-3 md:flex-row md:items-start">
-          <div className="flex min-w-0 flex-1 items-start gap-3">
-            <TriangleAlert size={22} className="mt-0.5 shrink-0 text-error" aria-hidden="true" />
-            <div className="min-w-0 flex-1">
-              <p className="font-label-sm text-label-sm uppercase text-error">
-                Critical · Sensor fault
-              </p>
-              <h2 className="text-balance font-headline-lg text-headline-lg text-on-surface">
-                {fault.historical
-                  ? 'No sensor fault has been cleared since the last one recorded'
-                  : 'The prototype is isolated and no meter is being read'}
-              </h2>
-              <p className="mt-1 font-body-md text-body-md text-on-surface-variant">
-                {faultConsequence(fault)}
-              </p>
-            </div>
-          </div>
-          <span
-            className="self-start rounded-full border border-error-fixed bg-[#FFFFFF] px-2.5 py-1 font-metric-value text-metric-value font-medium text-error"
-            title={fault.at ?? undefined}
-          >
-            {latched}
+      {/*
+        One row that wraps. The consequence sentence — "0 W is not an idle rig"
+        — is the misread this whole surface exists to prevent, so it is not cut:
+        it is the second line of the same block, after the headline, and it is
+        what makes the dot mean anything.
+
+        A dot, not a triangle and a dot. The rail's grammar is a rail, a well, a
+        dot and a word; carrying both a warning triangle and a critical dot put
+        two red marks side by side in the left margin, which reads as two facts
+        rather than one. The triangle still names the fault inside the
+        disclosure, where it sits next to the sensor it is about.
+      */}
+      <div className="flex flex-wrap items-center gap-x-space-md gap-y-2">
+        <span className="ant-dot ant-dot-critical shrink-0" aria-hidden="true" />
+
+        <p className="min-w-0 flex-1">
+          <span className="block text-balance font-title-md text-title-md text-on-surface">
+            {fault.historical
+              ? 'No sensor fault has been cleared since the last one recorded'
+              : 'The prototype is isolated and no meter is being read'}
           </span>
-        </div>
+          <span className="mt-0.5 block max-w-[96ch] font-body-md text-body-md text-on-surface-variant">
+            {faultConsequence(fault)}
+          </span>
+        </p>
 
-        {/* --- The two facts the "0 W" reading cannot survive ---------------
-            Values, not explanations. "Posting on schedule" beside "Not being
-            read" is the whole claim; the paragraph that used to sit under each
-            cell repeated that claim in more words on the one screen where
-            screen space is the scarcest thing in the console. */}
-        <dl className="grid grid-cols-1 gap-px overflow-hidden rounded-md border border-error-fixed bg-[#FBD9D5] md:grid-cols-2">
-          <Fact
-            icon={<Radio size={14} aria-hidden="true" />}
-            label="ESP32 controller"
-            value={fault.devicePosting ? 'Posting on schedule' : 'Not posting'}
-            tone={fault.devicePosting ? 'info' : 'critical'}
-          />
-          <Fact
-            icon={<TriangleAlert size={14} aria-hidden="true" />}
-            label="Metering sensors"
-            value="Not being read"
-            tone="critical"
-          />
-        </dl>
+        <span
+          className="shrink-0 rounded-full border border-error-fixed bg-[#FFFFFF] px-2.5 py-0.5 font-metric-value text-metric-value font-medium text-error"
+          title={fault.at ?? undefined}
+        >
+          {latched}
+        </span>
 
-        {/* --- The backend's own sentence, in the backend's own words -------- */}
-        <div className="rounded-md border border-error-fixed bg-[#FFFFFF] px-3 py-2">
-          <p className="font-label-sm text-label-sm uppercase text-on-surface-variant">
-            From the event log, verbatim
-          </p>
-          <p className="mt-1 font-metric-value text-metric-value text-on-surface">{fault.detail}</p>
-        </div>
+        <button
+          type="button"
+          className="ant-btn ant-btn-default h-8 shrink-0 px-2.5"
+          onClick={onInspectHardware}
+        >
+          <CircuitBoard size={16} aria-hidden="true" />
+          Check the bus
+        </button>
+      </div>
 
-        {/* --- Where to look next -------------------------------------------
-            A pointer to the check, NOT the check itself. Which sensor is
-            missing is a diagnosis; the API does not contain it and this console
-            will not invent it from a symptom. */}
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" className="ant-btn ant-btn-default" onClick={onInspectHardware}>
-            <CircuitBoard size={16} aria-hidden="true" />
-            Check the bus and the parts list
-          </button>
-        </div>
-
-        {/* --- The reasoning, one click away -------------------------------- */}
+      {/* --- The reasoning, one click away --------------------------------- */}
+      <div className="mt-2">
         <Disclosure
           tone="critical"
           label="Why this fault is latched, and what to check first"
           summary="Why this rail says what it says, and the first thing to check"
         >
           <dl className="flex flex-col gap-2">
-            <Note
+            <Fact
+              icon={<Radio size={14} aria-hidden="true" />}
               label="ESP32 controller"
+              value={fault.devicePosting ? 'Posting on schedule' : 'Not posting'}
               tone={fault.devicePosting ? 'info' : 'critical'}
               body={
                 fault.devicePosting
@@ -151,8 +137,10 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
                   : 'No current heartbeat, so nothing below this point is live either way.'
               }
             />
-            <Note
+            <Fact
+              icon={<TriangleAlert size={14} aria-hidden="true" />}
               label="Metering sensors"
+              value="Not being read"
               tone="critical"
               body="The device latched a hardware fault and isolated itself. Which part is missing is a diagnosis, not something this API reports."
             />
@@ -169,7 +157,8 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
           </p>
 
           <p className="max-w-[64ch] font-body-sm text-body-sm text-on-surface-variant">
-            {fault.title} — no clearing event has been written since, so the fault is still latched.
+            {fault.title} — no clearing event has been written since, so the fault is still latched. The
+            full event, with its detail verbatim, is in the notification centre in the top bar.
           </p>
         </Disclosure>
       </div>
@@ -177,37 +166,51 @@ export function SensorFaultRail({ fault, onInspectHardware }: SensorFaultRailPro
   )
 }
 
+/**
+ * A dt/dd pair inside the disclosure: the value the cell used to carry on the
+ * permanent rail, with the explanation that used to sit under each cell.
+ *
+ * Merged into one element on purpose. They were the same fact at two
+ * granularities — "Posting on schedule" above, "the device is alive and its
+ * heartbeat is current" below, both about ESP32 — and two labelled lists with
+ * identical headings is one list read twice.
+ */
 function Fact({
   icon,
   label,
   value,
   tone,
+  body,
 }: {
   icon: React.ReactNode
   label: string
   value: string
   tone: 'info' | 'critical'
+  body: string
 }) {
   return (
-    <div className="flex flex-col gap-1 bg-[#FFFFFF] px-3 py-2.5">
-      <dt className="flex items-center gap-1.5 font-label-md text-label-md uppercase text-on-surface-variant">
+    <div className="flex flex-col gap-0.5">
+      <dt className="flex items-center gap-1.5 font-label-sm text-label-sm uppercase text-on-surface-variant">
         <span aria-hidden="true" className="text-on-surface-variant">
           {icon}
         </span>
         {label}
       </dt>
-      <dd className="flex items-center gap-1.5 font-title-md text-title-md text-on-surface">
-        <span
-          className={`ant-dot ${tone === 'critical' ? 'ant-dot-critical' : 'ant-dot-info'}`}
-          aria-hidden="true"
-        />
-        {value}
+      <dd className="max-w-[76ch] font-body-sm text-body-sm text-on-surface-variant">
+        <span className="flex items-center gap-1.5 font-title-md text-title-md text-on-surface">
+          <span
+            className={`ant-dot ${tone === 'critical' ? 'ant-dot-critical' : 'ant-dot-info'}`}
+            aria-hidden="true"
+          />
+          {value}
+        </span>
+        <span className="mt-0.5 block">{body}</span>
       </dd>
     </div>
   )
 }
 
-/** A dt/dd pair inside the disclosure — the explanation a cell no longer carries. */
+/** A dt/dd pair inside the disclosure with no value of its own. */
 function Note({ label, body, tone }: { label: string; body: string; tone: 'info' | 'critical' }) {
   return (
     <div className="flex flex-col gap-0.5">
