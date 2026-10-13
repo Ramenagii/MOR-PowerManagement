@@ -31,25 +31,29 @@ export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 5 }, (_, i) => i +
 
 /**
  * Grouped by rail so the chart reads structurally rather than as arbitrary
- * hues: blue/teal ramp for the 220 V outlets (CH1-CH4), violet for the 5 V
- * USB rail (CH5). Colors for CH6-CH13 are retained so the full rig restores
- * without touching this table. All are >= 3:1 against --surface #ffffff, and
- * none reads as --accent #0677ad when used as a fill.
+ * hues: a blue/sage ramp for the 220 V outlets (CH1-CH4, each with its own
+ * ZMCT103C into its own ADS1015 input) and a violet outside that family for
+ * the 5 V USB rail (CH5), which has no sensor at all. Colors for CH6-CH13 are
+ * retained so the full rig restores without touching this table.
+ *
+ * Every value is >= 3:1 against the card surface #F5F5F3 (graphics contrast),
+ * and CH5 is deliberately outside the measured family: a hue that read as one
+ * of the sensed mains traces would overstate a rail that has nothing behind it.
  */
 export const CHANNEL_COLORS: string[] = [
-  '#0677ad', // CH1  mains
-  '#0a8f6a', // CH2  mains
-  '#3f7fbf', // CH3  mains
-  '#0f9bb5', // CH4  mains
-  '#4a6fa5', // CH5  mains
-  '#1f7a4d', // CH6  mains
-  '#5c8ac4', // CH7  mains
-  '#2aa198', // CH8  mains
-  '#b26a00', // CH9  110 V
-  '#7a4fb5', // CH10 USB 5 V
-  '#9a4f9e', // CH11 USB 5 V
-  '#5f5fb5', // CH12 USB 5 V
-  '#8c5a3c', // CH13 USB 5 V
+  '#2B5A8F', // CH1  mains, ZMCT103C on AIN0 — the info accent
+  '#2A7E68', // CH2  mains, ZMCT103C on AIN1 — the nominal accent
+  '#4A7FB5', // CH3  mains, ZMCT103C on AIN2 — lighter step of the info ramp
+  '#3F6E63', // CH4  mains, ZMCT103C on AIN3 — deeper step of the sage ramp
+  '#6B5CA5', // CH5  5 V USB — nominal only, not sensed, outside the family
+  '#1F2429', // CH6  mains
+  '#5C7FA3', // CH7  mains
+  '#356F8C', // CH8  mains
+  '#8A5A2B', // CH9  110 V
+  '#7A4E8C', // CH10 USB 5 V
+  '#4F4F8A', // CH11 USB 5 V
+  '#8C5A3C', // CH12 USB 5 V
+  '#1F2429', // CH13 USB 5 V
 ]
 
 /** Cycled by index % 3 — a second encoding so the chart survives CVD and a bad projector. */
@@ -80,47 +84,88 @@ export const METERING_MODE_LABEL: Record<string, string> = {
 }
 
 /**
- * All honesty copy lives here so the telemetry view, the hardware view and the
- * architecture doc cannot drift apart. Never say "measured" for anything derived.
+ * Rig-wide framing only. The PER-CHANNEL wording is not written here — it comes
+ * from `TelemetryChannel.provenanceNote`, which the backend owns and which the
+ * views render verbatim. Inventing a parallel set of sentences is how the last
+ * revision came to be wrong: these captions described a PZEM-004T that is no
+ * longer fitted, and claimed that branch current was "distributed from the
+ * mains total by allowance" when each mains branch in fact has its own ZMCT103C
+ * on its own ADS1015 input.
  */
 export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> = {
   Simulated: {
     tone: 'simulated',
     banner:
-      'Simulated — not measured. No PZEM-004T is wired; the ESP32 synthesises these readings ' +
-      '(SIMULATE_METERS = 1). Per-channel volts are nominal ratings (CH1–CH4 220 V, CH5 5 V). ' +
-      'Current is derived as P/V; per-channel watts are the mains total distributed ' +
-      'across energized channels by allowance. The USB rail counts toward P_total.',
+      'Simulated — not measured. No INA226, ADS1015 or branch current sensor is being read; ' +
+      'the ESP32 synthesises every reading on-device (SIMULATE_METERS = 1). Nothing on this ' +
+      'screen came off a sensor.',
   },
   Metered: {
     tone: 'measured',
     banner:
-      'One meter, five channels. CH1–CH4 volts are read from the single mains PZEM-004T v3.0 on ' +
-      'the common feed. CH5 (5 V USB) reports its nominal rating — it is not ' +
-      'individually metered. Per-channel current and watts are derived by distributing the measured mains ' +
-      'total across energized channels, weighted by each channel’s allowance. This is an estimation ' +
-      'method for DSM research, not revenue-grade metering.',
+      'Per-channel provenance is decided by the hardware on that branch. Each channel\'s own ' +
+      'explanation is shown on its card and in the channel filter; this page only states the rig ' +
+      'shape: one shared voltage reading repeated across the mains branches, and one branch ' +
+      'current sensor per mains outlet.',
   },
   Unknown: {
     tone: 'unknown',
-    banner: 'Metering mode has not been reported by the device yet.',
+    banner: 'The device has not reported a metering mode, so no reading on this screen can be attributed.',
   },
 }
 
-export const VOLTS_CAPTION_METERED =
-  'CH1–CH4 carry the single mains PZEM-004T v3.0 reading; the mains total is distributed across energized channels by allowance.'
+/**
+ * The one sentence that is true on every mains branch, and is the thing most
+ * often got wrong: CH1–CH4 do NOT have four voltage sensors. There is one
+ * shared voltage reading, and the API repeats it per channel, so four identical
+ * volts figures are one measurement shown four times — not four measurements.
+ */
+export const SHARED_VOLTS_NOTE =
+  'CH1–CH4 show the same volts figure because there is one shared voltage reading, repeated per channel. It is not four separate per-branch voltage measurements.'
+
+export const VOLTS_CAPTION_METERED = SHARED_VOLTS_NOTE
 
 export const VOLTS_CAPTION =
-  'CH5 (5 V USB) appears as a flat line because the channel reports its nominal rating. It is not individually metered, but it counts toward P_total.'
+  'CH5 shows a flat 5 V because the USB rail has no sensor behind it. That figure is its ' +
+  'nominal rating, not a measurement, and the row is hatched everywhere it appears.'
 
 export const AMPS_CAPTION =
-  'Current is not sampled. It is derived per channel as P_branch / V_branch, so it is only as trustworthy as the derived power.'
+  'On CH1–CH4 this is read directly from the ZMCT103C on that branch through its own ADS1015 ' +
+  'analogue input — not apportioned from a mains total. CH5 has no CT at all, so its current is ' +
+  'not measured and never appears as a live zero.'
 
 export const WATTS_CAPTION =
-  'Per-channel watts are an allowance-weighted share of the single measured mains total — an estimation method suitable for DSM policy research, not revenue-grade metering.'
+  'On CH1–CH4 this is volts × current on that branch, so it inherits the branch current ' +
+  'measurement rather than being estimated from an allowance share. CH5 is nominal only.'
 
 export const WATTS_CAPTION_SIMULATED =
-  'Per-channel watts are an allowance-weighted share of a synthesised mains total. Nothing here is measured.'
+  'Per-channel watts here are a share of a synthesised mains total. Nothing on this screen was measured.'
+
+/**
+ * What this build does NOT measure, stated once so no view has to guess.
+ *
+ * Every entry below used to be invented somewhere in the console: a THD
+ * percentage, a 0.95 lagging power factor, a 60.0 Hz line frequency, a kWh
+ * energy total, and a 1,500 W per-outlet rating. None of them has a sensor,
+ * an accumulator or a config field behind it — the firmware posts
+ * `energyKwh = 0.0` on every reading, so an energy total computed from it would
+ * be a precise-looking zero. They are listed as absent rather than silently
+ * dropped, because "not shown" and "not measured" are different claims and a
+ * reader deserves to know which one applies.
+ */
+export const NOT_MEASURED: ReadonlyArray<{ label: string; why: string }> = [
+  { label: 'Power factor', why: 'No phase measurement exists on this rig.' },
+  { label: 'Frequency', why: 'Nothing samples line frequency.' },
+  { label: 'THD', why: 'Harmonic distortion is not measured anywhere in the build.' },
+  {
+    label: 'Energy (kWh)',
+    why: 'No accumulator runs on the device. Readings post energyKwh = 0.0, so a total would be a precise-looking zero.',
+  },
+  {
+    label: 'Relay contact state',
+    why: 'RELAY_OUTPUT_ENABLED is 0 — relays are not driven in this phase, so a contact reading would be a constant, not a measurement.',
+  },
+]
 
 /** Matches Telemetry:RetentionDays on the backend. */
 export const TELEMETRY_RETENTION_DAYS = 3

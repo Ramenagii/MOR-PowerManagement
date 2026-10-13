@@ -1,22 +1,27 @@
 import { Bolt, Power } from 'lucide-react'
 import type { AppView } from '../types/dashboard'
+import type { SensorFault } from '../utils/sensorFault'
 
 /**
- * Top navigation bar, replacing the previous hamburger menu.
+ * Top navigation bar.
  *
- * The redesign's defining structural change is a horizontal tab bar across the
- * top of the viewport rather than a collapsed drawer: with six views a drawer
- * costs two clicks per navigation and hides the whole map of the app. The
- * tab set is kept in step with ViewMenu's ordering so both read the same.
+ * A horizontal tab bar across the top of the viewport rather than a collapsed
+ * drawer: with six views a drawer costs two clicks per navigation and hides the
+ * whole map of the app.
  *
- * Ported to the Ant standard: flat-first surface, hairline bottom rule,
- * underline tabs (active = primary text + a 2px primary baseline), and every
- * control on the shared 32px (h-8) height box so the bar reads as one row.
+ * 64px tall. The controls on it are the standard's 40px box, so the bar is a
+ * layout choice rather than a compatibility constraint — nothing below it
+ * depends on the exact height any more.
  *
- * The bar itself stays 60px tall rather than shrinking to its 32px controls:
- * ChannelInventoryView (already ported, not editable here) offsets its own
- * content by --page-margin + 44px through the legacy `.design-main` rule, which
- * assumes a 60px bar. Trimming the bar would open a 20px hole under that view.
+ * THE STATUS PILL IS THE INTERESTING PART.
+ *
+ * It used to say "System {band}" derived from the load total. That is wrong
+ * under the current fault: the backend computes Normal from a total of 0 W
+ * while the device has latched `S_fault` and stopped reading its sensors, so
+ * the most reassuring word on the screen was the one least entitled to be
+ * there. When a fault is in the record the pill now says what the record
+ * actually says, and it wears the critical wash. Everything else on the bar is
+ * allowed to be quiet; this is not.
  */
 const TABS: Array<{ id: AppView; label: string }> = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -30,45 +35,32 @@ const TABS: Array<{ id: AppView; label: string }> = [
 type AppTopBarProps = {
   activeView: AppView
   onChange: (view: AppView) => void
+  /** Load-derived band, from the API's own thresholds. Ignored when faulted. */
   systemState: string
+  /** What the pill actually renders. Already fault-aware. */
+  systemLabel: string
+  sensorFault: SensorFault | null
   deviceOnline: boolean
   userEmail: string | null
-}
-
-/**
- * Status colour for the load itself. Offline never borrows the load colour —
- * an unknown state must not read as a healthy one, so it falls back to the
- * tertiary token exactly as the legacy bar did.
- *
- * The normal/healthy dot is deliberately NOT green. Green is not a state
- * colour anywhere in this console: "nothing is wrong" is the absence of an
- * alarm, so it wears the neutral outline token and the bar keeps amber and
- * red as the only two things it can shout about. `.ant-dot-normal` is still
- * `bg-secondary` in ant.css, which is shared and deliberately untouched, so
- * the neutral is applied here as a utility (the utilities layer wins over the
- * components layer ant-dot lives in) rather than by editing shared CSS.
- */
-function stateDot(systemState: string, deviceOnline: boolean): string {
-  if (!deviceOnline) return 'ant-dot ant-dot-warning'
-  if (systemState === 'Critical') return 'ant-dot ant-dot-critical'
-  if (systemState === 'Warning') return 'ant-dot ant-dot-warning'
-  return 'ant-dot bg-outline-variant'
 }
 
 export function AppTopBar({
   activeView,
   onChange,
-  systemState,
+  systemLabel,
+  sensorFault,
   deviceOnline,
   userEmail,
 }: AppTopBarProps) {
+  const faulted = sensorFault !== null
+
   return (
-    <header className="sticky top-0 z-40 h-[60px] border-b border-surface-container bg-surface-container-lowest">
+    <header className="sticky top-0 z-40 h-16 border-b border-outline-variant bg-surface-container-lowest">
       <div className="mx-auto flex h-full w-full max-w-[1440px] items-center gap-space-md px-margin">
         {/* ---- Identity ---------------------------------------------------- */}
         <div className="flex shrink-0 items-center gap-space-sm">
           <span
-            className="grid h-8 w-8 place-items-center rounded-md bg-primary text-on-primary"
+            className="grid h-8 w-8 place-items-center rounded bg-primary text-on-primary"
             aria-hidden="true"
           >
             <Bolt size={18} />
@@ -76,9 +68,13 @@ export function AppTopBar({
           <span className="hidden whitespace-nowrap font-title-lg text-title-lg font-semibold text-on-surface sm:inline">
             MOR Power
           </span>
-          <span className="hidden whitespace-nowrap rounded-sm bg-surface-container px-1.5 py-0.5 font-metric-value text-metric-value text-on-surface-variant md:inline">
-            v2.4
-          </span>
+          {/*
+            No build/version chip here, and none should be added. It used to
+            read "v2.4", a string with no source behind it — the SPA never asked
+            the host for a version, so it would silently disagree with reality
+            the day the backend moved. If a version is wanted it has to come from
+            an endpoint; until then the bar shows only what it can prove.
+          */}
         </div>
 
         {/* ---- Tabs -------------------------------------------------------- */}
@@ -94,10 +90,10 @@ export function AppTopBar({
                 type="button"
                 aria-current={active ? 'page' : undefined}
                 onClick={() => onChange(tab.id)}
-                className={`shrink-0 whitespace-nowrap border-b-2 font-title-md text-title-md transition-colors ${
+                className={`shrink-0 whitespace-nowrap border-b-2 px-0.5 font-title-md text-title-md transition-colors ${
                   active
                     ? 'border-primary font-semibold text-primary'
-                    : 'border-transparent font-medium text-on-surface-variant hover:border-outline-variant hover:text-primary'
+                    : 'border-transparent font-medium text-on-surface-variant hover:border-outline-strong hover:text-on-surface'
                 }`}
               >
                 {tab.label}
@@ -108,32 +104,49 @@ export function AppTopBar({
 
         {/* ---- Status ------------------------------------------------------ */}
         <div className="flex shrink-0 items-center gap-space-sm">
-          {/* Device state is reported honestly: offline means no recent telemetry,
-              and the design's "System Normal" pill must not imply otherwise. */}
+          {/*
+            Three states, and the fault one outranks the other two: a faulted
+            device that is still posting is the combination an operator is most
+            likely to read as healthy, because "online" is right.
+          */}
           <span
-            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-md border border-outline-variant bg-surface-container-low px-2.5 font-body-sm text-body-sm text-on-surface"
+            className={`inline-flex h-10 items-center gap-2 whitespace-nowrap rounded border px-3 font-body-sm text-body-sm ${
+              faulted
+                ? 'border-error-fixed bg-error-container font-medium text-error'
+                : deviceOnline
+                  ? 'border-outline-variant bg-surface-container-low text-on-surface-variant'
+                  : 'border-tertiary-fixed bg-tertiary-container font-medium text-tertiary'
+            }`}
             title={
-              deviceOnline
-                ? 'ESP32 reported telemetry recently'
-                : 'No ESP32 telemetry in the last 30 seconds'
+              faulted
+                ? sensorFault.at
+                  ? `Sensor fault latched at ${new Date(sensorFault.at).toLocaleString()}`
+                  : 'Sensor fault latched — see the rail below'
+                : deviceOnline
+                  ? 'ESP32 reported telemetry recently'
+                  : 'No ESP32 telemetry recently'
             }
           >
-            <span className={stateDot(systemState, deviceOnline)} aria-hidden="true" />
-            <span className="hidden sm:inline">
-              {deviceOnline ? `System ${systemState}` : 'Device offline'}
-            </span>
-            <span className="sm:hidden">{deviceOnline ? systemState : 'Offline'}</span>
+            <span
+              className={`ant-dot ${
+                faulted ? 'ant-dot-critical' : deviceOnline ? 'ant-dot-normal' : 'ant-dot-warning'
+              }`}
+              aria-hidden="true"
+            />
+            <span className="hidden sm:inline">{systemLabel}</span>
+            <span className="sm:hidden">{faulted ? 'Fault' : deviceOnline ? 'OK' : 'Offline'}</span>
           </span>
 
           {/*
-            The design shows an "Emergency Trip" button. There is no such command
-            in the API, and wiring a fake one would put a false control on the
-            defense screen. FR-01 fault isolation is reachable through the
-            scenario panel instead, so the button is omitted rather than faked.
+            The design shows an "Emergency Trip" button. There is no such
+            command in the API, and wiring a fake one would put a false control
+            on the defense screen. FR-01 fault isolation is reachable through
+            the scenario panel instead, so the button is omitted rather than
+            faked.
           */}
 
           <span
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary font-title-md text-title-md font-semibold text-on-primary"
+            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary font-title-md text-title-md font-semibold text-on-primary"
             title={userEmail ?? 'Signed out'}
           >
             {userEmail ? userEmail.slice(0, 1).toUpperCase() : <Power size={16} aria-hidden="true" />}

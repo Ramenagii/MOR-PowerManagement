@@ -282,3 +282,99 @@ export function toAreaPath(
 export function backoffMs(attempts: number): number {
   return Math.min(Math.pow(2, Math.max(0, attempts)) * 2000, 60_000)
 }
+
+/**
+ * The current below which a ZMCT103C branch reading is treated as "no load"
+ * rather than as a live figure.
+ *
+ * This matters because the console formats amps to three decimals so the USB
+ * rail's milliamp draw stays visible — which means a genuinely idle branch
+ * prints `0.002`, and rounding that for a human reader lands on `0.00`. A
+ * `0.00 A` sitting next to a load figure is the exact shape of a false claim:
+ * it reads as "measured, and the answer is zero" when the truth is "measured,
+ * and the answer is indistinguishable from nothing". So the number keeps its
+ * real digits, and the VERDICT beside it says which of the two it is.
+ *
+ * 5 mA is below the transformer's practical resolution for the small
+ * conductors on this rig, so a reading under it carries no usable information.
+ */
+export const NOISE_FLOOR_AMPS = 0.005
+
+/** What a branch reading means, said in words rather than left to the digits. */
+export type LoadVerdict =
+  | { kind: 'no-reading'; label: string; detail: string }
+  | { kind: 'no-load'; label: string; detail: string }
+  | { kind: 'load'; label: string; detail: string }
+
+/**
+ * Decide how a channel's current figure must be presented.
+ *
+ * The ordering matters more than it looks: a GAP is checked before a small
+ * number, because a channel that reported nothing at all in the window and a
+ * channel that reported nothing measurable are different findings and the UI
+ * must not collapse them.
+ */
+export function loadVerdict(
+  amps: number | null,
+  opts: { sensed: boolean; channelId: number },
+): LoadVerdict {
+  const id = `CH${String(opts.channelId).padStart(2, '0')}`
+  if (amps === null || !Number.isFinite(amps)) {
+    return {
+      kind: 'no-reading',
+      label: 'No reading',
+      detail: `${id} posted no sample in this window. That is a gap in the record, not a measured zero.`,
+    }
+  }
+  if (!opts.sensed) {
+    return {
+      kind: 'no-load',
+      label: 'Not fitted',
+      detail: `${id} has no current sensor on its branch, so no current reading is taken for it at all. The figure shown is this channel's nominal rating.`,
+    }
+  }
+  if (Math.abs(amps) < NOISE_FLOOR_AMPS) {
+    return {
+      kind: 'no-load',
+      label: 'No load',
+      detail: `${id} reports ${amps.toFixed(3)} A, which is below the ${NOISE_FLOOR_AMPS} A floor of the branch sensor — indistinguishable from no load. The branch is not fitted or not drawing.`,
+    }
+  }
+  return { kind: 'load', label: 'Measuring', detail: '' }
+}
+
+/**
+ * Aggregate current on the mains feed, as the SUM of the branch readings.
+ *
+ * Summed rather than computed as P / V on purpose. Each mains branch reports
+ * its own current through its own CT, so the total of those readings is a real
+ * measurement — whereas total watts divided by one shared voltage reading
+ * would be arithmetic on a derived number, and would silently absorb the error
+ * of every branch at once.
+ *
+ * Only SENSED channels contribute. A nominal channel has no current reading to
+ * add, and folding in its nominal volts would fabricate a contribution.
+ */
+export function aggregatedCurrent(
+  channels: Array<{ amps: Array<number | null>; provenance: string }>,
+): number | null {
+  let sum = 0
+  let counted = 0
+  for (const channel of channels) {
+    if (channel.provenance !== 'Measured') continue
+    const last = lastPresent(channel.amps)
+    if (last === null) continue
+    sum += last
+    counted += 1
+  }
+  return counted > 0 ? sum : null
+}
+
+/** Last non-null value in a series, or null if it never reported. */
+export function lastPresent(values: Array<number | null>): number | null {
+  for (let i = values.length - 1; i >= 0; i -= 1) {
+    const value = values[i]
+    if (value !== null && value !== undefined && Number.isFinite(value)) return value
+  }
+  return null
+}

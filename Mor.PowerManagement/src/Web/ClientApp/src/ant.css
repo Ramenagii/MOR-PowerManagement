@@ -3,151 +3,219 @@
 @tailwind utilities;
 
 /* ---------------------------------------------------------------------------
-   Ant Design Enterprise Power Ops — base layer.
-   Token source: DESIGN.md. This file owns only the primitives the design system
+   Precision Instrumentation System — base layer.
+
+   Token source: DESIGN.md. This file owns only the primitives the standard
    states as global; everything else is a utility class on the component.
 
    DELIBERATELY UNLAYERED. Tailwind emits @layer base, and in the CSS cascade an
    unlayered rule always beats a layered one regardless of import order. The
    legacy styles.css is unlayered, so anything written inside @layer base would
-   silently lose to it and the new design would never take effect. Keeping these
-   rules unlayered is what makes the Ant standard authoritative while the last
-   legacy views are being ported.
+   silently lose to it. These rules stay unlayered because they are the ones
+   that must not be overruleable.
    --------------------------------------------------------------------------- */
-  html {
-    /* 4px vertical and horizontal grid for the whole console. */
-    font-size: 16px;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
-  }
 
-  body {
-    margin: 0;
-    background-color: #f5f5f7;
-    color: #1f1f1f;
-    font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-size: 14px;
-    line-height: 22px;
-    font-weight: 400;
-  }
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 
-  /* Only two interface weights are permitted (400 and 600). Anything else is
-     filtered rather than silently rendered thin or heavy. */
-  h1,
-  h2,
-  h3,
-  h4,
-  h5,
-  h6 {
-    font-weight: 600;
-    color: #1f1f1f;
-    margin: 0;
-  }
+  /* DESIGN.md "Typography": tabular numeric rendering must be active
+     SYSTEM-WIDE so digits align across every streaming metric, including the
+     ones written as plain text inside a table cell. */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'cv01' 1;
+}
 
-  /* Streaming numerals must not jitter as digits change. */
-  .font-metric-display,
-  .font-metric-value,
-  .font-code,
-  .tabular {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-variant-numeric: tabular-nums;
-    font-feature-settings: 'tnum';
-  }
+body {
+  margin: 0;
+  background-color: #fbfbfa;
+  color: #1f2429;
+  font-family: Geist, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+}
 
-  /* High-precision focus ring, never a blurry browser default. */
-  :focus-visible {
-    outline: none;
-    box-shadow: 0 0 0 2px rgba(0, 87, 194, 0.2);
-  }
+/* Only 400 and 600 are permitted for interface text; headings take 600 and
+   labels 500 via their own tokens. */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: 600;
+  color: #1f2429;
+  margin: 0;
+}
 
-  input,
-  select,
-  button,
-  textarea {
-    font-family: inherit;
-    font-size: 14px;
-  }
+/* Every figure that carries a number pins the tabular feature explicitly, so a
+   metric never loses it to a font-family or a reset further up the tree. */
+.font-metric-display,
+.font-metric-value,
+.font-code,
+.font-label-md,
+.font-label-sm,
+.tabular {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
 
-  input[type='number'] {
-    font-family: 'JetBrains Mono', ui-monospace, monospace;
-    font-variant-numeric: tabular-nums;
-  }
+/* DESIGN.md "Form Inputs": focus is a 2px border shift to the info accent with
+   a soft outer ring. Never the blurry browser default. */
+:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(43, 90, 143, 0.12);
+}
 
-  /* Range inputs are used as threshold sliders in the admin console. */
-  input[type='range'] {
-    accent-color: #0057c2;
-  }
+input,
+select,
+button,
+textarea {
+  font-family: inherit;
+  font-size: 14px;
+}
+
+/* Numeric fields are machine telemetry, so they wear the mono token. */
+input[type='number'] {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Range inputs are the threshold sliders in the admin console. */
+input[type='range'] {
+  accent-color: #2b5a8f;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: #2b5a8f;
+}
+
+/* DESIGN.md "Shapes": checkbox 4px, radio 50%. */
+input[type='checkbox'] {
+  border-radius: 4px;
+}
 
 @layer components {
-  /* --- Buttons: 32px height across every variant (DESIGN.md "Buttons") --- */
+  /* --- Buttons ------------------------------------------------------------
+     DESIGN.md "Buttons" specifies the 8px curve, the #2B5A8F primary with a
+     #234974 hover and no gloss. It states no height, so buttons share the
+     40px control box with fields: one rhythm, not two. */
   .ant-btn {
-    @apply h-8 px-3 rounded flex items-center justify-center gap-1.5 font-title-md text-body-sm
-      transition-colors active:translate-y-px whitespace-nowrap;
+    @apply h-10 px-3.5 rounded font-body-md font-medium
+      transition-colors active:translate-y-px whitespace-nowrap
+      disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .ant-btn-primary {
-    @apply bg-primary text-on-primary hover:bg-primary-container shadow-sm;
+    @apply bg-primary text-on-primary hover:bg-[#234974] border border-transparent;
   }
 
+  /* DESIGN.md "Secondary / Neutral": #F5F5F3 with a #E6E6E2 border, hovering
+     to #ECECE9. Card surface, not pure white, so a row of buttons sits inside
+     the porcelain stack rather than punching holes in it. */
   .ant-btn-default {
-    @apply bg-surface-container-lowest text-on-surface border border-outline-variant shadow-sm
-      hover:text-primary;
+    @apply bg-surface-container-lowest text-on-surface border border-outline-variant
+      hover:bg-surface-container-low;
+  }
+
+  .ant-btn-ghost {
+    @apply bg-transparent text-on-surface-variant border border-transparent
+      hover:bg-surface-container-low hover:text-on-surface;
   }
 
   .ant-btn-danger {
-    @apply bg-error text-on-error hover:brightness-95 shadow-sm;
+    @apply bg-error text-on-error border border-transparent hover:brightness-95;
   }
 
-  /* --- Inputs: 32px, hairline border, 6px radius --- */
+  /* A control that would claim an action the build cannot perform. DESIGN.md
+     gives it the disabled geometry and the reason is always rendered next to
+     it by the component — never hidden behind a tooltip. */
+  .ant-btn-disabled {
+    @apply bg-surface-container text-outline border border-outline-variant
+      cursor-not-allowed shadow-none;
+  }
+
+  /* --- Inputs -------------------------------------------------------------
+     DESIGN.md "Form Inputs": height 40px, background #FFFFFF, #E6E6E2 border,
+     #6B7280 placeholder, 8px curve. */
   .ant-input {
-    @apply h-8 w-full px-2.5 bg-surface-container-lowest text-on-surface rounded-md
-      border border-outline-variant shadow-sm outline-none;
+    @apply h-10 w-full px-3 rounded text-body-md text-on-surface bg-[#FFFFFF]
+      border border-outline-variant outline-none transition-colors;
+  }
+
+  .ant-input::placeholder {
+    color: #6b7280;
   }
 
   .ant-input:focus {
     @apply border-primary;
-    box-shadow: 0 0 0 2px rgba(0, 87, 194, 0.15);
+    box-shadow: 0 0 0 3px rgba(43, 90, 143, 0.12);
   }
 
   .ant-input:disabled {
     @apply bg-surface-container text-outline cursor-not-allowed;
   }
 
-  /* --- Cards: flat-first, hairline border, no heavy shadow --- */
+  /* --- Cards --------------------------------------------------------------
+     DESIGN.md "Cards & Telemetry Pods": background #F5F5F3, 1px #E6E6E2
+     border, 12px curve, padding space-md to space-lg. Depth comes from the
+     tonal step off the canvas, never from a drop shadow. */
   .ant-card {
-    @apply bg-surface-container-lowest rounded-lg shadow-sm;
+    @apply bg-surface-container-lowest rounded-lg border border-outline-variant
+      shadow-card;
   }
 
+  /* DESIGN.md puts table headers in Surface Level 2, so a card header is a
+     well band across the top of the card rather than another card. */
   .ant-card-header {
-    @apply px-space-lg py-space-md bg-surface-container-low flex items-center justify-between gap-2;
+    @apply px-space-lg py-space-md bg-surface-container-low border-b
+      border-outline-variant flex items-center justify-between gap-3;
   }
 
   .ant-card-body {
     @apply p-space-lg;
   }
 
-  /* --- Tables: 44px rows, #FAFAFA header, hairline dividers, no zebra --- */
+  /* --- Tables -------------------------------------------------------------
+     DESIGN.md "Data Tables": #FBFBFA header, bottom border #E6E6E2, label-md in
+     #4B5563, 44px rows, light #E6E6E2 dividers, transparent / #FDFCFC zebra. */
   .ant-table-header {
-    @apply bg-surface-container-low text-on-surface font-semibold text-body-md;
+    @apply bg-background text-on-surface-variant border-b border-outline-variant;
   }
 
   .ant-table-row {
-    @apply h-11 bg-surface-container-lowest hover:bg-surface-container-low border-b
-      border-outline-variant;
+    @apply h-11 bg-transparent border-b border-outline-variant;
+  }
+
+  .ant-table-row:nth-child(even) {
+    background-color: #fdfcfc;
+  }
+
+  .ant-table-row:hover {
+    background-color: #f5f5f3;
   }
 
   /* Numerical cells: right-aligned tabular mono. */
   .ant-table-num {
-    @apply text-right font-metric-value text-metric-value font-metric-value;
+    @apply text-right font-metric-value text-metric-value;
   }
 
-  /* --- Status dots: 6px, semantic colour, 4px label gap --- */
+  /* --- Status indicators --------------------------------------------------
+     DESIGN.md "Status Badges & Chips": a 6px circular dot in the matching
+     foreground accent. `.ant-dot` alone is the neutral case; a component that
+     means something picks one of the four. */
   .ant-dot {
-    @apply inline-block w-1.5 h-1.5 rounded-full;
+    @apply inline-block w-1.5 h-1.5 rounded-full shrink-0;
   }
 
   .ant-dot-normal {
     @apply bg-secondary;
+  }
+  .ant-dot-info {
+    @apply bg-primary;
   }
   .ant-dot-warning {
     @apply bg-tertiary;
@@ -156,50 +224,143 @@
     @apply bg-error;
   }
 
-  /* --- Tags / badges: 20px height, 2px radius, 12px type --- */
+  /* --- Tags / chips -------------------------------------------------------
+     Full pills, muted fill, one hairline, 12px type. Never a solid fill. */
   .ant-tag {
-    @apply inline-flex items-center h-5 px-2 rounded-sm text-body-sm border;
+    @apply inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-body-sm
+      font-medium border whitespace-nowrap;
+  }
+
+  /* The four washes, each carrying its own dot per the standard. A neutral tag
+     (no `.ant-tag--*`) has no dot, because it asserts no state. */
+  .ant-tag-success,
+  .ant-tag-info,
+  .ant-tag-warning,
+  .ant-tag-error {
+    @apply before:content-[''] before:w-1.5 before:h-1.5 before:rounded-full
+      before:shrink-0;
+  }
+
+  .ant-tag-success {
+    @apply bg-secondary-container text-on-secondary-container border-secondary-fixed;
+  }
+  .ant-tag-success::before {
+    background-color: #2a7e68;
   }
 
   .ant-tag-info {
-    @apply bg-primary-fixed text-on-primary-fixed-variant border-primary-fixed-dim;
+    @apply bg-primary-container text-on-primary-container border-primary-fixed;
   }
-  .ant-tag-success {
-    @apply bg-secondary-container text-on-secondary-container border-secondary;
-  }
-  .ant-tag-warning {
-    @apply bg-tertiary-fixed text-on-tertiary-fixed border-tertiary-fixed-dim;
-  }
-  .ant-tag-error {
-    @apply bg-error-container text-on-error-container border-error;
+  .ant-tag-info::before {
+    background-color: #2b5a8f;
   }
 
-  /* --- Segmented control: 32px container, white active segment --- */
+  .ant-tag-warning {
+    @apply bg-tertiary-container text-on-tertiary-container border-tertiary-fixed;
+  }
+  .ant-tag-warning::before {
+    background-color: #b46928;
+  }
+
+  .ant-tag-error {
+    @apply bg-error-container text-on-error-container border-error-fixed;
+  }
+  .ant-tag-error::before {
+    background-color: #c24136;
+  }
+
+  /* --- Segmented control --------------------------------------------------
+     40px container in the well tone, white active segment. */
   .ant-segmented {
-    @apply inline-flex items-center h-8 p-0.5 rounded bg-surface-container;
+    @apply inline-flex items-center h-10 p-1 rounded bg-surface-container-low;
   }
 
   .ant-segmented-item {
-    @apply h-7 px-3 flex items-center rounded text-body-sm text-on-surface-variant
+    @apply h-8 px-3 flex items-center rounded text-body-sm text-on-surface-variant
       transition-colors cursor-pointer;
   }
 
-  .ant-segmented-item-active {
-    @apply bg-surface-container-lowest text-on-surface shadow-sm;
+  .ant-segmented-item:hover {
+    @apply text-on-surface;
   }
 
-  /* --- Meter / load bar --- */
+  .ant-segmented-item-active {
+    @apply bg-surface-bright text-primary font-semibold shadow-card;
+  }
+
+  /* --- Meter / load bar ----------------------------------------------------
+     Track in the structural-divide tone so a fill is visible against the card
+     without the track reading as a second border. */
   .ant-meter {
     @apply h-1.5 w-full rounded-full bg-surface-container overflow-hidden;
   }
 
   .ant-meter-fill {
-    @apply h-full rounded-full transition-[width] duration-300;
+    @apply h-full rounded-full transition-[width] duration-300
+      motion-reduce:transition-none;
   }
 }
 
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+
+  /* -----------------------------------------------------------------------
+     THE PROVENANCE GRAMMAR.
+     One rule, three states. Measured, inferred and faulted are the same
+     structure — a 2px rail, a well, a dot, a word — so a reader learns it once
+     and applies it to every panel in the console. The third state is new in
+     this build: a channel whose sensors the device has stopped reading is not
+     "derived", it is unreadable, and it wears the critical accent.
+     --------------------------------------------------------------------- */
+  .prov-rail {
+    @apply border-l-2 pl-2.5;
+  }
+
+  .prov-rail--measured {
+    @apply border-outline-variant;
+  }
+  .prov-rail--derived {
+    @apply border-tertiary;
+  }
+  .prov-rail--faulted {
+    @apply border-error;
+  }
+
+  /* -----------------------------------------------------------------------
+     STATUS SURFACES.
+     A panel that is stating a status gets the matching wash from the standard
+     and never re-implements the triple in a component. Accent for the label,
+     ink primary for body copy: the washes are tuned to be looked THROUGH, and
+     a full paragraph of #C24136 on #FDF0EE fails contrast long before it
+     reads better.
+     --------------------------------------------------------------------- */
+  .wash-nominal,
+  .wash-info,
+  .wash-advisory,
+  .wash-critical {
+    @apply rounded-lg border;
+  }
+
+  .wash-nominal {
+    @apply bg-secondary-container border-secondary-fixed;
+  }
+  .wash-info {
+    @apply bg-primary-container border-primary-fixed;
+  }
+  .wash-advisory {
+    @apply bg-tertiary-container border-tertiary-fixed;
+  }
+  .wash-critical {
+    @apply bg-error-container border-error-fixed;
+  }
+}
+
+/* DESIGN.md's neutral equivalents, for a panel whose status is "untroubled".
+   Same geometry as a wash, no colour: nothing here is asserting a verdict. */
+@layer utilities {
+  .wash-quiet {
+    @apply rounded-lg border border-outline-variant bg-surface-container-lowest;
   }
 }

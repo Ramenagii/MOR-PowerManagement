@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  TriangleAlert,
   X,
 } from 'lucide-react'
 import {
@@ -23,14 +24,25 @@ import {
 import {
   AMPS_CAPTION,
   METERING_MODE_LABEL,
+  NOT_MEASURED,
   POLL_INTERVAL_MS,
   PROVENANCE_COPY,
+  SHARED_VOLTS_NOTE,
   VOLTS_CAPTION,
   WATTS_CAPTION,
   WATTS_CAPTION_SIMULATED,
 } from '../data/telemetry'
 import type { Outlet, OutletStatus, Priority } from '../types/dashboard'
-import { describeSeries, formatValue, histogram, stalenessState } from '../utils/telemetry'
+import {
+  aggregatedCurrent,
+  describeSeries,
+  formatValue,
+  histogram,
+  lastPresent,
+  loadVerdict,
+  stalenessState,
+} from '../utils/telemetry'
+import { detectSensorFault, faultConsequence, type SensorFault } from '../utils/sensorFault'
 import { RAIL_FILTERS, railLabel, railOf, type RailFilter } from './policyAdmin'
 
 /**
@@ -162,6 +174,30 @@ function provenanceView(provenance: TelemetryProvenance): ProvenanceView {
 }
 
 /**
+ * THE THIRD STATE.
+ *
+ * `Measured` is the API's word for what the firmware intends to do, and it is
+ * what the backend returns for CH1-CH4 even while the device is latched in a
+ * hardware fault and posting a confident 0.0 A on every branch. When the event
+ * log says the device isolated itself, "measured" stops being a claim the
+ * console is entitled to repeat — not because the backend is wrong about its
+ * own routing, but because a sensor that is not answering produces exactly the
+ * number a working sensor produces when nothing is plugged in.
+ *
+ * So this view downgrades the SENSE label and says why, in the same grammar as
+ * the other two states: rail, well, dot, word. It does not touch the
+ * provenanceNote, which is still rendered verbatim underneath — the whole
+ * point is that a reader can see the backend's claim and the console's reason
+ * for not repeating it, side by side.
+ */
+const FAULTED_VIEW: ProvenanceView = {
+  label: 'No reading — device fault',
+  dotClass: 'ant-dot ant-dot-critical',
+  measured: false,
+  note: 'The device has latched a hardware fault and isolated the prototype. No sensor is being read on this branch, so the figure is absent rather than zero.',
+}
+
+/**
  * Static metadata is neutral. A channel's rail, relay and shed priority are
  * facts about the channel, not verdicts about its health, so they are read as
  * one muted line. This is also what a 220 V rail and a 5 V USB rail need to be
@@ -232,15 +268,6 @@ const UNKNOWN_CHANNEL = (
   peakWatts: [],
 })
 
-/** Last non-null value in a series, or null if the channel never reported. */
-function lastValue(values: Array<number | null>): number | null {
-  for (let i = values.length - 1; i >= 0; i -= 1) {
-    const value = values[i]
-    if (value !== null && Number.isFinite(value)) return value
-  }
-  return null
-}
-
 /** Join the roster (state) with the readings (telemetry) on outlet id. */
 function joinChannels(outlets: Outlet[], series: TelemetrySeries | null): ChannelReading[] {
   return outlets.map((outlet) => {
@@ -250,9 +277,9 @@ function joinChannels(outlets: Outlet[], series: TelemetrySeries | null): Channe
 
     return {
       channel,
-      volts: lastValue(channel.volts),
-      amps: lastValue(channel.amps),
-      watts: lastValue(channel.watts),
+      volts: lastPresent(channel.volts),
+      amps: lastPresent(channel.amps),
+      watts: lastPresent(channel.watts),
       coverage: describeSeries(channel.watts).count,
       total: series?.bucketCount ?? 0,
     }
@@ -439,8 +466,13 @@ function buildDistribution(
 const DERIVED_HATCH =
   'repeating-linear-gradient(135deg, rgba(255,255,255,0.62) 0 3px, rgba(255,255,255,0) 3px 7px)'
 
-const STATE_SHELL =
-  'flex flex-col gap-3 px-margin py-space-lg max-w-3xl'
+/**
+ * Pre-data shells share one frame. The `design-main` legacy class is gone: it
+ * baked in a 44px offset for a top bar that no longer sizes that way, and this
+ * view now uses the same Tailwind page frame as every other view, so the whole
+ * app shares one horizontal grid.
+ */
+const STATE_SHELL = 'flex max-w-3xl flex-col gap-3 px-margin py-space-lg'
 
 /** The eyebrow above a page title in the three pre-data shells. */
 const SHELL_EYEBROW = 'font-body-sm text-body-sm text-on-surface-variant'
@@ -519,62 +551,75 @@ export function ChannelInventoryView() {
 
   if (status === 'unauthorized') {
     return (
-      <section className="design-main" aria-label="Channel Inventory">
-        <div className={STATE_SHELL}>
-          <div>
-            <p className={SHELL_EYEBROW}>Channel Inventory</p>
-            <h1 className="font-headline-md text-headline-md text-on-surface">Session expired</h1>
-          </div>
-          <div className="ant-card p-space-lg">
-            <p className="font-body-md text-body-md text-on-surface-variant">
-              Sign in again to view the sensor inventory.
-            </p>
-          </div>
+      <section aria-label="Channel Inventory">
+      <div className={STATE_SHELL}>
+        <div>
+          <p className={SHELL_EYEBROW}>Channel Inventory</p>
+          <h1 className="font-headline-md text-headline-md text-on-surface">Session expired</h1>
         </div>
-      </section>
+        <div className="ant-card p-space-lg">
+          <p className="font-body-md text-body-md text-on-surface-variant">
+            Sign in again to view the sensor inventory.
+          </p>
+        </div>
+      </div>
+    </section>
     )
   }
 
   if (status === 'error') {
     return (
-      <section className="design-main" aria-label="Channel Inventory">
-        <div className={STATE_SHELL}>
-          <div>
-            <p className={SHELL_EYEBROW}>Channel Inventory</p>
-            <h1 className="font-headline-md text-headline-md text-on-surface">Inventory unavailable</h1>
-          </div>
-          <div className="ant-card p-space-lg flex gap-space-sm">
-            <AlertTriangle size={18} className="shrink-0 mt-0.5 text-error" aria-hidden />
-            <p className="font-body-md text-body-md text-on-surface-variant">
-              {error ?? 'The dashboard state could not be loaded.'} This view needs both{' '}
-              <code className="font-metric-value text-metric-value">/Dashboard/state</code> and{' '}
-              <code className="font-metric-value text-metric-value">/Dashboard/telemetry</code> to be
-              reachable.
-            </p>
-          </div>
+      <section aria-label="Channel Inventory">
+      <div className={STATE_SHELL}>
+        <div>
+          <p className={SHELL_EYEBROW}>Channel Inventory</p>
+          <h1 className="font-headline-md text-headline-md text-on-surface">Inventory unavailable</h1>
         </div>
-      </section>
+        <div className="ant-card p-space-lg flex gap-space-sm">
+          <AlertTriangle size={18} className="shrink-0 mt-0.5 text-error" aria-hidden />
+          <p className="font-body-md text-body-md text-on-surface-variant">
+            {error ?? 'The dashboard state could not be loaded.'} This view needs both{' '}
+            <code className="font-metric-value text-metric-value">/Dashboard/state</code> and{' '}
+            <code className="font-metric-value text-metric-value">/Dashboard/telemetry</code> to be
+            reachable.
+          </p>
+        </div>
+      </div>
+    </section>
     )
   }
 
   if (!snapshot) {
     return (
-      <section className="design-main" aria-label="Channel Inventory">
-        <div className={STATE_SHELL}>
-          <div>
-            <p className={SHELL_EYEBROW}>Channel Inventory</p>
-            <h1 className="font-headline-md text-headline-md text-on-surface">Loading channels</h1>
-          </div>
-          <div className="ant-card p-space-lg flex items-center gap-space-sm">
-            <RefreshCw size={16} className="animate-spin motion-reduce:animate-none text-primary" aria-hidden />
-            <p className="font-body-md text-body-md text-on-surface-variant">
-              Reading the device roster and the latest samples…
-            </p>
-          </div>
+      <section aria-label="Channel Inventory">
+      <div className={STATE_SHELL}>
+        <div>
+          <p className={SHELL_EYEBROW}>Channel Inventory</p>
+          <h1 className="font-headline-md text-headline-md text-on-surface">Loading channels</h1>
         </div>
-      </section>
+        <div className="ant-card p-space-lg flex items-center gap-space-sm">
+          <RefreshCw size={16} className="animate-spin motion-reduce:animate-none text-primary" aria-hidden />
+          <p className="font-body-md text-body-md text-on-surface-variant">
+            Reading the device roster and the latest samples…
+          </p>
+        </div>
+      </div>
+    </section>
     )
   }
+
+  /*
+   * The fault is resolved from this view's OWN snapshot rather than handed down
+   * from App, so the inventory stays correct if it is ever mounted on its own.
+   * It duplicates the detector, not the verdict: both read the same event log.
+   */
+  const sensorFault: SensorFault | null = detectSensorFault({
+    events: snapshot.events,
+    deviceOnline: snapshot.deviceOnline,
+    channelCount: snapshot.outlets.length,
+    now,
+  })
+  const faulted = sensorFault !== null
 
   const readings = joinChannels(snapshot.outlets, series)
   const byId = new Map(snapshot.outlets.map((o) => [o.id, o]))
@@ -647,15 +692,28 @@ export function ChannelInventoryView() {
   const mainsReading = readings.find((r) => railOf(r.channel.ratedVoltageVolts) === '220')
   const mainsVolts = mainsReading?.volts ?? null
   const mainsProvenance = provenanceView(mainsReading?.channel.provenance ?? 'Unknown')
-  // Aggregate current is arithmetic on a derived total, so it is labelled as
-  // derived on screen rather than presented alongside the measured cards.
-  const aggregateAmps =
-    mainsVolts !== null && mainsVolts > 0 && !mainsProvenance.measured ? null : mainsVolts && totalWatts / mainsVolts
+
+  // Aggregate current is the SUM of the branch readings, not watts ÷ volts.
+  //
+  // Each mains branch reports its own current through its own ZMCT103C on its
+  // own ADS1015 input, so adding those readings is a measurement. Dividing the
+  // power total by one shared voltage reading would instead be arithmetic on a
+  // single value, and would fold every branch's error in at once. The nominal
+  // USB channel contributes nothing, because there is nothing to contribute.
+  const aggregateAmps = aggregatedCurrent(
+    readings.map((reading) => ({
+      amps: reading.channel.amps,
+      provenance: reading.channel.provenance,
+    })),
+  )
+  const measuredBranchCount = readings.filter(
+    (reading) => reading.channel.provenance === 'Measured',
+  ).length
 
   const filtersActive = railFilter !== 'all' || normalizedQuery.length > 0
 
   return (
-    <section className="design-main" aria-label="Channel Inventory">
+    <section aria-label="Channel Inventory">
       {/* --- Breadcrumb ------------------------------------------------------ */}
       <nav aria-label="Breadcrumb" className="flex items-center gap-space-sm mb-space-sm">
         <span className="font-body-sm text-body-sm text-on-surface-variant">Dashboard</span>
@@ -690,7 +748,7 @@ export function ChannelInventoryView() {
               freshness.tone === 'fresh'
                 ? 'text-on-surface-variant'
                 : freshness.tone === 'delayed'
-                  ? 'text-tertiary-container'
+                  ? 'text-tertiary'
                   : 'text-error'
             }`}
             role="status"
@@ -724,13 +782,36 @@ export function ChannelInventoryView() {
         </div>
       </header>
 
-      {/* --- Provenance banner ---------------------------------------------- */}
+      {/* --- Provenance banner ----------------------------------------------
+          The metering mode and the fault are two different sentences about two
+          different things, and both are needed. "Metered" says what the device
+          is configured to do; the fault says whether it managed to. Collapsing
+          them into one banner is how a rig that reads zero for a reason nobody
+          can see ends up looking like an idle bench. */}
+      {faulted && sensorFault && (
+        <section
+          className="wash-critical mb-space-md flex items-start gap-space-sm px-space-md py-space-sm"
+          role="alert"
+          aria-label="Sensor fault: channel figures are not attributable"
+        >
+          <TriangleAlert size={18} className="mt-0.5 shrink-0 text-error" aria-hidden />
+          <div className="min-w-0">
+            <p className="font-title-md text-title-md text-on-surface">
+              Sensor fault latched — the figures on these cards are not measurements
+            </p>
+            <p className="mt-0.5 font-body-sm text-body-sm text-on-surface-variant">
+              {faultConsequence(sensorFault)}
+            </p>
+          </div>
+        </section>
+      )}
+
       <section
         className={`ant-card p-space-md mb-space-lg flex items-start gap-space-sm border-l-4 ${
           // Only a simulated mode is a fault worth a red rail. "Metered" is the
-          // good case and used to wear green; it is now the neutral outline like
-          // every other untroubled banner edge.
-          mode === 'Simulated' ? 'border-l-error' : 'border-l-outline'
+          // configured intent and wears the neutral edge; whether the device
+          // managed to honour it is the rail above.
+          mode === 'Simulated' ? 'border-l-error' : 'border-l-outline-strong'
         }`}
         aria-label="Metering mode"
       >
@@ -755,30 +836,46 @@ export function ChannelInventoryView() {
           Total active load is the one hero figure on this view and the only
           card that wears metric-display. Mains voltage, aggregate current and
           the energised relay count are peer readings at metric-value: they are
-          three facts the operator checks, not three headlines. */}
+          three facts the operator checks, not three headlines.
+
+          Under a latched fault, the three cards that carry a live measurement
+          all collapse to the same word. The fourth — the relay/channel count —
+          stays, because a policy status is still true when the sensors are
+          gone, and removing it would imply the fault had taken out more than
+          it had. */}
       <section
         className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-space-md mb-space-lg"
         aria-label="Inventory summary"
       >
         {/* 1. Total load — the one meter-backed figure on the rig. */}
-        <article className="ant-card flex flex-col justify-between gap-space-sm">
+        <article
+          className={`ant-card flex flex-col justify-between gap-space-sm ${
+            faulted ? 'prov-rail prov-rail--faulted' : ''
+          }`}
+        >
           <div className="ant-card-body p-space-md flex flex-col h-full">
             <div className="flex items-center justify-between gap-space-sm">
               <span className="font-body-sm text-body-sm text-on-surface-variant">Total Active Load</span>
               <span
                 className={`font-metric-value text-metric-value font-semibold ${
-                  loadPercent >= 100
+                  faulted
                     ? 'text-error'
-                    : loadPercent >= 85
-                      ? 'text-tertiary-container'
-                      : 'text-on-surface-variant'
+                    : loadPercent >= 100
+                      ? 'text-error'
+                      : loadPercent >= 85
+                        ? 'text-tertiary'
+                        : 'text-on-surface-variant'
                 }`}
               >
-                {`${loadPercent.toFixed(0)}% load`}
+                {faulted ? 'not attributable' : `${loadPercent.toFixed(0)}% load`}
               </span>
             </div>
-            <p className="font-metric-display text-metric-display text-on-surface flex items-baseline gap-1">
-              {Math.round(totalWatts).toLocaleString()}
+            <p
+              className={`font-metric-display text-metric-display flex items-baseline gap-1 ${
+                faulted ? 'text-error' : 'text-on-surface'
+              }`}
+            >
+              {faulted ? 'No reading' : Math.round(totalWatts).toLocaleString()}
               <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
                 W
               </span>
@@ -786,18 +883,32 @@ export function ChannelInventoryView() {
             <div className="ant-meter mt-auto" role="presentation">
               <div
                 className={`ant-meter-fill ${
-                  // Below warning is a measurement, not a health verdict, so the
-                  // fill wears the measurement blue rather than a green "all good".
-                  loadPercent >= 100 ? 'bg-error' : loadPercent >= 85 ? 'bg-tertiary' : 'bg-primary'
+                  // A load band, so it wears the three bands. A full-width
+                  // HATCH when faulted, because an empty track at 0% is
+                  // indistinguishable from a healthy idle rig — which is the
+                  // exact misread this whole treatment exists to prevent.
+                  faulted
+                    ? 'bg-error'
+                    : loadPercent >= 100
+                      ? 'bg-error'
+                      : loadPercent >= 85
+                        ? 'bg-tertiary'
+                        : 'bg-secondary'
                 }`}
-                style={{ width: `${Math.min(100, loadPercent)}%` }}
+                style={{
+                  width: faulted ? '100%' : `${Math.min(100, loadPercent)}%`,
+                  backgroundImage: faulted ? DERIVED_HATCH : undefined,
+                  opacity: faulted ? 0.3 : undefined,
+                }}
               />
             </div>
             <p className="font-metric-value text-metric-value text-on-surface-variant">
-              {`Cap ${capacity.toLocaleString()} W · Headroom ${Math.max(
-                0,
-                Math.round(capacity - totalWatts),
-              ).toLocaleString()} W`}
+              {faulted
+                ? `Cap ${capacity.toLocaleString()} W · headroom not derivable`
+                : `Cap ${capacity.toLocaleString()} W · Headroom ${Math.max(
+                    0,
+                    Math.round(capacity - totalWatts),
+                  ).toLocaleString()} W`}
             </p>
             <p className="font-metric-value text-metric-value text-outline">
               {`Warn ${snapshot.thresholds.warning.toLocaleString()} W · Crit ${snapshot.thresholds.critical.toLocaleString()} W`}
@@ -805,8 +916,13 @@ export function ChannelInventoryView() {
           </div>
         </article>
 
-        {/* 2. Mains RMS voltage — the only per-branch measurement in the rig. */}
-        <article className="ant-card flex flex-col">
+        {/* 2. Mains RMS voltage — ONE shared reading, repeated per channel.
+            This card used to carry the comment "the only per-branch measurement
+            in the rig", which is the exact inverse of the truth: voltage is the
+            one quantity here that is NOT measured per branch. */}
+        <article
+          className={`ant-card flex flex-col ${faulted ? 'prov-rail prov-rail--faulted' : ''}`}
+        >
           <div className="ant-card-body p-space-md flex flex-col h-full gap-space-sm">
             <div className="flex items-center justify-between gap-space-sm">
               <span className="font-body-sm text-body-sm text-on-surface-variant">Mains RMS Voltage</span>
@@ -814,78 +930,114 @@ export function ChannelInventoryView() {
                 className={`inline-flex items-center gap-1.5 ${PROVENANCE_LINE}`}
                 title={mainsProvenance.note}
               >
-                <span className={mainsProvenance.dotClass} aria-hidden />
-                {mainsProvenance.label}
+                <span className={faulted ? 'ant-dot ant-dot-critical' : mainsProvenance.dotClass} aria-hidden />
+                {faulted ? 'No reading' : mainsProvenance.label}
               </span>
             </div>
-            <p className="font-metric-value text-metric-value text-on-surface flex items-baseline gap-1">
-              {fmt(mainsVolts, 'V')}
+            <p
+              className={`font-metric-value text-metric-value flex items-baseline gap-1 ${
+                faulted ? 'text-error' : 'text-on-surface'
+              }`}
+            >
+              {faulted ? '—' : fmt(mainsVolts, 'V')}
               <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
                 V RMS
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant mt-auto">
-              {`${railCountsByFilter['220']} channel${railCountsByFilter['220'] === 1 ? '' : 's'} on the 220 V common feed`}
+              {`${railCountsByFilter['220']} channel${railCountsByFilter['220'] === 1 ? '' : 's'} · 1 shared reading`}
             </p>
-            <p className="font-body-sm text-body-sm text-outline">{mainsProvenance.note}</p>
+            <p className="font-body-sm text-body-sm text-outline">
+              One reading repeated on every mains channel — not a per-branch measurement.
+            </p>
           </div>
         </article>
 
-        {/* 3. Aggregated current — arithmetic, so it is labelled as derived. */}
-        <article className="ant-card flex flex-col">
+        {/* 3. Aggregated current — the sum of the branch readings, which IS a
+            measurement. Every term is sensed, so the sum is sensed; this card
+            previously divided watts by voltage and labelled the result derived,
+            which threw away four real branch readings to invent one. Under a
+            fault the sum is four zeros, which is still four zeros. */}
+        <article
+          className={`ant-card flex flex-col ${faulted ? 'prov-rail prov-rail--faulted' : ''}`}
+        >
           <div className="ant-card-body p-space-md flex flex-col h-full gap-space-sm">
             <div className="flex items-center justify-between gap-space-sm">
               <span className="font-body-sm text-body-sm text-on-surface-variant">Aggregated Current</span>
-              <span className={`inline-flex items-center gap-1.5 ${PROVENANCE_LINE}`}>
-                <span className="ant-dot ant-dot-warning" aria-hidden />
-                Derived
+              <span
+                className={`inline-flex items-center gap-1.5 ${PROVENANCE_LINE}`}
+                title="Sum of the per-branch ZMCT103C readings on the ADS1015 — not derived from watts"
+              >
+                <span
+                  className={faulted ? 'ant-dot ant-dot-critical' : 'ant-dot bg-outline-variant'}
+                  aria-hidden
+                />
+                {faulted ? 'No reading' : 'Sum of branches'}
               </span>
             </div>
-            <p className="font-metric-value text-metric-value text-on-surface flex items-baseline gap-1">
-              {aggregateAmps === null ? '—' : aggregateAmps.toFixed(2)}
+            <p
+              className={`font-metric-value text-metric-value flex items-baseline gap-1 ${
+                faulted ? 'text-error' : 'text-on-surface'
+              }`}
+            >
+              {faulted ? '—' : aggregateAmps === null ? '—' : aggregateAmps.toFixed(3)}
               <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
                 A
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant mt-auto">
-              {aggregateAmps === null
-                ? 'Needs a mains voltage reading'
-                : `P ÷ V = ${totalWatts.toFixed(0)} W ÷ ${fmt(mainsVolts, 'V')} V`}
+              {faulted
+                ? 'No CT is answering on any branch'
+                : aggregateAmps === null
+                  ? 'No sensed branch reported'
+                  : `${measuredBranchCount} branch CT readings, added`}
             </p>
             <p className="font-metric-value text-metric-value text-outline">
-              {mainsReading ? `Derived from CH${String(mainsReading.channel.outletId).padStart(2, '0')} mains voltage` : 'No mains channel'}
+              {`Nominal channels excluded: ${readings.length - measuredBranchCount}`}
             </p>
           </div>
         </article>
 
-        {/* 4. Energization — pure roster state, no inference at all. */}
+        {/* 4. Relay state — and the honest framing of it.
+            This is the card that most needed a rewrite. It was headed "Active
+            Relays" and counted outlets whose STATUS is Active, which on this
+            build has nothing to do with a relay: RELAY_OUTPUT_ENABLED is 0, so
+            the firmware never drives a contact and relayClosed is posted as a
+            constant true. Presenting that count under a relay heading would be
+            a control that claims an action the system cannot perform.
+
+            It is now labelled for what it actually is — the policy engine's
+            status for each channel — and says outright that no contact state is
+            being reported. This card is NOT suppressed under a fault: a policy
+            status is still true when the sensors are gone, and blanking it
+            would overstate what the fault has taken out. */}
         <article className="ant-card flex flex-col">
           <div className="ant-card-body p-space-md flex flex-col h-full gap-space-sm">
             <div className="flex items-center justify-between gap-space-sm">
-              <span className="font-body-sm text-body-sm text-on-surface-variant">Active Relays</span>
+              <span className="font-body-sm text-body-sm text-on-surface-variant">Channel policy status</span>
               <span
-                className={`inline-flex items-center gap-1.5 font-body-sm text-body-sm font-semibold ${
-                  snapshot.deviceOnline ? 'text-on-surface-variant' : 'text-tertiary-container'
+                className={`inline-flex items-center gap-1.5 font-body-sm text-body-sm font-medium ${
+                  snapshot.deviceOnline ? 'text-on-surface-variant' : 'text-tertiary'
                 }`}
               >
                 <span
-                  className={`ant-dot ${snapshot.deviceOnline ? 'bg-outline-variant' : 'ant-dot-warning'}`}
+                  className={`ant-dot ${snapshot.deviceOnline ? 'ant-dot-normal' : 'ant-dot-warning'}`}
                   aria-hidden
                 />
-                {snapshot.deviceOnline ? 'Online' : 'Offline'}
+                {snapshot.deviceOnline ? 'Controller online' : 'Controller offline'}
               </span>
             </div>
             <p className="font-metric-value text-metric-value text-on-surface flex items-baseline gap-1.5">
               <span className="font-metric-value text-metric-value">{energizedCount}</span>
               <span className="font-body-md text-body-md font-normal text-on-surface-variant">
-                / {readings.length} Energized
+                / {readings.length} channels Active
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant mt-auto">
               {`Window ${series?.windowLabel ?? '—'} · ${series?.rawSampleCount ?? 0} raw rows`}
             </p>
-            <p className="font-metric-value text-metric-value text-outline">
-              {`${readings.length - energizedCount} standby / off`}
+            <p className="font-metric-value text-metric-value text-tertiary">
+              Relay outputs not driven — status only
             </p>
           </div>
         </article>
@@ -931,7 +1083,7 @@ export function ChannelInventoryView() {
 
           <div className="relative shrink-0">
             <select
-              className="h-8 pl-2.5 pr-7 font-body-sm text-body-sm rounded-md bg-surface-container-lowest text-on-surface border border-outline-variant shadow-sm outline-none cursor-pointer appearance-none focus:border-primary"
+              className="h-10 pl-3 pr-8 font-body-sm text-body-sm rounded bg-[#FFFFFF] text-on-surface border border-outline-variant outline-none cursor-pointer appearance-none transition-colors focus:border-primary"
               aria-label="Sort channels"
               value={sort}
               onChange={(event) => setSort(event.target.value as SortId)}
@@ -945,7 +1097,7 @@ export function ChannelInventoryView() {
             <ChevronDown
               size={16}
               aria-hidden
-              className="absolute right-2 top-2 pointer-events-none text-on-surface-variant"
+              className="absolute right-2.5 top-3 pointer-events-none text-on-surface-variant"
             />
           </div>
 
@@ -999,7 +1151,13 @@ export function ChannelInventoryView() {
           {visibleReadings.map((reading) => {
             const outlet = byId.get(reading.channel.outletId)
             const statusView = STATUS_VIEWS[outlet?.status ?? 'Disconnected']
-            const view = provenanceView(reading.channel.provenance)
+            // The API's own provenance label is kept, but it is not what the
+            // card is allowed to CLAIM while the device is in fault. `view` is
+            // what gets drawn; `apiView` is what the provenance block below
+            // names, so the discrepancy stays auditable.
+            const apiView = provenanceView(reading.channel.provenance)
+            const view = faulted ? FAULTED_VIEW : apiView
+            const suppressed = faulted
             const stats = describeSeries(reading.channel.watts)
             // The roster owns the human name; the telemetry channel carries a
             // fallback. Either way the name leads the card and the CH id follows
@@ -1013,20 +1171,39 @@ export function ChannelInventoryView() {
 
             const allowance = outlet?.allowance ?? 0
             const hasAllowance = allowance > 0
-            const hasReading = reading.watts !== null
+            // Under a fault there IS a reading in the array — it is zero — and
+            // it is exactly as trustworthy as a blank. `hasReading` is forced
+            // false so every downstream `no reading` / `—` path engages.
+            const hasReading = reading.watts !== null && !suppressed
             const rawPercent = hasAllowance && hasReading ? (reading.watts! / allowance) * 100 : 0
             const overAllowance = rawPercent > 100
             const usedPercent = Math.min(100, rawPercent)
 
-            // Fill colour encodes headroom; the hatch encodes derivation. Both
-            // must be present for the bar to read as a measurement.
-            const fillColor = overAllowance
+            // Fill colour encodes headroom; the hatch encodes derivation. Under a
+            // fault neither applies — the bar becomes a full-width hatched
+            // critical rail, because "there is a slot on this track and nothing
+            // trustworthy can go in it" is a different shape from "0% used".
+            const fillColor = suppressed
               ? 'bg-error'
-              : rawPercent >= 85
-                ? 'bg-tertiary'
-                : view.measured
-                  ? 'bg-primary'
-                  : 'bg-tertiary'
+              : overAllowance
+                ? 'bg-error'
+                : rawPercent >= 85
+                  ? 'bg-tertiary'
+                  : 'bg-secondary'
+
+            // What the current figure means, in words. This is the one thing a
+            // bare "0.002 A" cannot say on its own: whether the branch drew
+            // nothing, has no sensor, or simply never reported.
+            const verdict = suppressed
+              ? {
+                  kind: 'no-reading' as const,
+                  label: 'No reading',
+                  detail: 'The device has latched a hardware fault and isolated the prototype. No sensor is answering on this branch, so this is an absent figure rather than a measured zero.',
+                }
+              : loadVerdict(reading.amps, {
+                  sensed: view.measured,
+                  channelId: reading.channel.outletId,
+                })
 
             return (
               <article
@@ -1080,38 +1257,55 @@ export function ChannelInventoryView() {
                 <div>
                   <p
                     className={`font-metric-display text-metric-display flex items-baseline gap-1 ${
-                      overAllowance ? 'text-error' : 'text-on-surface'
+                      suppressed ? 'text-error' : overAllowance ? 'text-error' : 'text-on-surface'
                     }`}
                   >
-                    {fmtWatts(reading.watts)}
-                    <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
-                      W
-                    </span>
+                    {/*
+                      The unit is dropped with the figure. "No reading W" reads as
+                      a watts figure that happens to be missing its number, which
+                      is precisely the ambiguity this state exists to remove.
+                    */}
+                    {suppressed ? 'No reading' : fmtWatts(reading.watts)}
+                    {suppressed ? null : (
+                      <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
+                        W
+                      </span>
+                    )}
                   </p>
                   <div className="flex items-baseline justify-between gap-2 mt-1">
                     <span className="min-w-0 truncate font-body-sm text-body-sm text-on-surface-variant">
-                      {hasAllowance ? (
-                        <>
-                          {'of the '}
-                          <span className="font-metric-value text-metric-value text-on-surface">
-                            {`${fmtWatts(allowance)} W`}
-                          </span>
-                          {' this outlet is allowed to draw'}
-                        </>
-                      ) : (
-                        'No draw limit set for this outlet'
-                      )}
+                      {suppressed
+                        ? 'Sensor fault — this branch is not being read'
+                        : hasAllowance ? (
+                          <>
+                            {'of the '}
+                            <span className="font-metric-value text-metric-value text-on-surface">
+                              {`${fmtWatts(allowance)} W`}
+                            </span>
+                            {' this outlet is allowed to draw'}
+                          </>
+                        ) : (
+                          'No draw limit set for this outlet'
+                        )}
                     </span>
                     <span
                       className={`shrink-0 font-metric-value text-metric-value font-semibold ${
-                        overAllowance
+                        suppressed
                           ? 'text-error'
-                          : rawPercent >= 85
-                            ? 'text-tertiary-container'
-                            : 'text-on-surface-variant'
+                          : overAllowance
+                            ? 'text-error'
+                            : rawPercent >= 85
+                              ? 'text-tertiary'
+                              : 'text-on-surface-variant'
                       }`}
                     >
-                      {hasReading && hasAllowance ? `${fmtPercent(rawPercent)} used` : hasAllowance ? 'no reading' : '—'}
+                      {suppressed
+                        ? 'not attributable'
+                        : hasReading && hasAllowance
+                          ? `${fmtPercent(rawPercent)} used`
+                          : hasAllowance
+                            ? 'no reading'
+                            : '—'}
                     </span>
                   </div>
                   <div
@@ -1120,13 +1314,24 @@ export function ChannelInventoryView() {
                     aria-valuenow={hasReading && hasAllowance ? Math.round(rawPercent) : undefined}
                     aria-valuemin={0}
                     aria-valuemax={100}
-                    aria-label={`Allowance used — ${view.label}`}
+                    aria-label={
+                      suppressed
+                        ? 'Allowance used — not attributable, sensor fault latched'
+                        : `Allowance used — ${view.label}`
+                    }
                   >
+                    {/* A full-width HATCHED bar, not a zero-width one. The
+                        shape says "there is a slot on this track and nothing
+                        trustworthy can go in it", which an empty bar cannot say —
+                        an empty bar is exactly what an idle channel looks like,
+                        and that ambiguity is the whole bug. */}
                     <div
                       className={`ant-meter-fill ${fillColor}`}
                       style={{
-                        width: `${hasReading ? usedPercent : 0}%`,
-                        backgroundImage: view.measured ? undefined : DERIVED_HATCH,
+                        width: suppressed ? '100%' : `${hasReading ? usedPercent : 0}%`,
+                        backgroundImage:
+                          suppressed || !view.measured ? DERIVED_HATCH : undefined,
+                        opacity: suppressed ? 0.3 : undefined,
                       }}
                     />
                   </div>
@@ -1138,38 +1343,88 @@ export function ChannelInventoryView() {
                 </div>
 
                 {/* 4 — THE THREE READINGS, in the words a non-engineer uses.
-                    "Voltage / Current / Power" are the units; "Supply / Current in
-                    use / Power drawn" are what those units are FOR. Units stay in
-                    the figure, and every figure rides the tabular metric token so
-                    nothing jitters while the operator watches it stream. */}
-                <div className="grid grid-cols-3 gap-1 bg-surface-container-low rounded-md py-2 px-1 text-center">
+                    "Voltage / Current / Power" are the units; "Supply / Current
+                    in use / Power drawn" are what those units are FOR. Under a
+                    latched fault all three hold an em dash and say so, because
+                    three confident zeros in a row is the most believable lie
+                    this screen could tell. */}
+                <div className="grid grid-cols-3 gap-1 bg-surface-container-low rounded py-2 px-1 text-center">
                   <div>
-                    <div className="font-body-sm text-body-sm text-on-surface-variant">Supply</div>
+                    <div className="font-label-sm text-label-sm uppercase text-on-surface-variant">
+                      Supply
+                    </div>
                     <div className="font-metric-value text-metric-value font-semibold text-on-surface">
-                      {`${fmtVolts(reading.volts)} V`}
+                      {`${suppressed ? '—' : fmtVolts(reading.volts)} V`}
+                    </div>
+                    <div className="font-code text-code text-outline">
+                      {suppressed ? 'no reading' : view.measured ? 'shared' : 'nominal'}
                     </div>
                   </div>
                   <div>
-                    <div className="font-body-sm text-body-sm text-on-surface-variant">Current in use</div>
+                    <div className="font-label-sm text-label-sm uppercase text-on-surface-variant">
+                      Current in use
+                    </div>
                     <div
                       className={`font-metric-value text-metric-value font-semibold ${
-                        reading.amps === null ? 'text-on-surface-variant' : 'text-on-surface'
+                        suppressed || reading.amps === null
+                          ? 'text-on-surface-variant'
+                          : 'text-on-surface'
                       }`}
                     >
-                      {`${fmtAmps(reading.amps)} A`}
+                      {`${suppressed ? '—' : fmtAmps(reading.amps)} A`}
+                    </div>
+                    {/* The verdict, not the digits, is what stops "0.002 A"
+                        reading as a live zero. */}
+                    <div
+                      className={`font-code text-code ${
+                        verdict.kind === 'load'
+                          ? 'text-outline'
+                          : verdict.kind === 'no-reading'
+                            ? 'text-error'
+                            : 'text-tertiary'
+                      }`}
+                    >
+                      {verdict.label}
                     </div>
                   </div>
                   <div>
-                    <div className="font-body-sm text-body-sm text-on-surface-variant">Power drawn</div>
+                    <div className="font-label-sm text-label-sm uppercase text-on-surface-variant">
+                      Power drawn
+                    </div>
                     <div
                       className={`font-metric-value text-metric-value font-semibold ${
-                        hasReading ? (overAllowance ? 'text-error' : 'text-on-surface') : 'text-on-surface-variant'
+                        suppressed
+                          ? 'text-error'
+                          : hasReading
+                            ? overAllowance
+                              ? 'text-error'
+                              : 'text-on-surface'
+                            : 'text-on-surface-variant'
                       }`}
                     >
-                      {`${fmtWatts(reading.watts)} W`}
+                      {`${suppressed ? '—' : fmtWatts(reading.watts)} W`}
+                    </div>
+                    <div className="font-code text-code text-outline">
+                      {suppressed ? 'no reading' : view.measured ? 'V × A' : 'nominal'}
                     </div>
                   </div>
                 </div>
+
+                {/* The one-line reason behind the verdict above. Rendered only
+                    when there is something to explain: "No load" on its own is
+                    a claim, this is the evidence for it. */}
+                {verdict.detail && (
+                  <p
+                    className={`rounded px-2 py-1.5 font-body-sm text-body-sm ${
+                      suppressed
+                        ? 'border border-error-fixed bg-error-container text-on-surface'
+                        : 'bg-surface-container-low text-on-surface-variant'
+                    }`}
+                    title={verdict.detail}
+                  >
+                    {verdict.detail}
+                  </p>
+                )}
 
                 {/* 5 — HOW IT HAS BEEN BEHAVING, over the window. "Min / Mean / Max
                     / σ" is four unexplained tokens; the same four facts as words
@@ -1177,29 +1432,47 @@ export function ChannelInventoryView() {
                     number — it is the one figure on this card that means nothing
                     without knowing what a standard deviation is — so it becomes the
                     verdict it actually supports. Gaps are skipped, never read as
-                    zero, so a dead channel says so rather than showing 0.0. */}
-                <div className="flex flex-col gap-0.5">
-                  <p className="flex flex-wrap items-baseline gap-x-3 font-body-sm text-body-sm text-on-surface-variant">
-                    {(
-                      [
-                        ['Lowest seen', stats.min],
-                        ['Typical', stats.mean],
-                        ['Highest', stats.max],
-                      ] as const
-                    ).map(([label, value]) => (
-                      <span key={label} className="whitespace-nowrap">
-                        {label}
-                        <span className="ml-1 font-metric-value text-metric-value text-on-surface">
-                          {fmtWatts(value)}
+                    zero, so a dead channel says so rather than showing 0.0.
+
+                    Under a fault the whole block is replaced rather than
+                    relabelled: "lowest 0.0 W / typical 0.0 W / steady" computed
+                    from a blind device is a perfectly ordinary-looking sentence
+                    about nothing, which is worse than no sentence. */}
+                {suppressed ? (
+                  <div className="prov-rail prov-rail--faulted">
+                    <p className="font-body-sm text-body-sm text-on-surface">
+                      Behaviour over the window is not summarised
+                    </p>
+                    <p className="font-body-sm text-body-sm text-on-surface-variant">
+                      A channel with no sensor answering produces a flat zero line. Plotting that
+                      as a distribution would present the absence of a measurement as the shape of a
+                      load.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-0.5">
+                    <p className="flex flex-wrap items-baseline gap-x-3 font-body-sm text-body-sm text-on-surface-variant">
+                      {(
+                        [
+                          ['Lowest seen', stats.min],
+                          ['Typical', stats.mean],
+                          ['Highest', stats.max],
+                        ] as const
+                      ).map(([label, value]) => (
+                        <span key={label} className="whitespace-nowrap">
+                          {label}
+                          <span className="ml-1 font-metric-value text-metric-value text-on-surface">
+                            {fmtWatts(value)}
+                          </span>
                         </span>
-                      </span>
-                    ))}
-                  </p>
-                  <p className="font-body-sm text-body-sm text-on-surface-variant">
-                    {'Steadiness: '}
-                    <span className="text-on-surface">{steadiness(stats)}</span>
-                  </p>
-                </div>
+                      ))}
+                    </p>
+                    <p className="font-body-sm text-body-sm text-on-surface-variant">
+                      {'Steadiness: '}
+                      <span className="text-on-surface">{steadiness(stats)}</span>
+                    </p>
+                  </div>
+                )}
 
                 {/* 6 — THE DISTRIBUTION, and the chart itself is unchanged: bars rise
                     from one shared baseline rule and scale to the modal bin, the
@@ -1209,7 +1482,7 @@ export function ChannelInventoryView() {
                     "nothing in this band" rather than as a short sample. What
                     changed is the prose around it — a line saying what the chart
                     IS, and three anchor words instead of three band numbers. */}
-                {chart && (
+                {chart && !suppressed && (
                   <figure className="m-0 flex flex-col gap-1">
                     <p className="font-body-sm text-body-sm text-on-surface-variant">
                       {`How the load was distributed across ${chart.total} reading${chart.total === 1 ? '' : 's'} in this window`}
@@ -1264,21 +1537,68 @@ export function ChannelInventoryView() {
                   </figure>
                 )}
 
-                {/* 7 — Footer: provenance as a dot plus neutral text — never a filled
-                    chip — and sample coverage, which answers "how much of this
-                    window is real?". The API's provenanceNote is kept verbatim
-                    and clamped to one line: the backend owns that wording, and a
-                    paragraph here pushes the card past its height budget. */}
+                {/* 7 — PROVENANCE, in full.
+                    This used to be one clamped line in the footer. Clamping the
+                    API's provenanceNote is the wrong call on the one field the
+                    backend bothers to write per channel: it is the sentence
+                    that says whether this card's numbers were measured, and a
+                    sentence cut off at the ellipsis does not survive a panel
+                    asking "is that real?". It is now rendered whole, above the
+                    footer, as its own block.
+
+                    Under a fault this block does double duty, and deliberately.
+                    It states the console's verdict, then quotes the backend's
+                    own claim verbatim underneath it, so the disagreement is on
+                    the card rather than in a changelog. Hiding what the API says
+                    would be the dishonest half of this fix. */}
+                <div
+                  className={`rounded px-2.5 py-2 ${
+                    suppressed
+                      ? 'prov-rail prov-rail--faulted border border-error-fixed bg-error-container'
+                      : 'bg-surface-container-low'
+                  }`}
+                >
+                  <p className="flex items-center gap-1.5 font-body-sm text-body-sm font-medium text-on-surface">
+                    <span className={view.dotClass} aria-hidden />
+                    {view.label}
+                    {view.measured ? null : (
+                      <span
+                        className={`font-body-sm text-body-sm font-normal ${
+                          suppressed ? 'text-error' : 'text-tertiary'
+                        }`}
+                      >
+                        · not measured
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
+                    {view.note}
+                  </p>
+                  {suppressed && (
+                    <>
+                      <p className="mt-1.5 font-label-sm text-label-sm uppercase text-on-surface-variant">
+                        What the API reports for this channel
+                      </p>
+                      <p className="font-body-sm text-body-sm text-on-surface-variant">
+                        {apiView.label} —{' '}
+                        {reading.channel.provenanceNote ||
+                          'The backend did not supply a provenance note for this channel.'}
+                      </p>
+                    </>
+                  )}
+                </div>
+
+                {/* 8 — Footer: the relay channel as CONFIGURATION, plus sample
+                    coverage, which answers "how much of this window is real?".
+                    Relay outputs are not driven in this build, so this is a
+                    wiring fact and never a contact reading. */}
                 <footer className="mt-auto pt-2 border-t border-outline-variant flex items-center justify-between gap-2">
                   <span
-                    className={`inline-flex min-w-0 items-center gap-1.5 ${PROVENANCE_LINE}`}
-                    title={reading.channel.provenanceNote || view.note}
+                    className="inline-flex min-w-0 items-center gap-1.5 font-metric-value text-metric-value text-outline"
+                    title={`${reading.channel.relayChannel} — configured channel. Relay outputs are not driven in this phase, so no contact state is reported.`}
                   >
-                    <span className={`${view.dotClass} shrink-0`} aria-hidden />
-                    <span className="truncate">
-                      {view.label}
-                      <span className="text-outline"> · {reading.channel.provenanceNote}</span>
-                    </span>
+                    {reading.channel.relayChannel || '—'}
+                    <span className="text-outline">· not driven</span>
                   </span>
                   <span className="shrink-0 font-metric-value text-metric-value text-on-surface-variant">
                     <Gauge size={12} className="inline -mt-0.5 mr-1" aria-hidden />
@@ -1291,7 +1611,25 @@ export function ChannelInventoryView() {
         </div>
       )}
 
-      {/* --- Footer state: what these numbers are, and are not ---------------- */}
+      {/* --- Provenance footnote -----------------------------------------------
+          This bar is the most defensible thing on the page, so it is given the
+          most space and the most specific language. It answers three separate
+          questions that the rest of the UI only gestures at:
+
+            1. What is physically on the bench? (ADS1015 + ZMCT103C per branch,
+               one shared voltage reading, a nominal-only USB rail.)
+            2. Which reading is not a per-branch measurement? (volts — there is
+               one of them, shown four times.)
+            3. What is deliberately NOT here? (THD, power factor, frequency,
+               energy, contact state — with the reason for each.)
+
+          Point 3 is the one that used to be quietly wrong. Every entry below
+          used to appear somewhere in this console as a plausible number: a
+          1.2% THD, a 0.95 lagging power factor, a 60.0 Hz line frequency, a
+          kWh total computed from a field the firmware sets to 0.0. None of
+          them had a sensor behind it. They are listed as absent rather than
+          quietly dropped, because a reader who has seen one of them in an
+          earlier draft deserves to be told it was never a measurement. */}
       <section className="ant-card mb-space-lg" aria-label="Reading provenance">
         <div className="ant-card-header px-space-md py-space-sm">
           <div className="flex items-center gap-space-sm">
@@ -1303,10 +1641,30 @@ export function ChannelInventoryView() {
           </span>
         </div>
         <div className="ant-card-body p-space-md">
+          {/* The sensing chain, named. */}
+          <div className="mb-space-md rounded-md border border-outline-variant bg-surface-container-low px-3 py-2.5">
+            <p className="font-title-md text-title-md text-on-surface">What is on the bench</p>
+            <ul className="mt-1.5 flex flex-col gap-1 font-body-sm text-body-sm text-on-surface-variant">
+              <li>
+                <strong className="font-medium text-on-surface">CH1–CH4 current</strong> is read
+                directly: a ZMCT103C on each branch into that branch&rsquo;s own ADS1015 analogue
+                input (AIN0–AIN3). It is not apportioned from a mains total.
+              </li>
+              <li>{SHARED_VOLTS_NOTE}</li>
+              <li>
+                <strong className="font-medium text-on-surface">CH5 (5 V USB)</strong> has no
+                sensor on its branch. Its figure is the rail&rsquo;s nominal rating, hatched
+                everywhere it appears, and it is never presented as a measured zero.
+              </li>
+            </ul>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-3 gap-space-md mb-space-md">
             <article>
               <strong className="font-title-md text-title-md text-on-surface">Volts</strong>
-              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">{VOLTS_CAPTION}</p>
+              <p className="font-body-sm text-body-sm text-on-surface-variant mt-0.5">
+                {mode === 'Simulated' ? VOLTS_CAPTION : SHARED_VOLTS_NOTE}
+              </p>
             </article>
             <article>
               <strong className="font-title-md text-title-md text-on-surface">Amps</strong>
@@ -1320,17 +1678,48 @@ export function ChannelInventoryView() {
             </article>
           </div>
 
+          {/* Not measured. Present, named, and explained — so "absent" is
+              distinguishable from "forgot to render". */}
+          <div className="mb-space-md rounded-md border border-outline-variant px-3 py-2.5">
+            <p className="font-title-md text-title-md text-on-surface">
+              Not measured by this build — no figure is shown for these
+            </p>
+            <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
+              {NOT_MEASURED.map((item) => (
+                <div key={item.label} className="flex flex-col">
+                  <dt className="font-body-sm text-body-sm text-on-surface">
+                    <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
+                    {item.label}
+                  </dt>
+                  <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+
           <div className="flex items-start gap-space-sm p-space-sm bg-surface-container-low rounded-md">
             <ShieldCheck size={16} className="shrink-0 mt-0.5 text-on-surface-variant" aria-hidden />
             <p className="font-body-sm text-body-sm text-on-surface-variant">
               A <strong className="text-on-surface">solid</strong> allowance bar means the figure came
-              from a meter. A <strong className="text-on-surface">hatched</strong> bar means the figure
-              was inferred — no meter is fitted on that branch. Live figures are the most recent
+              from a sensor. A <strong className="text-on-surface">hatched</strong> bar means the figure
+              was inferred — no sensor is fitted on that branch. Live figures are the most recent
               non-null bucket of the {series?.windowLabel ?? '15 min'} window; &ldquo;lowest seen&rdquo;,
               &ldquo;typical&rdquo; and &ldquo;highest&rdquo; cover that same window, skipping gaps rather
               than treating them as zero, and &ldquo;steadiness&rdquo; is the spread behind the typical
-              value stated as a verdict rather than as a symbol. This view is a live snapshot — the
-              trend charts and the longer windows (up to 7 days) are on the Telemetry tab.
+              value stated as a verdict rather than as a symbol.
+              {/*
+                The roster's own meterChannel string still reads "PZEM-01 … mains
+                bus" on every outlet. That is a stale seeded label from before
+                the ADS1015 conversion, so it is deliberately not rendered as a
+                sensor name anywhere on this view — but it is named here rather
+                than quietly hidden, because someone reading the API response
+                will hit it and should know it is not a device on the rig.
+              */}
+              <span className="mt-1 block text-outline">
+                Note: the roster&rsquo;s <code className="font-code text-code">meterChannel</code>{' '}
+                field still reads &ldquo;PZEM-01 &hellip; mains bus&rdquo;. That label predates the
+                ADS1015 conversion and is not rendered as a sensor name on this page.
+              </span>
             </p>
           </div>
 

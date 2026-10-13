@@ -5,15 +5,15 @@ import {
   ArrowDown,
   ArrowUp,
   CalendarDays,
-  ChevronDown,
   Info,
   RefreshCw,
   Sigma,
-  SlidersHorizontal,
   TrendingUp,
+  TriangleAlert,
   Zap,
 } from 'lucide-react'
 import {
+  fetchDashboardState,
   fetchTelemetrySeries,
   ApiError,
   type TelemetryChannel,
@@ -24,9 +24,11 @@ import {
   ALL_CHANNEL_IDS,
   AMPS_CAPTION,
   METERING_MODE_LABEL,
+  NOT_MEASURED,
   POLL_INTERVAL_MS,
   PROVENANCE_COPY,
   PROVENANCE_GLYPH,
+  SHARED_VOLTS_NOTE,
   TELEMETRY_RETENTION_DAYS,
   TELEMETRY_WINDOWS,
   VOLTS_CAPTION,
@@ -37,6 +39,7 @@ import {
   channelDash,
 } from '../data/telemetry'
 import {
+  aggregatedCurrent,
   backoffMs,
   describeSeries,
   formatValue,
@@ -45,7 +48,9 @@ import {
   stalenessState,
   type Unit,
 } from '../utils/telemetry'
-import { TimeSeriesChart, type ChartSeries } from './TimeSeriesChart'
+import { ChannelHeatmap } from './ChannelHeatmap'
+import { TimeSeriesChart, type ChartSeries, type ThresholdLine } from './TimeSeriesChart'
+import { detectSensorFault, faultConsequence, type SensorFault } from '../utils/sensorFault'
 
 type Status = 'idle' | 'loading' | 'refreshing' | 'ready' | 'stale' | 'unauthorized' | 'error'
 
@@ -93,15 +98,19 @@ const LIVE_LABEL: Record<string, string> = {
 }
 
 /**
- * Green is not a state colour in this console. A duty cycle reading is a
- * measured statistic, not an approval, so the energised ratio is inked the same
- * neutral as the min/max beside it; blue stays reserved for the one figure this
- * view treats as its headline.
+ * Ink for a statistics value.
+ *
+ * Every card here reads ink-primary. The previous build gave the mean the
+ * interactive blue and the duty cycle a "success" ink, which put two accents
+ * on a row of five peer readings — and green, in particular, turned a measured
+ * duty ratio into what looked like an approval. The hero is distinguished by
+ * SIZE (metric-display) and by the card saying so, not by colour; that is the
+ * whole of the emphasis budget on this strip.
  */
 const VALUE_INK: Record<'neutral' | 'primary' | 'success', string> = {
   neutral: 'text-on-surface',
-  primary: 'text-primary',
-  success: 'text-on-surface-variant',
+  primary: 'text-on-surface',
+  success: 'text-on-surface',
 }
 
 type StatCardSpec = {
@@ -182,17 +191,29 @@ export function TelemetryView() {
   // Drives the relative-time labels only. Never triggers a refetch, so a 7-day
   // view does not hammer the backend once a second.
   const [now, setNow] = useState(() => Date.now())
-  // View-only state: which plotted series is mounted, and whether the channel
-  // filter panel is open. Neither changes what is fetched.
+  // View-only state: which plotted series is mounted, and whether the y-axis is
+  // scaled to the trip line or to the trace. Neither changes what is fetched.
   const [activeTab, setActiveTab] = useState<ChartTabId>('total')
-  const [channelsOpen, setChannelsOpen] = useState(false)
+  const [scaleToThresholds, setScaleToThresholds] = useState(true)
+  // Warn and trip lines, straight from the API's own capacity configuration.
+  // These are NOT constants: the testing rig is 1,200 W and the full rig is
+  // 4,000 W, so a hardcoded 1,500 W line would be wrong for this rig and
+  // invented besides.
+  const [thresholds, setThresholds] = useState<{ warning: number; critical: number } | null>(null)
+  /*
+   * Resolved from the same /Dashboard/state call that already supplies the
+   * thresholds, so this view needs no request of its own to know the rig is
+   * blind. That matters here more than anywhere else: this is the page an
+   * examiner will ask "were those numbers measured?", and every statistic below
+   * is computed over buckets the device posted while it was latched in fault.
+   */
+  const [sensorFault, setSensorFault] = useState<SensorFault | null>(null)
 
   const abortRef = useRef<AbortController | null>(null)
   const requestSeqRef = useRef(0)
   // Mirrors failedAttempts so the self-rescheduling poll can read it without
   // taking it as a dependency (which would restart the timer on every miss).
   const failuresRef = useRef(0)
-  const channelFilterRef = useRef<HTMLDivElement>(null)
 
   const channelFilter = useMemo(() => ALL_CHANNEL_IDS.filter((id) => !hidden.includes(id)), [hidden])
 
@@ -206,7 +227,25 @@ export function TelemetryView() {
       setStatus(isRefresh ? 'refreshing' : 'loading')
 
       try {
+        // Threshold config first, and tolerated to fail: the telemetry trace is
+        // the point of this page, and a capacity-config read error must not
+        // blank the charts. The rules simply do not get drawn.
+        const configPromise = fetchDashboardState()
+          .then((state) => {
+            setThresholds({ warning: state.thresholds.warning, critical: state.thresholds.critical })
+            setSensorFault(
+              detectSensorFault({
+                events: state.events,
+                deviceOnline: state.deviceOnline,
+                channelCount: state.outlets.length,
+                now: Date.now(),
+              }),
+            )
+          })
+          .catch(() => undefined)
+
         const payload = await fetchTelemetrySeries(activeWindow, channelFilter, controller.signal)
+        await configPromise
 
         // A superseded request must never overwrite the current one (E12).
         if (seq !== requestSeqRef.current) return
@@ -294,28 +333,6 @@ export function TelemetryView() {
     return () => window.clearInterval(timer)
   }, [])
 
-  // The channel filter is a disclosure, not a trap: dismiss on outside click or
-  // Escape so a keyboard operator is never stranded inside the panel.
-  useEffect(() => {
-    if (!channelsOpen) return
-
-    const onPointerDown = (event: MouseEvent) => {
-      if (channelFilterRef.current && !channelFilterRef.current.contains(event.target as Node)) {
-        setChannelsOpen(false)
-      }
-    }
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setChannelsOpen(false)
-    }
-
-    document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
-  }, [channelsOpen])
-
   const channels = series?.channels ?? []
   const visibleChannels = useMemo(
     () => channels.filter((channel) => !hidden.includes(channel.outletId)),
@@ -333,21 +350,19 @@ export function TelemetryView() {
     return seriesStats(values)
   }, [visibleChannels])
 
-  // Sum of the last non-null amps across the selected channels, so "total" means
-  // total. Nulls are skipped, never treated as zero.
-  const ampsNow = useMemo(() => {
-    let sum = 0
-    for (const channel of visibleChannels) {
-      for (let i = channel.amps.length - 1; i >= 0; i -= 1) {
-        const value = channel.amps[i]
-        if (value !== null && value !== undefined) {
-          sum += value
-          break
-        }
-      }
-    }
-    return sum
-  }, [visibleChannels])
+  // Aggregate current: the sum of the branch readings, sensed channels only.
+// Using the same helper as the inventory keeps the two pages from disagreeing
+// about what "total current" means.
+  const ampsNow = useMemo(
+    () =>
+      aggregatedCurrent(
+        visibleChannels.map((channel) => ({
+          amps: channel.amps,
+          provenance: channel.provenance,
+        })),
+      ),
+    [visibleChannels],
+  )
 
   // "Total watts now" must come from the server's per-bucket SUM over the
   // selected channels (E6), not from the last value of the flattened channel
@@ -434,10 +449,23 @@ export function TelemetryView() {
   }, [loadDistribution])
 
   const isDimmed = status === 'stale' || status === 'error'
+  const faulted = sensorFault !== null
   const isEmpty = series !== null && channels.length === 0
   const allValuesNull = isEmpty || channels.every((c) => c.volts.every((v) => v === null))
   const deviceHasSamples = channels.some((c) => c.sampleCount > 0)
   const staleness = stalenessState(series?.latestSampleAt ?? null, now, deviceHasSamples)
+
+  // Warn and trip rules, from the API's configured capacity — never constants.
+  // Only drawn on the WATT tabs: a 1,200 W line has no meaning on a volt or amp
+  // axis, and drawing one there would imply the other units were being compared
+  // against a power limit.
+  const thresholdLines: ThresholdLine[] =
+    thresholds && (activeTab === 'total' || activeTab === 'watts')
+      ? [
+          { value: thresholds.warning, label: 'Warn', tone: 'warn' },
+          { value: thresholds.critical, label: 'Trip', tone: 'trip' },
+        ]
+      : []
 
   const meterMode = series?.meteringMode ?? 'Unknown'
   const meterCopy = PROVENANCE_COPY[meterMode] ?? PROVENANCE_COPY.Unknown
@@ -479,12 +507,14 @@ export function TelemetryView() {
       key: 'min',
       label: 'Min power',
       icon: <ArrowDown size={16} aria-hidden="true" />,
-      value: formatMetric(aggregateStats.min, 'W'),
+      value: faulted ? '—' : formatMetric(aggregateStats.min, 'W'),
       unit: 'W',
       ink: 'neutral',
       dot: 'bg-outline-variant',
       note:
-        aggregateStats.min === null ? (
+        faulted ? (
+          <span className="text-outline">not attributed — sensor fault latched</span>
+        ) : aggregateStats.min === null ? (
           'No aggregate bucket reported'
         ) : (
           <>
@@ -497,28 +527,35 @@ export function TelemetryView() {
       key: 'mean',
       label: 'Mean power (μ)',
       icon: <TrendingUp size={16} aria-hidden="true" />,
-      value: formatMetric(aggregateStats.mean, 'W'),
+      value: faulted ? '—' : formatMetric(aggregateStats.mean, 'W'),
       unit: 'W',
-      ink: 'primary',
-      dot: 'bg-outline-variant',
+      ink: 'neutral',
+      dot: faulted ? 'ant-dot-critical' : 'bg-outline-variant',
       hero: true,
-      note: (
-        <>
-          <span className="text-outline">over</span>
-          {mono(` ${aggregateStats.count.toLocaleString()} reported buckets`)}
-        </>
-      ),
+      note:
+        faulted ? (
+          <span className="text-outline">
+            {aggregateStats.count.toLocaleString()} buckets posted blind — the device was not reading
+          </span>
+        ) : (
+          <>
+            <span className="text-outline">over</span>
+            {mono(` ${aggregateStats.count.toLocaleString()} reported buckets`)}
+          </>
+        ),
     },
     {
       key: 'max',
       label: 'Max power',
       icon: <ArrowUp size={16} aria-hidden="true" />,
-      value: formatMetric(aggregateStats.max, 'W'),
+      value: faulted ? '—' : formatMetric(aggregateStats.max, 'W'),
       unit: 'W',
       ink: 'neutral',
-      dot: 'ant-dot-warning',
+      dot: faulted ? 'ant-dot-critical' : 'ant-dot-warning',
       note:
-        aggregateStats.max === null ? (
+        faulted ? (
+          <span className="text-outline">not attributed — sensor fault latched</span>
+        ) : aggregateStats.max === null ? (
           'No aggregate bucket reported'
         ) : (
           <>
@@ -532,14 +569,16 @@ export function TelemetryView() {
       label: 'Std deviation (σ)',
       icon: <Sigma size={16} aria-hidden="true" />,
       value:
-        aggregateStats.stddev === null
+        faulted || aggregateStats.stddev === null
           ? '—'
           : `±${formatMetric(aggregateStats.stddev, 'W')}`,
       unit: 'W',
       ink: 'neutral',
       dot: 'bg-outline-variant',
       note:
-        aggregateStats.stddev === null || aggregateStats.mean === null || aggregateStats.mean === 0 ? (
+        faulted ? (
+          <span className="text-outline">a flat zero line has no spread worth quoting</span>
+        ) : aggregateStats.stddev === null || aggregateStats.mean === null || aggregateStats.mean === 0 ? (
           <span className="text-outline">needs 2+ reported buckets for a spread</span>
         ) : (
           <>
@@ -553,12 +592,16 @@ export function TelemetryView() {
       key: 'duty',
       label: 'Energized ratio',
       icon: <Zap size={16} aria-hidden="true" />,
-      value: duty.ratio === null ? '—' : formatPercent(duty.ratio),
+      value: faulted ? '—' : duty.ratio === null ? '—' : formatPercent(duty.ratio),
       unit: null,
-      ink: 'success',
-      dot: duty.reported === 0 ? 'ant-dot-critical' : 'bg-outline-variant',
+      ink: 'neutral',
+      dot: faulted ? 'ant-dot-critical' : duty.reported === 0 ? 'ant-dot-critical' : 'bg-outline-variant',
       note:
-        duty.reported === 0 ? (
+        faulted ? (
+          <span className="text-outline">
+            an energised ratio implies the load was observed; it was not
+          </span>
+        ) : duty.reported === 0 ? (
           <span className="text-outline">no reported buckets in this window</span>
         ) : (
           <>
@@ -591,108 +634,19 @@ export function TelemetryView() {
             </span>
           </div>
           <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">
-            Real-time telemetry stream from the rig&apos;s Postgres rollups, window statistics over
-            the aggregate trace, and the load distribution for the selected window.
+            Window statistics over the aggregate trace, the per-channel load over time, and the
+            distribution of every reported bucket in the selected window.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-space-sm">
-          {/* Channel filter — the tag dropdown */}
-          <div className="relative" ref={channelFilterRef}>
-            <button
-              type="button"
-              className="ant-btn ant-btn-default"
-              aria-haspopup="true"
-              aria-expanded={channelsOpen}
-              onClick={() => setChannelsOpen((current) => !current)}
-            >
-              <SlidersHorizontal size={16} className="text-outline" aria-hidden="true" />
-              <span className="text-on-surface-variant">Channels</span>
-              <span className="font-metric-value text-metric-value font-medium text-on-surface">
-                {isFiltered
-                  ? `${channelFilter.length} of ${ALL_CHANNEL_IDS.length}`
-                  : `All ${ALL_CHANNEL_IDS.length}`}
-              </span>
-              <ChevronDown size={14} className="text-outline" aria-hidden="true" />
-            </button>
-
-            {channelsOpen && (
-              <div className="absolute right-0 top-10 z-30 flex w-[320px] flex-col gap-space-sm rounded-lg border border-outline-variant bg-surface-container-lowest p-space-sm shadow-lg">
-                <div className="flex items-center justify-between">
-                  <span className="font-title-md text-title-md text-on-surface">Channel filter</span>
-                  <span className="flex gap-space-xs">
-                    <button
-                      type="button"
-                      className="ant-btn ant-btn-default h-6"
-                      onClick={() => setHidden([])}
-                    >
-                      All
-                    </button>
-                    <button
-                      type="button"
-                      className="ant-btn ant-btn-default h-6"
-                      onClick={() => setHidden([...ALL_CHANNEL_IDS])}
-                    >
-                      None
-                    </button>
-                  </span>
-                </div>
-
-                <ul className="flex flex-col gap-1">
-                  {ALL_CHANNEL_IDS.map((id) => {
-                    const channel = channels.find((c) => c.outletId === id)
-                    const off = hidden.includes(id)
-                    return (
-                      <li key={id}>
-                        <button
-                          type="button"
-                          aria-pressed={!off}
-                          onClick={() => toggleChannel(id)}
-                          title={
-                            channel
-                              ? `${channel.name} · ${channel.ratedVoltageVolts} V · ${channel.provenanceNote}`
-                              : `Channel ${id} · no samples in this window`
-                          }
-                          className={`flex w-full items-center gap-space-sm rounded border px-space-sm py-space-xs text-left transition-colors ${
-                            off
-                              ? 'border-surface-container bg-surface-container-low text-outline'
-                              : 'border-outline-variant bg-surface-container-lowest text-on-surface hover:border-primary'
-                          }`}
-                        >
-                          <span
-                            className="h-3.5 w-1 shrink-0 rounded-sm"
-                            style={{ background: channelColor(id) }}
-                            aria-hidden="true"
-                          />
-                          <span className="font-metric-value text-metric-value font-medium">CH{id}</span>
-                          <span className="min-w-0 flex-1 truncate font-body-sm text-body-sm">
-                            {channel ? channel.name : 'no samples'}
-                          </span>
-                          <span className="font-metric-value text-metric-value text-on-surface-variant">
-                            {channel ? `${channel.ratedVoltageVolts} V` : '—'}
-                          </span>
-                          <span
-                            className="font-body-sm text-body-sm"
-                            title={channel ? channel.provenance : 'Unknown'}
-                            aria-label={channel ? channel.provenance : 'Unknown'}
-                          >
-                            {channel ? PROVENANCE_GLYPH[channel.provenance] ?? '○' : '○'}
-                          </span>
-                        </button>
-                      </li>
-                    )
-                  })}
-                </ul>
-
-                <p className="font-body-sm text-body-sm text-on-surface-variant">
-                  ● measured · ◐ derived · ○ simulated
-                </p>
-              </div>
-            )}
-          </div>
-
-          {/* Window segmented control */}
-          <div className="ant-segmented" role="group" aria-label="Telemetry window">
+          {/* Window filter — pills. A segmented control implies five views; these
+              are five windows over the SAME data, and a pill says that. */}
+          <div
+            className="flex flex-wrap items-center gap-1 rounded-lg bg-surface-container p-0.5"
+            role="group"
+            aria-label="Telemetry window"
+          >
             {TELEMETRY_WINDOWS.map((option) => (
               <button
                 key={option.id}
@@ -701,10 +655,10 @@ export function TelemetryView() {
                 aria-label={option.label}
                 aria-pressed={option.id === activeWindow}
                 onClick={() => setActiveWindow(option.id)}
-                className={`ant-segmented-item font-metric-value text-metric-value ${
+                className={`h-7 rounded px-2.5 font-metric-value text-metric-value transition-colors ${
                   option.id === activeWindow
-                    ? 'ant-segmented-item-active font-semibold text-primary'
-                    : 'hover:text-on-surface'
+                    ? 'bg-surface-container-lowest font-semibold text-primary shadow-sm'
+                    : 'text-on-surface-variant hover:text-on-surface'
                 }`}
               >
                 {option.id}
@@ -714,7 +668,7 @@ export function TelemetryView() {
 
           {/* Server-resolved window, not a picker: the backend owns the bucket grid */}
           <div
-            className="flex h-8 items-center gap-2 rounded-lg border border-surface-container bg-surface-container-lowest px-2.5 shadow-sm"
+            className="flex h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-lowest px-3 shadow-card"
             title="Bucket range resolved by the server for the selected window"
           >
             <CalendarDays size={15} className="text-outline" aria-hidden="true" />
@@ -738,23 +692,117 @@ export function TelemetryView() {
         </div>
       </header>
 
-      {/* ---------------- Provenance nameplate (honesty banner) ---------------- */}
+      {/* ---------------- Channel filter pills ----------------
+          Pills, not a dropdown. A dropdown hid the thing being filtered behind
+          a click, and on a five-channel rig the whole roster fits on screen —
+          so showing it costs nothing and means the provenance of each channel
+          (● measured / ◐ nominal) is visible at the same moment as the choice.
+
+          A filtered-out pill stays legible rather than fading out: "hidden" must
+          not look like "no data", which is a different claim this page is
+          careful about everywhere else. */}
+      <div className="flex flex-col gap-space-xs">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
+            Channels
+          </span>
+          <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter channels">
+            {ALL_CHANNEL_IDS.map((id) => {
+              const channel = channels.find((c) => c.outletId === id)
+              const on = !hidden.includes(id)
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => toggleChannel(id)}
+                  title={
+                    channel
+                      ? `${channel.name} · ${channel.ratedVoltageVolts} V · ${channel.provenance}\n${channel.provenanceNote}`
+                      : `CH${id} · the API returned no samples for this channel in this window`
+                  }
+                  className={`flex h-7 items-center gap-1.5 rounded-md border px-2 font-metric-value text-metric-value transition-colors ${
+                    on
+                      ? 'border-outline-variant bg-surface-container-lowest text-on-surface hover:border-primary'
+                      : 'border-outline-variant/60 bg-surface-container text-on-surface-variant'
+                  }`}
+                >
+                  <span
+                    className="h-3 w-1 shrink-0 rounded-sm"
+                    style={{ background: channelColor(id) }}
+                    aria-hidden="true"
+                  />
+                  {`CH${id}`}
+                  <span
+                    className="text-outline"
+                    title={channel?.provenance ?? 'No samples'}
+                    aria-label={channel?.provenance ?? 'No samples'}
+                  >
+                    {channel ? PROVENANCE_GLYPH[channel.provenance] ?? '○' : '○'}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {isFiltered && (
+            <button
+              type="button"
+              className="ant-btn ant-btn-default h-7"
+              onClick={() => setHidden([])}
+            >
+              Show all {ALL_CHANNEL_IDS.length}
+            </button>
+          )}
+        </div>
+        <p className="font-body-sm text-body-sm text-on-surface-variant">
+          <span title="Read from a sensor">●</span> measured ·{' '}
+          <span title="A nominal rating, not a measurement">◐</span> nominal ·{' '}
+          <span title="Nothing sampled in this window">○</span> no samples
+        </p>
+      </div>
+
+      {/* ---------------- Provenance nameplate ---------------- */}
       <div className={`flex flex-col gap-space-sm rounded-lg border p-space-md ${BANNER_FRAME}`}>
         <div className="flex flex-wrap items-baseline gap-x-space-sm gap-y-1">
-          <span className="font-body-sm text-body-sm font-medium uppercase tracking-wide text-on-surface-variant">
+          <span className="font-label-md text-label-md uppercase text-on-surface-variant">
             {METERING_MODE_LABEL[meterMode] ?? 'Unknown'}
           </span>
           <span className="font-title-md text-title-md text-on-surface">
             {meterMode === 'Metered'
-              ? 'One meter, five channels — CH1–CH4 share the mains reading, CH5 reports its nominal rating'
+              ? 'Four sensed branches, one shared voltage reading, one nominal rail'
               : meterMode === 'Simulated'
-                ? 'No meter is wired — the ESP32 is synthesising these readings'
+                ? 'No sensor is being read — the ESP32 is synthesising these values'
                 : 'Provenance not reported by the device'}
           </span>
         </div>
         <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
           {meterCopy.banner}
         </p>
+
+        {/*
+          The API's own per-channel note is rendered verbatim and in full. This
+          is the most defensible sentence anywhere in this console: it is the
+          only statement about a reading that is written by the code that
+          produced it, not by the UI. It used to be truncated to fit a card.
+        */}
+        {channels.length > 0 && (
+          <dl className="flex flex-col gap-1 border-t border-outline-variant pt-2">
+            {channels.map((channel) => (
+              <div key={channel.outletId} className="flex flex-col sm:flex-row sm:gap-2">
+                <dt className="shrink-0 font-metric-value text-metric-value font-medium text-on-surface sm:w-24">
+                  {`CH${channel.outletId}`}
+                  <span className="ml-1.5 font-body-sm text-body-sm font-normal text-outline">
+                    {PROVENANCE_GLYPH[channel.provenance] ?? '○'}
+                  </span>
+                </dt>
+                <dd className="font-body-sm text-body-sm text-on-surface-variant">
+                  {channel.provenanceNote}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        )}
       </div>
 
       {status === 'unauthorized' ? (
@@ -824,6 +872,32 @@ export function TelemetryView() {
         </article>
       ) : (
         <>
+          {/* ---------------- Sensor fault, in place ----------------
+              The global rail above already says it. This is the version that
+              sits directly on the numbers, because on this page the numbers
+              are far enough down that an operator reading the statistics may
+              never have scrolled back past the chart header — and a window
+              statistics row is exactly where an unattributable mean is most
+              likely to be quoted. */}
+          {faulted && sensorFault && (
+            <div
+              className="wash-critical flex items-start gap-space-sm px-space-md py-space-sm"
+              role="alert"
+            >
+              <TriangleAlert size={18} className="mt-0.5 shrink-0 text-error" aria-hidden="true" />
+              <div className="min-w-0">
+                <p className="font-title-md text-title-md text-on-surface">
+                  These statistics are computed over buckets the device posted blind
+                </p>
+                <p className="mt-0.5 max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
+                  {faultConsequence(sensorFault)} The trace below is still drawn — it is the record of
+                  what was posted — but the min, mean, max and spread above it are held at no reading
+                  rather than reported as a flat zero.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* ---------------- Window statistics ---------------- */}
           <div
             className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-5"
@@ -864,9 +938,9 @@ export function TelemetryView() {
           </div>
 
           {failedAttempts > 0 && (
-            <div className="flex flex-wrap items-center gap-space-sm rounded-lg border border-tertiary-fixed-dim bg-tertiary-fixed px-space-md py-space-sm">
+            <div className="wash-advisory flex flex-wrap items-center gap-space-sm px-space-md py-space-sm">
               <span className="ant-dot ant-dot-warning" aria-hidden="true" />
-              <span className="font-body-sm text-body-sm text-on-tertiary-fixed">
+              <span className="font-body-sm text-body-sm text-on-surface">
                 {error === 'Backend unreachable' ? (
                   <>
                     Backend cold start — retrying (
@@ -880,7 +954,7 @@ export function TelemetryView() {
                   </>
                 )}
               </span>
-              <span className="font-body-sm text-body-sm text-on-tertiary-fixed">
+              <span className="font-body-sm text-body-sm text-on-surface-variant">
                 showing the last good reading
               </span>
             </div>
@@ -888,7 +962,7 @@ export function TelemetryView() {
 
           {/* ---------------- Time-series chart ---------------- */}
           <article className={`ant-card ${isDimmed ? 'opacity-60' : ''}`}>
-            <div className="flex flex-col gap-space-md border-b border-surface-container px-space-lg py-space-md lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-space-md border-b border-outline-variant px-space-lg py-space-md lg:flex-row lg:items-center lg:justify-between">
               <div
                 className="-mb-px flex flex-wrap items-center gap-space-lg"
                 role="tablist"
@@ -987,12 +1061,15 @@ export function TelemetryView() {
                     {
                       id: 'total',
                       label: isFiltered ? 'Selected channels' : 'All channels',
-                      color: '#0057c2',
+                      color: '#2B5A8F',
                       values: totals?.watts ?? [],
                     },
                   ]}
                   timestamps={series?.timestamps ?? []}
                   showArea
+                  height={300}
+                  thresholds={thresholdLines}
+                  scaleToThresholds={scaleToThresholds}
                 />
               )}
               {activeTab === 'watts' && (
@@ -1001,6 +1078,9 @@ export function TelemetryView() {
                   unit="W"
                   series={toChartSeries((c) => c.watts)}
                   timestamps={series?.timestamps ?? []}
+                  height={300}
+                  thresholds={thresholdLines}
+                  scaleToThresholds={scaleToThresholds}
                 />
               )}
               {activeTab === 'amps' && (
@@ -1020,6 +1100,48 @@ export function TelemetryView() {
                 />
               )}
 
+              {/* Scale control. Only meaningful while a threshold is drawn, so
+                  it is not offered on the amp and volt tabs where a power limit
+                  would be meaningless. */}
+              {thresholdLines.length > 0 && (
+                <div className="mt-space-sm flex flex-wrap items-center gap-space-sm font-body-sm text-body-sm">
+                  <span className="text-on-surface-variant">Y-axis</span>
+                  <div className="flex items-center gap-1 rounded-md bg-surface-container p-0.5" role="group" aria-label="Chart y-axis scale">
+                    <button
+                      type="button"
+                      aria-pressed={scaleToThresholds}
+                      onClick={() => setScaleToThresholds(true)}
+                      title="Include the warn and trip lines in the axis range, so the trace is shown against the full configured capacity"
+                      className={`h-6 rounded px-2 font-metric-value text-metric-value transition-colors ${
+                        scaleToThresholds
+                          ? 'bg-surface-container-lowest font-semibold text-primary shadow-sm'
+                          : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      Full capacity
+                    </button>
+                    <button
+                      type="button"
+                      aria-pressed={!scaleToThresholds}
+                      onClick={() => setScaleToThresholds(false)}
+                      title="Fit the axis to the trace alone, for reading the waveform"
+                      className={`h-6 rounded px-2 font-metric-value text-metric-value transition-colors ${
+                        !scaleToThresholds
+                          ? 'bg-surface-container-lowest font-semibold text-primary shadow-sm'
+                          : 'text-on-surface-variant hover:text-on-surface'
+                      }`}
+                    >
+                      Fit trace
+                    </button>
+                  </div>
+                  {thresholds && (
+                    <span className="font-metric-value text-metric-value text-outline">
+                      {`Warn ${thresholds.warning.toLocaleString()} W · Trip ${thresholds.critical.toLocaleString()} W`}
+                    </span>
+                  )}
+                </div>
+              )}
+
               <p className="mt-space-md max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
                 {activeTab === 'amps'
                   ? AMPS_CAPTION
@@ -1027,6 +1149,33 @@ export function TelemetryView() {
                     ? `${VOLTS_CAPTION}${meterMode === 'Metered' ? ` ${VOLTS_CAPTION_METERED}` : ''}`
                     : wattsCaption}
               </p>
+            </div>
+          </article>
+
+          {/* ---------------- Channel × time heatmap ---------------- */}
+          <article className="ant-card">
+            <div className="ant-card-header">
+              <div>
+                <h2 className="font-title-lg text-title-lg text-on-surface">
+                  Channel load over time
+                </h2>
+                <p className="max-w-[76ch] font-body-sm text-body-sm text-on-surface-variant">
+                  One row per channel, one column per time slot, shaded by the mean load in
+                  that slot. An empty cell is a slot the device never reported in — not a slot
+                  it reported as idle.
+                </p>
+              </div>
+              <span className="shrink-0 font-metric-value text-metric-value text-on-surface-variant">
+                {`${series?.bucketCount ?? 0} buckets · ${series?.resolution ?? '—'}`}
+              </span>
+            </div>
+            <div className="ant-card-body">
+              <ChannelHeatmap
+                channels={visibleChannels}
+                timestamps={series?.timestamps ?? []}
+                bucketSeconds={series?.bucketSeconds ?? 0}
+                faulted={faulted}
+              />
             </div>
           </article>
 
@@ -1057,7 +1206,33 @@ export function TelemetryView() {
               </span>
             </div>
             <div className="ant-card-body">
-              {distribution ? (
+              {/*
+                A distribution of a flat zero line is the single most convincing
+                lie this page could tell: every bar lines up, the dominant band is
+                crisp, the percentages sum to 100, and the picture it draws is an
+                artifact of the fault rather than a shape of the load. The panel
+                keeps its frame and its position — removing it would shift every
+                reading below it — and states what it cannot show instead.
+              */}
+              {faulted ? (
+                <div className="prov-rail prov-rail--faulted">
+                  <p className="font-title-md text-title-md text-on-surface">
+                    No distribution is drawn while the fault is latched
+                  </p>
+                  <p className="mt-1 max-w-[76ch] font-body-sm text-body-sm text-on-surface-variant">
+                    Every bucket in this window posted zero because no sensor was
+                    answering, so the samples collapse into a single band. Plotting that
+                    as a load distribution would present the absence of a measurement as
+                    the shape of a load. The count of buckets that were posted is still
+                    stated below, because that part is real.
+                  </p>
+                  <p className="mt-1.5 font-metric-value text-metric-value text-on-surface-variant">
+                    {aggregateStats.count.toLocaleString()} buckets posted ·{' '}
+                    {series?.bucketCount ?? 0} expected ·{' '}
+                    {`${series?.bucketSeconds ?? 0} s each`}
+                  </p>
+                </div>
+              ) : distribution ? (
                 <>
                   <div
                     className="flex h-40 items-end gap-1"
@@ -1076,7 +1251,7 @@ export function TelemetryView() {
                           <div className="flex min-h-0 flex-1 items-end">
                             <div
                               className={`w-full rounded-t transition-colors ${
-                                isPeak ? 'bg-primary' : 'bg-primary-fixed-dim hover:bg-primary-fixed'
+                                isPeak ? 'bg-primary' : 'bg-primary-fixed hover:bg-primary-container'
                               }`}
                               style={{ height: `${Math.max(2, bin.height)}%` }}
                               title={`${formatMetric(bin.lower, 'W')}–${formatMetric(bin.upper, 'W')} W · ${formatPercent(bin.share)} (n=${bin.count})`}
@@ -1142,47 +1317,55 @@ export function TelemetryView() {
           </article>
 
           {/* ---------------- Telemetry summary bar ---------------- */}
-          <div className="flex flex-col gap-space-md rounded-lg border border-surface-container bg-surface-container-lowest p-space-md shadow-sm lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-space-md rounded-lg border border-outline-variant bg-surface-container-lowest p-space-md shadow-sm lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-space-sm">
               <Activity size={18} className="text-primary" aria-hidden="true" />
               <span className="font-body-md text-body-md text-on-surface">{staleness.label}</span>
             </div>
 
             <dl className="flex flex-wrap items-center gap-x-space-lg gap-y-space-sm font-body-sm text-body-sm text-on-surface-variant">
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 <dt>Total now</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
-                  {wattsNow !== null ? `${formatMetric(wattsNow, 'W')} W` : '—'}
+                  {faulted ? 'no reading' : wattsNow !== null ? `${formatMetric(wattsNow, 'W')} W` : '—'}
                 </dd>
               </div>
               <div className="flex items-center gap-1">
                 <dt>Peak / channel</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
-                  {totalStats.max !== null ? `${formatValue(totalStats.max, 'W')} W` : '—'}
+                  {faulted ? 'no reading' : totalStats.max !== null ? `${formatValue(totalStats.max, 'W')} W` : '—'}
                 </dd>
               </div>
               <div className="flex items-center gap-1">
-                <dt>220 V class</dt>
+                {/* Named for what it is: a range over ONE shared reading. Calling
+                    it "220 V range" implied four independent measurements. */}
+                <dt title={SHARED_VOLTS_NOTE}>Mains volts (shared)</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
-                  {voltsRange.min !== null && voltsRange.max !== null
-                    ? `${formatValue(voltsRange.min, 'V')}–${formatValue(voltsRange.max, 'V')} V`
-                    : '—'}
+                  {faulted
+                    ? 'no reading'
+                    : voltsRange.min !== null && voltsRange.max !== null
+                      ? `${formatValue(voltsRange.min, 'V')}–${formatValue(voltsRange.max, 'V')} V`
+                      : '—'}
                 </dd>
               </div>
               <div className="flex items-center gap-1">
-                <dt>Amps</dt>
+                <dt>Amps (sum of branches)</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
-                  {formatValue(ampsNow, 'A')} A
+                  {faulted ? 'no reading' : ampsNow !== null ? `${formatValue(ampsNow, 'A')} A` : '—'}
                 </dd>
               </div>
-              <div className="flex items-center gap-1">
-                <dt>Energy</dt>
-                <dd className="font-metric-value text-metric-value font-medium text-on-surface">
-                  {totals?.energyKwhDelta != null
-                    ? `${totals.energyKwhDelta.toFixed(3)} kWh`
-                    : '—'}
-                </dd>
-              </div>
+              {/*
+                Energy (kWh) was here and has been removed.
+
+                The API does return an `energyKwhDelta`, and on a live rig it
+                reads 0 — not because nothing was used, but because the firmware
+                posts energyKwh = 0.0 on every single reading and no accumulator
+                runs anywhere on the device. Rendering it produced "0.000 kWh"
+                under a heading that meant kilowatt-hours, which is the most
+                damaging kind of wrong on this page: a number that looks
+                measured, is formatted to three decimals, and is measurably
+                false. The API field is untouched — it is simply not shown.
+              */}
               <div className="flex items-center gap-1">
                 <dt>Samples</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
@@ -1204,11 +1387,31 @@ export function TelemetryView() {
           </div>
 
           <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-            Retention:{' '}
+            {SHARED_VOLTS_NOTE} Retention:{' '}
             <span className="font-metric-value text-metric-value">{TELEMETRY_RETENTION_DAYS}</span>{' '}
             days of raw samples are stored; older samples are pruned. Pruning runs only while the host is
             awake, so history can be shorter than that.
           </p>
+
+          {/* The same absent-quantity list the inventory carries, so a reader who
+              lands on either view first meets the same statement. Every entry
+              here once appeared on this console as a plausible figure. */}
+          <div className="rounded-lg border border-outline-variant px-space-md py-space-sm">
+            <p className="font-title-md text-title-md text-on-surface">
+              Not measured — no figure is shown for these
+            </p>
+            <dl className="mt-1.5 grid grid-cols-1 gap-x-space-lg gap-y-1 sm:grid-cols-2">
+              {NOT_MEASURED.map((item) => (
+                <div key={item.label} className="flex flex-col">
+                  <dt className="font-body-sm text-body-sm text-on-surface">
+                    <span className="ant-dot ant-dot-warning mr-1.5 inline-block align-middle" aria-hidden />
+                    {item.label}
+                  </dt>
+                  <dd className="font-body-sm text-body-sm text-outline">{item.why}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         </>
       )}
     </section>
