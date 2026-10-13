@@ -837,11 +837,11 @@ export function ScenarioPanel({
           </div>
 
           <div
-            className="flex h-8 items-center gap-2 rounded-lg border border-surface-container bg-surface-container-low px-2.5"
+            className="flex h-10 items-center gap-2 rounded-lg border border-outline-variant bg-surface-container-low px-3"
             title="Round trip measured in this browser around GET /api/Dashboard/telemetry"
           >
             <Timer size={15} className="text-outline" aria-hidden="true" />
-            <span className="font-body-sm text-body-sm uppercase tracking-wide text-outline">Trace round trip</span>
+            <span className="font-label-sm text-label-sm uppercase text-outline">Trace round trip</span>
             <span className="font-metric-value text-metric-value font-semibold text-on-surface">
               {roundTrip(roundTripMs)}
             </span>
@@ -894,7 +894,7 @@ export function ScenarioPanel({
                   </p>
                 </div>
               </div>
-              <span className="font-body-sm text-body-sm font-semibold uppercase tracking-wide text-on-surface-variant">
+              <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
                 <span className="font-metric-value text-metric-value">{vectors.length}</span> vectors
               </span>
             </div>
@@ -957,7 +957,7 @@ export function ScenarioPanel({
               </div>
 
               {dispatchBlocked && (
-                <p className="flex items-start gap-space-sm rounded-md border border-tertiary-fixed-dim bg-tertiary-fixed px-space-md py-space-sm font-body-sm text-body-sm text-on-tertiary-fixed">
+                <p className="wash-advisory flex items-start gap-space-sm px-space-md py-space-sm font-body-sm text-body-sm text-on-surface">
                   <Info size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
                   <span>
                     Read-only is a client-side guard: pressing a vector records a blocked attempt in the
@@ -974,7 +974,7 @@ export function ScenarioPanel({
                 role="status"
               >
                 <div className="flex flex-wrap items-center gap-space-sm">
-                  <span className="font-body-sm text-body-sm font-semibold uppercase tracking-wide text-on-surface-variant">
+                  <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
                     Last result
                   </span>
                   {busy && (
@@ -1174,7 +1174,7 @@ export function ScenarioPanel({
                   are peer readings at metric-value. */}
               <div className="grid grid-cols-1 gap-space-sm sm:grid-cols-3">
                 <div className="flex flex-col gap-0.5 rounded bg-surface-container-low px-space-sm py-2">
-                  <span className="font-body-sm text-body-sm uppercase tracking-wide text-outline">
+                  <span className="font-label-sm text-label-sm uppercase text-outline">
                     Newest bucket
                   </span>
                   <span className="font-metric-display text-metric-display font-semibold text-on-surface">
@@ -1182,7 +1182,7 @@ export function ScenarioPanel({
                   </span>
                 </div>
                 <div className="flex flex-col gap-0.5 rounded bg-surface-container-low px-space-sm py-2">
-                  <span className="font-body-sm text-body-sm uppercase tracking-wide text-outline">
+                  <span className="font-label-sm text-label-sm uppercase text-outline">
                     Headroom to critical
                   </span>
                   <span
@@ -1204,7 +1204,7 @@ export function ScenarioPanel({
                   </span>
                 </div>
                 <div className="flex flex-col gap-0.5 rounded bg-surface-container-low px-space-sm py-2">
-                  <span className="font-body-sm text-body-sm uppercase tracking-wide text-outline">Trip margin</span>
+                  <span className="font-label-sm text-label-sm uppercase text-outline">Trip margin</span>
                   <span
                     className={`font-metric-value text-metric-value font-semibold ${
                       tripMarginPercent === null ? 'text-on-surface' : tripMarginPercent <= 0 ? 'text-error' : 'text-on-surface'

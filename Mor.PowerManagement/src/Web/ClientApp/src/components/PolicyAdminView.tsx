@@ -166,7 +166,7 @@ function UnitField({
         {badge ?? null}
       </div>
       <div
-        className={`flex h-8 w-full overflow-hidden rounded-md border border-outline-variant shadow-sm ${
+        className={`flex h-10 w-full overflow-hidden rounded-md border border-outline-variant shadow-sm ${
           disabled ? 'bg-surface-container' : 'bg-surface-container-lowest focus-within:border-primary'
         }`}
       >
@@ -240,7 +240,7 @@ function PercentField({
           {`${Math.round(watts).toLocaleString()} W (${percent}%)`}
         </span>
       </div>
-      <div className="flex h-8 items-center gap-space-sm">
+      <div className="flex h-10 items-center gap-space-sm">
         <input
           id={id}
           type="range"
@@ -256,7 +256,7 @@ function PercentField({
             critical ? 'bg-error-container' : 'bg-surface-container-high'
           }`}
         />
-        <div className="flex h-8 w-20 shrink-0 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
+        <div className="flex h-10 w-20 shrink-0 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
           <input
             type="number"
             min={0}
@@ -855,7 +855,7 @@ export function PolicyAdminView() {
         {orderingBroken && (
           <div
             role="alert"
-            className="mx-space-lg mb-space-lg flex items-start gap-2 rounded-md border border-error bg-error-container px-3 py-2 text-body-sm text-on-error-container"
+            className="mx-space-lg mb-space-lg wash-critical flex items-start gap-2 px-3 py-2 text-body-sm text-on-surface"
           >
             <CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
             <span>
@@ -871,10 +871,10 @@ export function PolicyAdminView() {
         {thresholdMessage && (
           <p
             role="status"
-            className={`mx-space-lg mb-space-lg rounded-md border px-3 py-2 font-body-sm text-body-sm ${
+            className={`mx-space-lg mb-space-lg px-3 py-2 font-body-sm text-body-sm ${
               thresholdState === 'error'
-                ? 'border-error bg-error-container text-on-error-container'
-                : 'border-outline-variant bg-surface-container-low text-on-surface'
+                ? 'wash-critical'
+                : 'wash-quiet'
             }`}
           >
             {thresholdMessage}
@@ -943,7 +943,7 @@ export function PolicyAdminView() {
                 {dirtyCount === 1 ? '' : 's'}
               </span>
             )}
-            <div className="flex h-8 w-40 items-center gap-1.5 rounded-md border border-outline-variant bg-surface-container-lowest px-2.5 shadow-sm focus-within:border-primary sm:w-56">
+            <div className="flex h-10 w-40 items-center gap-1.5 rounded-md border border-outline-variant bg-surface-container-lowest px-2.5 shadow-sm focus-within:border-primary sm:w-56">
               <Search size={14} className="shrink-0 text-outline" aria-hidden="true" />
               <input
                 type="search"
@@ -1026,7 +1026,7 @@ export function PolicyAdminView() {
                       isSelected
                         ? 'border-l-primary'
                         : dirty
-                          ? 'border-l-tertiary-container'
+                          ? 'border-l-tertiary'
                           : 'border-l-transparent'
                     }`}
                   >
@@ -1072,7 +1072,7 @@ export function PolicyAdminView() {
                         onChange={(event) =>
                           setDraftField(outlet.id, 'priority', event.target.value as Priority)
                         }
-                        className="h-8 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-2 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary"
+                        className="h-10 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-2 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary"
                       >
                         {PRIORITY_OPTIONS.map((option) => (
                           <option key={option.value} value={option.value}>
@@ -1083,7 +1083,7 @@ export function PolicyAdminView() {
                     </td>
 
                     <td className="px-3 py-2.5 align-middle">
-                      <div className="flex h-8 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
+                      <div className="flex h-10 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
                         <input
                           type="number"
                           min={0}
@@ -1120,7 +1120,7 @@ export function PolicyAdminView() {
                     {/* An empty box is the FR-10 exempt state; the backend spells
                         it clearIdleLimit rather than a number. */}
                     <td className="px-3 py-2.5 align-middle">
-                      <div className="flex h-8 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
+                      <div className="flex h-10 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
                         <input
                           type="number"
                           min={0}
@@ -1279,7 +1279,7 @@ export function PolicyAdminView() {
                 onChange={(event) => applyBatchPriority(event.target.value)}
                 disabled={selected.size === 0 || batchBusy}
                 aria-label="Set priority for the selected channels"
-                className="h-8 rounded-md border border-outline-variant bg-surface-container-lowest pl-3 pr-8 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
+                className="h-10 rounded-md border border-outline-variant bg-surface-container-lowest pl-3 pr-8 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="" disabled>
                   {selected.size === 0

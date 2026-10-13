@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
 import { Activity, CloudOff, Gauge, LogOut, Plug, PlugZap, RotateCcw, ScanLine, ShieldCheck } from 'lucide-react'
 import {
@@ -20,6 +20,7 @@ import { OutletCard } from './components/OutletCard'
 import { PoliciesView } from './components/PoliciesView'
 import { PolicyAdminView } from './components/PolicyAdminView'
 import { ScenarioPanel } from './components/ScenarioPanel'
+import { SensorFaultRail } from './components/SensorFaultRail'
 import { TelemetryView } from './components/TelemetryView'
 import { AppTopBar } from './components/AppTopBar'
 import {
@@ -31,6 +32,7 @@ import {
 } from './data/dashboard'
 import type { AppView, EventLog, Outlet, Severity } from './types/dashboard'
 import { formatWatts, getTimeStamp, isEnergizedOutlet, totalLoad } from './utils/dashboard'
+import { detectSensorFault } from './utils/sensorFault'
 import {
   buildScenarioPayload,
   capacityBlockProfile,
@@ -72,10 +74,18 @@ function stateTagClass(state: string): string {
   return 'ant-tag ant-tag-success'
 }
 
+/**
+ * The meter fill is a BAND readout, not a measurement-quality readout, so it
+ * wears the three load bands straight off the standard: nominal sage below the
+ * warning threshold, advisory amber in the warning band, critical coral at and
+ * over the trip threshold. The previous build painted everything below warning
+ * in the interactive blue, which read as "no opinion" on a track whose entire
+ * job is to have an opinion about where the load sits.
+ */
 function meterFillClass(state: string): string {
   if (state === 'Critical') return 'bg-error'
-  if (state === 'Warning') return 'bg-tertiary-container'
-  return 'bg-primary'
+  if (state === 'Warning') return 'bg-tertiary'
+  return 'bg-secondary'
 }
 
 /** Clamp a threshold onto the meter's 0-100% track. */
@@ -83,6 +93,14 @@ function trackPercent(value: number, max: number): number {
   if (!(max > 0)) return 0
   return Math.min(Math.max((value / max) * 100, 0), 100)
 }
+
+/**
+ * The one hatch grammar in the console: a solid bar reads as a measurement, a
+ * hatched one reads as "there is a slot here and nothing trustworthy can go in
+ * it". Reused verbatim by every meter that is suppressed rather than measured.
+ */
+const FAULT_HATCH =
+  'repeating-linear-gradient(135deg, rgba(255,255,255,0.82) 0 3px, rgba(255,255,255,0) 3px 8px)'
 
 function App() {
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
@@ -187,6 +205,36 @@ function App() {
   const currentState =
     load >= thresholds.critical ? 'Critical' : load >= thresholds.warning ? 'Warning' : 'Normal'
   const loadPercent = Math.min((load / thresholds.max) * 100, 100)
+
+  /*
+   * Sensor fault, resolved ONCE per snapshot and passed down.
+   *
+   * This is the state the whole console is most likely to get wrong. The rig is
+   * flashed and posting, both metering sensors are off the bus, the device has
+   * latched `S_fault`, the backend has written a POL-01 isolation event — and
+   * `GET /Dashboard/state` still reports `state: 0`, Normal, because a total of
+   * 0 W sits under the warning threshold. Every derived figure below is
+   * computed from that total.
+   *
+   * So the load-derived band is deliberately NOT trusted as the headline once a
+   * fault is in the record: it is arithmetic over a reading the device has said
+   * it cannot take. `systemLabel` is what the top bar shows, and it says
+   * "Sensor fault" rather than the computed band, because a band computed from
+   * unattributable zeros is a band of nothing.
+   */
+  const sensorFault = useMemo(
+    () =>
+      detectSensorFault({
+        events,
+        deviceOnline,
+        channelCount: outlets.length,
+        now: Date.now(),
+      }),
+    [events, deviceOnline, outlets.length],
+  )
+
+  const faulted = sensorFault !== null
+  const systemLabel = faulted ? 'Sensor fault' : `System ${currentState}`
 
   const addEvent = (title: string, detail: string, severity: Severity = 'info') => {
     setEvents((current) => [
@@ -421,6 +469,8 @@ function App() {
           activeView={activeView}
           onChange={setActiveView}
           systemState={currentState}
+          systemLabel={systemLabel}
+          sensorFault={sensorFault}
           deviceOnline={deviceOnline}
           userEmail={userEmail}
         />
@@ -462,18 +512,26 @@ function App() {
             transition={{ duration: ROUTE_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
           >
             {/*
-              ChannelInventoryView ships its own legacy `.design-main` frame — it
-              was ported first and is not editable here — so it opts out of the
-              shared page padding rather than stacking 24px twice. Every other
-              view gets the same 24px margin and 1440px column.
+              Every view now shares one page frame — the same 1440px column and
+              the same 24px margin — so switching tabs does not shift the
+              content sideways. ChannelInventoryView used to opt out and carry
+              its own legacy `.design-main` padding, which left it on a
+              different grid from the tab beside it; it has been ported back
+              onto this one.
             */}
-            <div
-              className={
-                activeView === 'channels'
-                  ? 'w-full'
-                  : 'mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg'
-              }
-            >
+            <div className="mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg">
+              {/*
+                The fault rail sits above every view and outside the route
+                transition, on purpose. A fault is not a property of the view you
+                happen to be looking at, and animating it in on a tab change would
+                imply the operator summoned it. It is also the only element on the
+                page permitted to use the critical wash at full strength.
+              */}
+              <SensorFaultRail
+                fault={sensorFault}
+                onInspectHardware={() => setActiveView('hardware')}
+              />
+
               {activeView === 'dashboard' && (
                 <>
                   {/* --- Page head ------------------------------------------------- */}
@@ -489,11 +547,11 @@ function App() {
                       <span className="font-medium text-on-surface">Dashboard</span>
                     </nav>
                     <div className="mt-1 flex flex-wrap items-center gap-space-sm">
-                      <h1 className="font-headline-md text-headline-md tracking-tight text-on-surface">
+                      <h1 className="font-headline-md text-headline-md text-on-surface">
                         Power Operations Dashboard
                       </h1>
-                      <span className={`${stateTagClass(currentState)} font-code uppercase`}>
-                        {`System ${currentState}`}
+                      <span className={faulted ? 'ant-tag ant-tag-error' : stateTagClass(currentState)}>
+                        {systemLabel}
                       </span>
                     </div>
                     <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
@@ -502,7 +560,11 @@ function App() {
                     </p>
                   </header>
 
-                  {/* --- Four-up summary ------------------------------------------- */}
+                  {/* --- Four-up summary -------------------------------------------
+                      When the fault is latched the two load-derived cards swap their
+                      figure for "no reading" and say why. They are the only cards
+                      that change: the roster and the channel count are facts about
+                      the rig and stay true through a sensor fault. */}
                   <section
                     className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-4"
                     aria-label="System overview"
@@ -510,20 +572,30 @@ function App() {
                     <MetricCard
                       icon={<Gauge />}
                       label="Total load"
-                      value={formatWatts(load)}
-                      note={`${Math.round(loadPercent)}% of ${formatWatts(thresholds.max)} capacity`}
+                      value={faulted ? 'No reading' : formatWatts(load)}
+                      note={
+                        faulted
+                          ? 'Device faulted — not attributable to a measurement'
+                          : `${Math.round(loadPercent)}% of ${formatWatts(thresholds.max)} capacity`
+                      }
+                      tone={faulted ? 'critical' : undefined}
                     />
                     <MetricCard
                       icon={<ShieldCheck />}
                       label="Remaining capacity"
-                      value={formatWatts(remaining)}
-                      note={`${formatWatts(thresholds.warning)} warning / ${formatWatts(thresholds.critical)} critical`}
+                      value={faulted ? 'No reading' : formatWatts(remaining)}
+                      note={
+                        faulted
+                          ? 'Headroom cannot be stated without a load'
+                          : `${formatWatts(thresholds.warning)} warning / ${formatWatts(thresholds.critical)} critical`
+                      }
+                      tone={faulted ? 'critical' : undefined}
                     />
                     <MetricCard
                       icon={<PlugZap />}
                       label="Energized outlets"
                       value={`${activeCount}/${outlets.length}`}
-                      note="Active and standby relay channels"
+                      note="Policy status per channel — relay outputs are not driven"
                     />
                     {/* The sensor copy is the honest one: the PZEM-004T that used to sit
                         on the common feed is retired. Mains V/A/W now comes from an
@@ -534,7 +606,7 @@ function App() {
                       icon={<ScanLine />}
                       label="Metering channels"
                       value={`${outlets.length}`}
-                      note="INA226 on the mains feed, ADS1015 CT per mains branch · CH5 USB is a residual"
+                      note="ADS1015 + ZMCT103C per mains branch, INA226 on the mains feed · CH5 USB is nominal"
                     />
                   </section>
 
@@ -551,12 +623,25 @@ function App() {
                         </code>
                       </div>
                       <div className="flex shrink-0 items-baseline gap-1.5">
-                        <span className="font-metric-display text-metric-display text-on-surface">
-                          {Math.round(load).toLocaleString()}
-                          <span className="font-code text-code font-semibold text-on-surface-variant"> W</span>
+                        {/* The header figure is the load. Under a fault the load is
+                            not a measurement, so the figure is withdrawn rather
+                            than shown as a confident zero against a healthy-looking
+                            1,200 W ceiling. */}
+                        <span
+                          className={`font-metric-display text-metric-display ${
+                            faulted ? 'text-error' : 'text-on-surface'
+                          }`}
+                        >
+                          {faulted ? 'No reading' : Math.round(load).toLocaleString()}
+                          {faulted ? null : (
+                            <span className="font-metric-value text-metric-value font-semibold text-on-surface-variant">
+                              {' '}
+                              W
+                            </span>
+                          )}
                         </span>
-                        <span className="font-code text-code text-outline">
-                          {`/ ${Math.round(thresholds.max).toLocaleString()} W`}
+                        <span className="font-metric-value text-metric-value text-outline">
+                          {`/ ${Math.round(thresholds.max).toLocaleString()} W limit`}
                         </span>
                       </div>
                     </div>
@@ -569,18 +654,29 @@ function App() {
                         <div
                           className="ant-meter"
                           role="meter"
-                          aria-valuenow={Math.round(loadPercent)}
+                          aria-valuenow={faulted ? undefined : Math.round(loadPercent)}
                           aria-valuemin={0}
                           aria-valuemax={100}
-                          aria-label={`Total load, ${Math.round(loadPercent)} percent of configured capacity`}
+                          aria-label={
+                            faulted
+                              ? 'Total load — not attributable, sensor fault latched'
+                              : `Total load, ${Math.round(loadPercent)} percent of configured capacity`
+                          }
                         >
+                          {/* Hatched across the whole track when faulted: an empty
+                              track at 0% is indistinguishable from a healthy idle
+                              rig, which is the whole misread this prevents. */}
                           <div
-                            className={`ant-meter-fill ${meterFillClass(currentState)}`}
-                            style={{ width: `${loadPercent}%` }}
+                            className={`ant-meter-fill ${faulted ? 'bg-error' : meterFillClass(currentState)}`}
+                            style={{
+                              width: faulted ? '100%' : `${loadPercent}%`,
+                              backgroundImage: faulted ? FAULT_HATCH : undefined,
+                              opacity: faulted ? 0.3 : undefined,
+                            }}
                           />
                         </div>
                         <span
-                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-tertiary-container"
+                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-tertiary"
                           style={{ left: `${warningTrack}%` }}
                           aria-hidden="true"
                         />
@@ -593,35 +689,46 @@ function App() {
 
                       <div className="grid grid-cols-1 gap-space-sm sm:grid-cols-3">
                         <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-secondary pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Normal band</span>
+                          <span className="font-metric-value text-metric-value text-on-surface-variant">
+                            Normal band
+                          </span>
                           <span className="font-metric-value text-metric-value font-semibold text-secondary">
                             {`0 – ${Math.round(thresholds.warning).toLocaleString()} W`}
                           </span>
                         </div>
-                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-tertiary-container pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Warning · FR-05</span>
-                          <span className="font-metric-value text-metric-value font-semibold text-tertiary-container">
+                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-tertiary pl-2">
+                          <span className="font-metric-value text-metric-value text-on-surface-variant">
+                            Warning · FR-05
+                          </span>
+                          <span className="font-metric-value text-metric-value font-semibold text-tertiary">
                             {`${Math.round(thresholds.warning).toLocaleString()} – ${Math.round(
                               thresholds.critical,
                             ).toLocaleString()} W`}
                           </span>
                         </div>
                         <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-error pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Critical · FR-06</span>
+                          <span className="font-metric-value text-metric-value text-on-surface-variant">
+                            Critical · FR-06
+                          </span>
                           <span className="font-metric-value text-metric-value font-semibold text-error">
                             {`≥ ${Math.round(thresholds.critical).toLocaleString()} W`}
                           </span>
                         </div>
                       </div>
 
-                      <p className="font-code text-code text-outline">
+                      <p className="font-body-sm text-body-sm text-outline">
                         Ticks are placed at {warningTrack.toFixed(0)}% and {criticalTrack.toFixed(0)}% of
-                        P_limit. State refreshes every 5 s from GET /api/Dashboard/state.
+                        P_limit. This panel refetches {DASHBOARD_POLL_MS} ms after the last request
+                        settles, from GET /api/Dashboard/state, so the figure on screen trails the
+                        device&rsquo;s own 1 s posting interval by up to one poll cycle.
                       </p>
                     </div>
                   </section>
 
-                  {/* --- Controlled channels -------------------------------------- */}
+                  {/* --- Controlled channels --------------------------------------
+                      `faulted` is handed to every card so each one can hold its
+                      figure at "no reading" rather than showing a measured zero,
+                      and disable the relay command with the reason attached. */}
                   <section className="ant-card overflow-hidden" aria-label="Outlet-level monitoring">
                     <div className="ant-card-header">
                       <div className="flex min-w-0 items-center gap-2">
@@ -630,14 +737,19 @@ function App() {
                           {`${outlets.length} controlled channels`}
                         </h2>
                       </div>
-                      <span className="shrink-0 font-code text-code text-on-surface-variant">
+                      <span className="shrink-0 font-metric-value text-metric-value text-on-surface-variant">
                         {`${activeCount} energized · ${outlets.length - activeCount} open or idle`}
                       </span>
                     </div>
                     <div className="ant-card-body">
                       <div className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-3">
                         {outlets.map((outlet) => (
-                          <OutletCard key={outlet.id} outlet={outlet} onToggle={toggleOutlet} />
+                          <OutletCard
+                            key={outlet.id}
+                            outlet={outlet}
+                            faulted={faulted}
+                            onToggle={toggleOutlet}
+                          />
                         ))}
                       </div>
                     </div>

@@ -502,3 +502,9 @@ src/Web/wwwroot/assets/
 # Local Wi-Fi credentials - never commit these
 firmware/*/config.local.h
 
+
+# SPA build output: index.html references content-hashed assets under
+# src/Web/wwwroot/assets/, which is already ignored above. Tracking the
+# entrypoint without the bundle commits a stale hash and yields a blank page
+# on every fresh clone.
+src/Web/wwwroot/index.html

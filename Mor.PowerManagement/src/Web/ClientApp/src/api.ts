@@ -159,6 +159,10 @@ function mapEvent(event: BackendEvent): EventLog {
   return {
     id: event.id,
     time: formatEventTime(event.timestamp),
+    // Carried through unlocalised so anything that needs the event's AGE — the
+    // sensor-fault rail, for one — can compute it. `time` is a display string
+    // and cannot be parsed back into a moment.
+    at: event.timestamp,
     title: event.title,
     detail: event.detail,
     severity: toSeverity(event.severity),
