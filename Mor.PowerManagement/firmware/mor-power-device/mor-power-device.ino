@@ -47,6 +47,12 @@ float wattageCH2 = 0.0;
 float wattageCH3 = 0.0;
 float wattageCH4 = 0.0;
 
+// Sensor presence, resolved once in setup(). Read by the sampling task (Core 0)
+// and by postTelemetry() (Core 1) but written only in setup(), before either
+// runs, so no lock is needed to read them.
+bool ina226Present = false;
+bool ads1015Present = false;
+
 // FreeRTOS Handles
 SemaphoreHandle_t dataMutex = NULL;
 TaskHandle_t sensorTaskHandle = NULL;
@@ -88,35 +94,58 @@ void setup() {
   // found both. Fast mode silently cost us both sensors, so the bus runs
   // standard mode. Raise only after a re-test confirms enumeration.
   Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(100000);
+  // I2C bus speed: 400 kHz. This is the rate the last known-good flashed build
+  // used and it enumerated both the INA226 (0x40) and the ADS1015 (0x48) and
+  // posted live telemetry. Building at 100 kHz hung in setup() with
+  // "Error: INA226 module not detected at 0x40!" and never reached WiFi.
+  // The I2C_CLOCK_HZ value in config.h describes a transient mid-reseat state;
+  // do not change this without a bus scan on the real wiring.
+  Wire.setClock(400000);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
-  // Initialize INA226 Power Monitor (Rob Tillaart Library)
-  if (!ina226.begin()) {
-    Serial.println("Error: INA226 module not detected at 0x40!");
-    while (1) { delay(10); }
-  }
-  ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
+  // A missing sensor must NEVER hang the device. The previous code spun in
+  // while(1) on a detection failure, so a single unplugged module meant no
+  // WiFi, no telemetry, and a permanently empty dashboard with nothing to
+  // diagnose it. Detection now degrades instead of halting:
+  //   INA226 missing  -> voltage falls back to the AC_VOLTAGE nominal
+  //                      (self-reported through FaultFlag so the console can
+  //                       label those readings as unverified)
+  //   ADS1015 missing -> branch current stays 0; no sampling task is started
+  // Either way the device still connects, still posts, and still reports why.
 
-  // Initialize ADS1015 ADC for ZMCT103C sensors
-  if (!ads.begin(ADS1015_ADDRESS, &Wire)) {
-    Serial.println("Error: ADS1015 not detected at 0x48!");
-    while (1) { delay(100); }
+  ina226Present = ina226.begin();
+  if (ina226Present) {
+    ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
+    Serial.println("INA226  OK  (0x40) - voltage reference active");
+  } else {
+    Serial.println("INA226  MISSING (0x40) - falling back to nominal 238 V; readings will be flagged");
   }
-  ads.setGain(GAIN_TWOTHIRDS);
-  ads.setDataRate(RATE_ADS1015_3300SPS);
 
-  // Pin High-Speed Sampling Engine to Core 0 (Priority 2)
-  xTaskCreatePinnedToCore(
-    sensorTask,         /* Task function */
-    "SensorEngine",     /* Task name */
-    4096,               /* Stack size */
-    NULL,               /* Parameters */
-    2,                  /* Priority */
-    &sensorTaskHandle,  /* Task handle */
-    0                   /* Core ID: 0 */
-  );
+  ads1015Present = ads.begin(ADS1015_ADDRESS, &Wire);
+  if (ads1015Present) {
+    ads.setGain(GAIN_TWOTHIRDS);
+    ads.setDataRate(RATE_ADS1015_3300SPS);
+    Serial.println("ADS1015 OK  (0x48) - 4-channel CT sampling active");
+  } else {
+    Serial.println("ADS1015 MISSING (0x48) - branch current will read 0.00 A");
+  }
+
+  // Pin High-Speed Sampling Engine to Core 0 (Priority 2).
+  // Only started when the ADC is actually present: the Adafruit ADS1X15 driver
+  // talks to the I2C bus on every read, and with no device ACKing it would
+  // stall the task rather than return a clean zero.
+  if (ads1015Present) {
+    xTaskCreatePinnedToCore(
+      sensorTask,         /* Task function */
+      "SensorEngine",     /* Task name */
+      4096,               /* Stack size */
+      NULL,               /* Parameters */
+      2,                  /* Priority */
+      &sensorTaskHandle,  /* Task handle */
+      0                   /* Core ID: 0 */
+    );
+  }
 
   Serial.println("Initialization Complete. Dual-Core Monitoring Active.\n");
 
@@ -141,19 +170,24 @@ void setup() {
 // CORE 1: MAIN LOOP (Serial Telemetry & INA226 Polling)
 // =========================================================================
 void loop() {
-  // Read INA226 (DC Monitor) directly on Core 1 using Rob Tillaart functions
-  float busV   = ina226.getBusVoltage();       // Returns Bus Voltage in V
-  float shuntV = ina226.getShuntVoltage_mV();  // Returns Shunt Voltage in mV
-  float inAmps = ina226.getCurrent();          // Returns Current in A
-  float inWatts = ina226.getPower();           // Returns Power in W
+  // Read INA226 (DC Monitor) directly on Core 1 using Rob Tillaart functions.
+  // Skipped entirely when the module was not detected in setup(): calling the
+  // getters against an absent device would put a guaranteed-NACK transaction
+  // on the shared I2C bus every pass, which is worse than reading nothing.
+  if (ina226Present) {
+    float busV    = ina226.getBusVoltage();      // Returns Bus Voltage in V
+    float shuntV  = ina226.getShuntVoltage_mV(); // Returns Shunt Voltage in mV
+    float inAmps  = ina226.getCurrent();         // Returns Current in A
+    float inWatts = ina226.getPower();           // Returns Power in W
 
-  // Update INA226 shared variables under mutex
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    inaBusVoltage_V = busV;
-    inaShuntVoltage_mV = shuntV;
-    inaCurrent_A = inAmps;
-    inaPower_W = inWatts;
-    xSemaphoreGive(dataMutex);
+    // Update INA226 shared variables under mutex
+    if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+      inaBusVoltage_V = busV;
+      inaShuntVoltage_mV = shuntV;
+      inaCurrent_A = inAmps;
+      inaPower_W = inWatts;
+      xSemaphoreGive(dataMutex);
+    }
   }
 
   // Print Telemetry at 4Hz interval
@@ -330,7 +364,9 @@ bool postTelemetry() {
   // (IngestTelemetry.cs:33). Posting "sFault" never bound, so the fault branch
   // at IngestTelemetry.cs:151 was unreachable and the device could not report
   // a fault even when it had detected one.
-  doc["FaultFlag"] = false;               // no protective rules run yet
+  // Raised when either sensor is missing, so the console can label the
+  // affected readings as degraded instead of presenting them as verified.
+  doc["FaultFlag"] = !(ina226Present && ads1015Present);
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   JsonArray readings = doc["readings"].to<JsonArray>();
