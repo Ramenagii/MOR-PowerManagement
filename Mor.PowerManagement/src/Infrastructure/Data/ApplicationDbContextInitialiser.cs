@@ -134,15 +134,19 @@ public class ApplicationDbContextInitialiser
 
         // -------------------------------------------------------------------
         // TESTING RIG (temporary until 31 Oct 2026) — see MUST_READ.md.
-        // 5 channels: 4x220V outlets (CH1-CH4) + 1xUSB 5V (CH5).
-        // The USB rail counts toward P_total and is a shed candidate.
+        // 2 channels: 2x220V outlets (CH1-CH2) on one mains feed. Both are
+        // metered on their own ADS1220 SPI input via a branch CT.
         // Set false to restore the full 13-channel rig for the final panel.
         // -------------------------------------------------------------------
         const bool TestingRig = true;
 
-        const double TestingMaxCapacityWatts = 1200.0;
-        const double TestingWarningThresholdWatts = 960.0;
-        const double TestingCriticalThresholdWatts = 1200.0;
+        // Re-derived for the 2-outlet bench: seeded load is 260 + 180 = 440 W,
+        // so a 600 W P_limit leaves ~160 W of headroom above the seeded state
+        // while still putting the rig in overload for any single added load.
+        // Thresholds are 80% / 100% of capacity, matching the full-rig ratios.
+        const double TestingMaxCapacityWatts = 600.0;
+        const double TestingWarningThresholdWatts = 480.0;
+        const double TestingCriticalThresholdWatts = 600.0;
 
         const double FullRigMaxCapacityWatts = 4000.0;
         const double FullRigWarningThresholdWatts = 3240.0;
@@ -187,11 +191,42 @@ public class ApplicationDbContextInitialiser
         {
             ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
             ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
-            // Testing rig has a single USB 5V rail; it counts toward P_total.
-            ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
         };
+
+        // FUTURE 4+USB: swap this template in when the bench grows back to five
+        // wired channels. It is kept commented so the 2-outlet rig stays the
+        // only thing that runs today.
+        //
+        // When to swap: when CH3/CH4 are physically wired to relay channels and
+        // the firmware is posting outletId 1..5 positionally. The one-shot
+        // table reset further down is driven by testingRigSpecs.Length and the
+        // renumber SQL is built from the same array, so widening the spec is
+        // all that is needed for ids to become 1..5 - but the Testing*Watts
+        // constants above must be widened in the same pass or P_total runs
+        // against a 600 W limit the 4-outlet rig cannot hold.
+        //
+        // futureTestingRigSpecs5 — 4x220V (CH1-CH4, each metered on its own
+        // ADS1220 SPI input via a branch CT) + 1xUSB 5V (CH5, NO current
+        // sensor: its figure is only ever the nominal rating, and its current
+        // is a residual of the INA226 mains total).
+        //
+        // Paired thresholds for this spec, at the 80% / 100% ratio used above:
+        //   futureTestingMaxCapacityWatts      = 1200.0;
+        //   futureTestingWarningThresholdWatts = 960.0;   (0.8 x 1200)
+        //   futureTestingCriticalThresholdWatts= 1200.0;
+        // Seeded load of the rows below is 260 + 180 + 120 + 0 + 7 = 567 W,
+        // which sits just under the 960 W warning threshold: the rig boots in
+        // a healthy state and still reaches warning on one realistic addition.
+        //
+        // var futureTestingRigSpecs5 = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
+        // {
+        //     ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
+        //     ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
+        //     ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+        //     ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+        //     // No CT on this rail: Volt is its nominal rating, not a sample.
+        //     ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
+        // };
 
         // Full 13-channel rig (8x220V + 1x110V + 4xUSB, single mains PZEM).
         var fullRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
@@ -250,16 +285,17 @@ public class ApplicationDbContextInitialiser
 
         if (TestingRig)
         {
-            // The bench physically has five channels, and the firmware addresses
-            // them positionally: outletId 1..5 in every telemetry batch. The
-            // full-rig seed left USB 1 at id 10, which no bench channel could
-            // ever match, so the testing rig takes the table over wholesale:
-            // delete every outlet row (telemetry cascades) and re-seed in spec
-            // order, which renumbers the channels 1..5.
+            // The bench physically has two channels, and the firmware addresses
+            // them positionally: outletId 1..2 in every telemetry batch. The
+            // full-rig seed left those outlets at ids 1 and 2 but also seeded
+            // nine more rows the bench has no channel for, so the testing rig
+            // takes the table over wholesale: delete every outlet row
+            // (telemetry cascades) and re-seed in spec order, which renumbers
+            // the channels 1..2.
             //
             // The reset is one-shot: it only runs while the stored rows do not
             // already match the testing spec exactly (same rows, same order,
-            // ids 1..5). A restart after a live bench session must never wipe
+            // ids 1..2). A restart after a live bench session must never wipe
             // the device's live status, load or telemetry history.
             // Restored by flipping TestingRig back to false.
             var existing = await _context.Outlets.OrderBy(o => o.Id).ToListAsync();
@@ -294,7 +330,7 @@ public class ApplicationDbContextInitialiser
 
                 // Postgres identity sequences do not rewind, so the fresh rows
                 // come back numbered after the deleted ones. The firmware sends
-                // outletId 1..5 positionally, so Id must equal channel number or
+                // outletId 1..2 positionally, so Id must equal channel number or
                 // Guard.Against.NotFound silently drops every reading. Telemetry
                 // cascaded away with the old rows, so nothing references the old
                 // ids and the renumbering is safe. Raw SQL because EF does not
@@ -314,7 +350,7 @@ public class ApplicationDbContextInitialiser
                     "SELECT setval(pg_get_serial_sequence('\"Outlets\"', 'Id'), (SELECT COALESCE(MAX(\"Id\"), 0) FROM \"Outlets\"), true);");
 
                 _logger.LogInformation(
-                    "Testing rig active: reset {Count} outlet rows so channels renumber 1-5.", existing.Count);
+                    "Testing rig active: reset {Count} outlet rows so channels renumber 1-2.", existing.Count);
             }
         }
 
@@ -379,8 +415,8 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 4x220V outlets (CH1-CH4) plus 1xUSB 5V (CH5) on a single mains feed. USB counts toward P_total; P_limit is capped at 1200 W until 31 Oct 2026.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 960 W warning threshold.", Severity = EventSeverity.Success });
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 2x220V outlets (CH1-CH2) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT. P_limit is capped at 600 W until 31 Oct 2026.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 480 W warning threshold.", Severity = EventSeverity.Success });
         }
 
         await _context.SaveChangesAsync();

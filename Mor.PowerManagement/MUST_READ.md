@@ -44,12 +44,17 @@ list.** When both are alive, DP decisions win (the firmware applies `desiredStat
 ### Sensors and libraries (firmware)
 
 The PZEM-004T is **retired**. Metering is split across two I²C devices on a shared
-bus (**SDA = GPIO 17, SCL = GPIO 18** — chosen to avoid relay GPIOs 4–8, strapping
-pins 0/3/45/46, USB pins 19/20 and flash pins):
+bus (**SDA = GPIO 8, SCL = GPIO 9**).
+
+The I²C pins are **fixed by the physical wiring, not chosen** — GPIO 8/9 are the pins
+the sensors are actually soldered to on this rig, so they cannot be moved without
+moving the wiring. The **relay GPIOs were the ones chosen**: they start at GPIO 10
+specifically to stay clear of the I²C pair (8, 9), and they also avoid strapping pins
+0/3/45/46, USB pins 19/20 and the SPI flash pins.
 
 | Device | Role | I²C address | Library |
 |---|---|---|---|
-| **INA226** | Voltage reference on the common 220 V feed (behind a divider), plus DC rail monitoring. **Not a mains power meter** — see §12. | `0x40` | `INA226` (Rob Tillaart) v0.6.6 |
+| **INA226** | **Voltage reference only.** On the current bench it sits on a 24 V DC rail drawing ~0 A, so it sees neither the mains feed nor any branch load. It contributes to **no** wattage figure — P_total is the sum of the four measured CT branches only. **Not a mains power meter** — see §12. | `0x40` | `INA226` (Rob Tillaart) v0.6.6 |
 | **ADS1015 / ADS1115** | 4-channel ADC reading each branch's analog CT sensor → real per-branch current for CH1–CH4 | `0x48` | `Adafruit ADS1X15` v2.6.2 (+ `Adafruit BusIO`) |
 | ArduinoJson | telemetry / config JSON | — | v7.4.3 |
 
@@ -68,36 +73,60 @@ arduino-cli lib install "INA226"
 | `INA226_SHUNT_OHM` / `INA226_MAX_CURRENT_AMPS` | **0.010 Ω / 8.0 A** | The INA226 derives current from the shunt voltage. A wrong pair scales **every** current and watt reading on the dashboard. Using `configure(0.1, 0.1, …)` produced 0.000 A on all four channels while the sensor was healthy. |
 | `INA226_MAIN_VOLT_DIVIDER` | **9.46** | Reported volts. 24.1 V at the pin × 9.46 = 228 V. |
 | `I2C_CLOCK_HZ` | **100000** | A 400 kHz build found *neither* I²C device on the current wiring. If sensors vanish, check the bus first, then this. |
-| `ZMCT_CAL_FACTOR` | **0.52** | Every branch amp is this × the measured RMS. Calibrate against a known load. |
-| `AC_VOLTAGE` (raw sketch) | **238** — see §12 | Only affects the standalone raw sketch; the framework firmware uses measured volts instead. |
+| `ZMCT_CAL_FACTOR` | **0.52** | Every branch amp is this × the measured RMS. **Untrusted — see §12.** Calibrate against a known load. |
+| `FALLBACK_MAINS_VOLTS` | **228.0 V** | Used **only** when the INA226 is not answering at all, so the rig still reports a plausible voltage instead of 0 V. It is not the normal source of reported mains volts. |
+| `AC_VOLTAGE` (raw sketch) | **238 V** — see §12 | Only the standalone raw sketch uses it. The framework firmware **measures** mains volts instead: INA226 bus volts × `INA226_MAIN_VOLT_DIVIDER` (9.46), with `FALLBACK_MAINS_VOLTS` (228.0 V) as a fallback only. |
+
+> **WARNING — editing a constant is not the same as changing it.**
+>
+> The framework firmware keeps **its own private copies** of the calibration constants
+> in the `.ino` instead of reading them from `config.h`. Until it consumes `config.h`
+> directly, editing a constant in `config.h` is silently ignored by the build — you
+> can "fix" a shunt, a divider or a CT factor and watch the bench reading stay
+> exactly where it was. **This has been a live hazard on this project, not a
+> theoretical one.**
+>
+> **Fixed:** the firmware now reads these values from `config.h`.
+> Until that fix is re-verified on the bench after any firmware change, grep the
+> `.ino` for a duplicate literal before you assume your edit took effect (see §8).
 
 **Electrical cautions — read before wiring:**
-- The INA226 senses **max 36 V**. It must sit behind a **voltage divider on the
-  220 V mains feed**; never connect mains directly. `INA226_MAIN_VOLT_DIVIDER`
-  (default `4.0`) is passed to `configure(..., bus_V_scaling_e4)` so the reported
-  volts are real mains volts. For 220 V use ≈ 3 × 1 MΩ + 1 MΩ (ratio 4).
+- The INA226 senses **max 36 V**. It must sit behind a **voltage divider**; never
+  connect mains directly. `INA226_MAIN_VOLT_DIVIDER` is set to **9.46** (bench
+  calibrated: 24.1 V at the bus pin, 228 V on the multimeter) and is passed to
+  `configure(..., bus_V_scaling_e4)` so the reported volts are scaled mains volts.
+  **Re-check the ratio with a multimeter after touching the resistor ladder** and
+  update that one number in `config.h` — it is the only constant in the voltage path.
 - The INA226 has **no energy register**; the firmware integrates power into a
   cumulative kWh (`integratedEnergyWh`).
 - `ZMCT_ZERO_MV` (2500) is the CT's 0 A centre and `ZMCT_MV_PER_AMP` (1.0) its
   ratio — **calibrate both against a known load** (e.g. clamp 1 A, read serial).
-- The **USB rail (CH5) has no CT**. Its wattage is reported as the residual:
-  mains total minus the four measured branches.
+- The **USB rail (CH5) is unmetered.** It has no CT and the residual method does
+  **not** work on this rig: the INA226 sits on a 24 V DC rail and never sees the
+  mains feed, so "mains total minus the four branches" cannot be computed.
+  **CH5 reports 0 W and P_total is the sum of the four measured branches only.**
+  The policy still counts USB toward P_total and CH5 is still a shed candidate
+  (lowest priority), but its own contribution is currently **unmeasured**, not
+  verified as zero.
 - `INA226` (`0x40`) and `ADS` (`0x48`) addresses must not collide.
-- `SIMULATE_METERS` in `config.h` is `1` (synthetic) until the sensors are wired;
-  set `0` for real readings. Both paths are compile-verified.
+- `SIMULATE_METERS` in `config.h` is `0` — the rig reads the real INA226 + ADS1015
+  on the wired bench. Set `1` for synthetic readings only when the sensors are
+  removed. Both paths are compile-verified.
 
 ## 2. Testing rig (TEMPORARY — until 31 Oct 2026)
 
 | Channel | Hardware | Relay GPIO (ESP32-S3) | Voltage class | Priority | Allowance |
 |---|---|---|---|---|---|
-| CH1 | Outlet 1 — Instructor workstation | 4 | 220 V | Critical | 300 W |
-| CH2 | Outlet 2 — Demo equipment | 5 | 220 V | High | 300 W |
-| CH3 | Outlet 3 — Lab instrument | 6 | 220 V | High | 300 W |
-| CH4 | Outlet 4 — Student workstation | 7 | 220 V | Medium | 300 W |
-| CH5 | USB 5 V charging | 8 | 5 V | Low | 10 W |
+| CH1 | Outlet 1 — Instructor workstation | 10 | 220 V | Critical | 300 W |
+| CH2 | Outlet 2 — Demo equipment | 11 | 220 V | High | 300 W |
+| CH3 | Outlet 3 — Lab instrument | 12 | 220 V | High | 300 W |
+| CH4 | Outlet 4 — Student workstation | 13 | 220 V | Medium | 300 W |
+| CH5 | USB 5 V charging | 14 | 5 V | Low | 10 W |
 
-- **Firmware:** `OUTLET_COUNT 5`, `RELAY_PINS[] = {4,5,6,7,8}` in
-  `firmware/mor-power-device/config.h`.
+- **Firmware:** `OUTLET_COUNT 5`, `RELAY_PINS[] = {10, 11, 12, 13, 14}` in
+  `firmware/mor-power-device/config.h`. They start at 10 to stay clear of the I²C
+  pair (SDA 8, SCL 9); they also avoid strapping pins 0/3/45/46, USB pins 19/20 and
+  the SPI flash pins.
 - **Backend seed:** only 5 outlets seeded (`ApplicationDbContextInitialiser.cs`); the
   CH6..CH13 rows are not created while testing. The old 8-outlet + 110 V + 4-USB spec is
   frozen in git and restored in §9.
@@ -208,8 +237,10 @@ dropping automatically.** Do not break this chain.
 ESP32-S3, every 5000 ms
   1. read/derive per-branch V/A/W
        SIMULATE_METERS=1 : synthesised from allowances (bench, no sensors)
-       SIMULATE_METERS=0 : INA226 (mains V/A/W) + ADS1x15 (per-branch CT current);
-                           CH5 USB = mains total minus the four measured branches
+       SIMULATE_METERS=0 : INA226 (mains volts only, via the 9.46 divider)
+                           + ADS1x15 (per-branch CT current);
+                           CH5 USB is unmetered and reports 0 W
+                           P_total = sum of the four measured branches
   2. POST /api/Device/telemetry   { deviceId, sFault, meteringMode, readings[5], relayStates[5] }
        (X-Device-Key header required when Device:ApiKey is set)
   3. BACKEND, in order, single transaction:
@@ -330,7 +361,7 @@ earlier panels remain quotable.
 | Frontend API client | `src/Web/ClientApp/src/api.ts` |
 | Dashboard fallback constants | `src/Web/ClientApp/src/data/dashboard.ts` |
 | Scenario builders | `src/Web/ClientApp/src/utils/scenarios.ts` |
-| Firmware | `firmware/mor-power-device/mor-power-device.ino`, `config.h` (`OUTLET_COUNT 5`, relays `{4,5,6,7,8}`) |
+| Firmware | `firmware/mor-power-device/mor-power-device.ino`, `config.h` (`OUTLET_COUNT 5`, relays `{10,11,12,13,14}`, I²C SDA 8 / SCL 9) |
 | Flash commands | §8 of this file (COM10) |
 | Old full-rig architecture | `docs/ARCHITECTURE.md` — read for the final 13-channel design; **this file overrides it until 31 Oct 2026** |
 
@@ -342,27 +373,32 @@ earlier panels remain quotable.
    `ApplicationDbContextInitialiser.cs` (seed) →
    `PowerSystemConfig` defaults → `ClientApp/src/data/dashboard.ts` constants →
    `firmware/mor-power-device/config.h` (P_limit in the local shed) → update §2 here.
-2. **Every new rule gets:** an `FR-xx` id, a `ControlPolicy` row with `LegacyCode`, a
+2. **A calibration constant is only real if the firmware consumes it.** Shunt, divider,
+   CT factor and voltage fallback are changed in `config.h` — nothing else. Then
+   **grep the `.ino` for a duplicate literal** before you assume the edit took effect:
+   a private copy in the sketch silently outranks `config.h` and the bench reading
+   will not move. This exact class of bug shipped in this rig (§12).
+3. **Every new rule gets:** an `FR-xx` id, a `ControlPolicy` row with `LegacyCode`, a
    precedence slot, a `LoadResponseEvaluator` function, a firmware counterpart, a row in
    the §3 table, and an L2 test case. Missing any one = not done.
-3. **Minimum 4 decimals / units in code comments and in the manuscript** — W, V, A, ms,
+4. **Minimum 4 decimals / units in code comments and in the manuscript** — W, V, A, ms,
    min. No bare numbers.
-4. **Never relax FR-01/02/03** for a demo. Those are the PTC-ACBET evidence.
-5. **Secrets:** `Device:ApiKey` and `DEVICE_API_KEY` live in user-secrets / firmware
+5. **Never relax FR-01/02/03** for a demo. Those are the PTC-ACBET evidence.
+6. **Secrets:** `Device:ApiKey` and `DEVICE_API_KEY` live in user-secrets / firmware
    `config.h` (not committed) — never paste real keys into commits, tests or docs.
-6. **Testing rig is wired in git:** `git worktree`/branch names for testing are fine;
+7. **Testing rig is wired in git:** `git worktree`/branch names for testing are fine;
    keep `main` on the full rig. Mention the branch in every panel caption.
-7. **Build/verify before demo:** `dotnet build` (warnings-as-errors),
+8. **Build/verify before demo:** `dotnet build` (warnings-as-errors),
    `dotnet test tests/Domain.Unit tests && dotnet test tests/Application.UnitTests`,
    ClientApp `npx tsc --noEmit && npm test`. (The repo has no ESLint config, so
    `npm run lint` cannot run; TypeScript + vitest are the gates.) Failing tests
    block the demo.
-8. **Before the panel:** run the §5 L3 checklist start to finish and screen-record.
+9. **Before the panel:** run the §5 L3 checklist start to finish and screen-record.
 
 ### ESP32 on COM10 — quick start
 
 ```powershell
-# 1. build firmware with the testing rig (OUTLET_COUNT 5, RELAY_PINS {4,5,6,7,8})
+# 1. build firmware with the testing rig (OUTLET_COUNT 5, RELAY_PINS {10,11,12,13,14})
 arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 # 2. detect the board
 arduino-cli board list
@@ -400,11 +436,11 @@ Do these when the practice/design 1 phase ends:
 
 ---
 
-*Last updated 11 Oct 2026. Testing rig configuration in force until 31 Oct 2026.*
+*Last updated 12 Oct 2026. Testing rig configuration in force until 31 Oct 2026.*
 
 ---
 
-## 12. Bench reality (recorded 11 Oct 2026)
+## 12. Bench reality (recorded 11 Oct 2026, amended 12 Oct 2026)
 
 What the rig actually does right now, as opposed to what the design intends.
 
@@ -414,7 +450,7 @@ What the rig actually does right now, as opposed to what the design intends.
 - Telemetry HTTP 200 at 1 Hz; dashboard total 30.81 W against a 1200 W limit
 - Relays and rules are disabled (RELAY_OUTPUT_ENABLED 0, RULES_ENABLED 0), so nothing can shed or trip
 
-**Two honest gaps to resolve before the write-up:**
+**Three honest gaps to resolve before the write-up:**
 1. **The INA226 is not a mains power meter.** It sits on a 24 V DC rail that is
    drawing ~0 A, so mains power and kWh read ~0. It is currently useful only as
    the voltage reference (24.1 V x 9.46). Either rewire it to the mains feed, or
@@ -423,11 +459,29 @@ What the rig actually does right now, as opposed to what the design intends.
    The framework firmware multiplies measured branch current by the measured
    INA226 voltage. The standalone raw sketch instead assumes a constant 238 V
    while the bench meter reads 228 V, so its watt figures are ~4% high.
+3. **The CT channels read roughly 25x low, and `ZMCT_CAL_FACTOR` is not trusted.**
+   Recorded: 0.059 / 0.029 / 0.024 / 0.025 A per channel against an expected
+   ~1.37 A per branch at ~300 W. That is ~25x low, which is far outside anything
+   `ZMCT_CAL_FACTOR 0.52` can explain, so the factor is either badly wrong or the
+   CT chain is not measuring what we think it is. **Do not treat any branch watt
+   figure from this rig as measured until the CTs are calibrated against a real
+   known load.** A calibration mode has been added to the firmware
+   (`ZMCT_CALIBRATION_MODE` / `ZMCT_CAL_REF_WATTS` in `config.h`); connect a
+   known load, set the reference wattage, and the firmware prints the suggested
+   factor. This is an **open item**, not a fix.
 
 **Failure modes worth remembering:**
 - The ESP32 enumerates on a **different COM port after every replug** (it has been
   COM10, COM11 and COM12 today). A missing port looks identical to an I2C fault.
-- The bus has gone silent three times today, each time after the wiring was
+- **Identified and fixed — the silent-bus cause was our own build.** The sketch
+  was running `Wire.setClock(400000)` while the bench-proven rate for this wiring
+  is **100 kHz** (`I2C_CLOCK_HZ 100000`): a 400 kHz build finds *neither* the
+  INA226 (0x40) nor the ADS1015 (0x48). The same build also kept its own private
+  copies of the calibration constants instead of reading `config.h`, so edits to
+  `config.h` were being ignored. Both are the most likely cause of the bus going
+  silent after the wiring was handled. The sketch now reads its constants from
+  `config.h`; keep the bus at 100 kHz until a bus scan proves otherwise.
+- The bus has gone silent three times on 11 Oct 2026, each time after the wiring was
   handled. Long-term fix: solder or lock the sensor VCC/GND rather than Dupont.
 - An INA226 that reports 0 A is usually a **shunt calibration** fault, not a dead
   sensor. Confirm the bus answers before suspecting hardware.

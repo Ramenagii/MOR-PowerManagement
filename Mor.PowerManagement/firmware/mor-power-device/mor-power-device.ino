@@ -11,18 +11,38 @@
     2. POST /api/Device/telemetry every second
     3. GET  /api/Device/config to pick up P_limit and priorities
 
+  config.h is the single source of truth for every calibration and wiring
+  constant. Nothing in this file re-declares a value that lives there: if a
+  number is bench-adjustable, it belongs in config.h, not here.
+
   Deliberately NOT in this file, during the sensing phase:
-    - relay driving        (RELAY_OUTPUT_ENABLED 0)
     - FR-01..FR-12 rules   (RULES_ENABLED 0)
 
-  Because nothing here trips a protective rule, the shared I2C bus between the
-  core-0 ADS1015 task and the core-1 INA226 read cannot cause a fault - a
-  garbled transaction would at worst print or report one odd sample.
+  Relays ARE driven (RELAY_OUTPUT_ENABLED 1), but only ever to the level that
+  keeps power ON: the bench contacts are NC, so HIGH is the safe state, setup()
+  parks every pin HIGH before the sensor task exists, and nothing here commands
+  a pin LOW because no rule evaluates yet.
+
+  Because nothing here trips a protective rule, a garbled measurement would at
+  worst print or report one odd sample.
 
   Hardware
-    INA226  0x40   voltage reference (24 V rail behind a divider) + DC monitoring
-    ADS1015 0x48   4-channel ADC, one ZMCT103C per mains branch (CH1-CH4)
-    I2C     SDA = GPIO 8, SCL = GPIO 9
+    INA226  0x40   voltage REFERENCE only: it sits on a 24 V DC rail behind a
+                   divider, so it is NOT a mains power meter and its current /
+                   power registers are not a mains total (MUST_READ.md
+                   section 12). Its only job here is the mains voltage.
+    ADS1220 SPI   24-bit ADC, one ZMCT103C per mains branch (CH1-CH2).
+                   CS = GPIO 10, DRDY = GPIO 14, SCLK = 12, MISO = 13,
+                   MOSI = 11. Single-ended against AVSS, AVDD as VREF.
+    I2C     SDA = GPIO 8, SCL = GPIO 9  (I2C_SDA_PIN / I2C_SCL_PIN), INA226
+            only. The CT channels are on SPI, so the two sensors no longer
+            share a bus.
+    RELAY   CH1 = GPIO 2, CH2 = GPIO 1 (RELAY_PINS)
+
+  Channels
+    CH1-CH2  220 V mains outlets, both CT-metered (BRANCH_CT_COUNT channels).
+             Every outlet is metered: there is no unmetered/USB channel left to
+             fabricate a reading for.
 
   Flash
     arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
@@ -39,56 +59,182 @@
 #include <ArduinoJson.h>
 #include <Wire.h>
 #include <INA226.h>
-#include <Adafruit_ADS1X15.h>
+#include <SPI.h>
+#include <ADS1220_WE.h>
 #include <math.h>
 
 #include "config.h"
 
-// I2C Pins for ESP32-S3
-#define I2C_SDA 8
-#define I2C_SCL 9
+INA226 ina226(INA226_ADDR);
 
-// I2C Addresses
-#define INA226_ADDRESS 0x40
-#define ADS1015_ADDRESS 0x48
+// The ADS1220 is the ONLY user of SPI on this board. The pins are given
+// explicitly because they are not the ESP32-S3 VSPI defaults (10/12/11/13 would
+// be the default set; DRDY on 14 is what the library polls between conversions).
+// pc = true is the flag that tells the library "SPI has been remapped, call
+// begin(sclk, miso, mosi, cs)"; init() below is what actually performs it.
+ADS1220_WE ads1220(&SPI, ADS1220_CS_PIN, ADS1220_DRDY_PIN,
+                   ADS1220_MOSI_PIN, ADS1220_MISO_PIN, ADS1220_SCLK_PIN, true);
 
-INA226 ina226(INA226_ADDRESS);
-Adafruit_ADS1015 ads;
+// MUX per CT channel. Single-ended against AVSS: the ZMCT103C output is a
+// 2.5 V-biased AC ripple referenced to ground, with no negative excursion to
+// pair it with, so AINx/AVSS is the correct comparison (not AINx/AIN0).
+//
+// Sized for 4 (the ADS1220's full single-ended input count) so the future
+// 4-CT rig needs NO change to this table's shape - only the two commented
+// entries and BRANCH_CT_COUNT. The inactive slots hold a sentinel instead of a
+// real input: if someone raises BRANCH_CT_COUNT without uncommenting the entries
+// below, the sweep reads the internal reference rather than a CT and the mV RMS
+// collapses to ~0 - an obviously broken chain, not two channels silently
+// reporting the same AIN1.
+//
+// Channel mapping: CH1 -> AIN0, CH2 -> AIN1, CH3 -> AIN2, CH4 -> AIN3.
+#define ADS1220_MUX_UNUSED ADS1220_MUX_REFPX_REFNX_4   // "no CT fitted here" sentinel
+static const ads1220Mux CT_MUX[4] = {
+  ADS1220_MUX_0_AVSS,   // CH1 -> AIN0 (fitted, active)
+//ADS1220_MUX_2_AVSS,   // CH3 -> AIN2 (future 4-CT rig)
+  ADS1220_MUX_1_AVSS,   // CH2 -> AIN1 (fitted, active)
+//ADS1220_MUX_3_AVSS,   // CH4 -> AIN3 (future 4-CT rig)
+  ADS1220_MUX_UNUSED,   // slot 3: no CT on this rig
+  ADS1220_MUX_UNUSED,   // slot 4: no CT on this rig
+};
+static_assert(BRANCH_CT_COUNT <= 4, "ADS1220 has 4 single-ended inputs");
 
-// Grid Voltage Assumption Variable (Volts AC)
-const float AC_VOLTAGE = 238.0;
+// Measured cost of ONE blocking single-shot conversion, in microseconds, timed
+// by the boot self-test in setup() and handed to the sweep. It exists so the
+// sweep can bound its own duration: the task is pinned to core 0 with no yield
+// inside a channel window, so a sweep that overruns its period leaves IDLE0 no
+// scheduler slot at all and the task watchdog reboots the rig. Measured, not
+// assumed, because the real cost depends on the data rate actually in force.
+uint32_t gSampleCostUs = 500;   // replaced by the self-test before setup() ends
 
-// Base Sensor Hardware Factors for ZMCT103C
-const float CALIBRATION_FACTOR = 0.52;
+// One CT channel's raw measurement window, in the three forms the bench needs.
+// The intermediate forms are kept (rather than collapsing straight to amps) so
+// the calibration mode can show the operator exactly where the scaling goes
+// wrong: the count RMS says whether the signal reaches the ADC at all, the mV
+// RMS is the quantity ZMCT_CAL_FACTOR is defined against, and amps is what the
+// CURRENT factor claims the branch is drawing.
+struct ZmctReading {
+  float countsRms;      // ADS1220 code RMS, raw, DC-removed (NOT volts)
+  float millivoltsRms;  // the same window in mV at the running reference + gain
+  float amps;           // millivoltsRms / 1000 x ZMCT_CAL_FACTOR (A per V)
+};
 
-// Sampling & Filter Parameters
-const uint16_t DEDICATED_SAMPLES = 600;       // ~11 AC cycles @ 60Hz (~180ms acquisition per ch)
-const float NOISE_FLOOR_AMPS = 0.010;         // 10mA noise gate
-const float ADAPTIVE_STEP_THRESHOLD = 0.015;  // 15mA delta triggers instant snapshot
+// There is deliberately no UNMETERED outlet on THIS rig: both outlets have a CT
+// behind them, and a phantom channel posting 0.0 A / 0.0 W is a number that
+// looks like a measurement on the dashboard but is not one. That is why nothing
+// is posted for outletId 3: it does not exist.
+//
+// FUTURE 4x220V + 1xUSB (5-channel rig - see the template at the top of
+// config.h). Inert today; nothing below is compiled:
+//#define UNMETERED_USB_OUTLET_ID (BRANCH_CT_COUNT + 1)   // 5 on the 4+USB rig
+//#define USB_RAIL_VOLTS 5.0f                            // LABEL ONLY, never multiplied
+// ...and then post it in postTelemetry() as 0.0 A / 0.0 W at USB_RAIL_VOLTS, and
+// print it as UNMETERED in printSerialTelemetry(). Deliberately NOT a residual:
+// the INA226 is not on the mains feed, so there is no total to subtract from.
+//
+// Expansion checklist (all four, in order - a partial application posts
+// readings for outlets that do not exist):
+//   1. bump OUTLET_COUNT 2->5 and BRANCH_CT_COUNT 2->4 in config.h
+//   2. extend RELAY_PINS with the three new GPIOs (+ RELAY_PIN_3/4/5 aliases)
+//   3. uncomment the AIN2/AIN3 CT_MUX entries and the USB stub above
+//   4. re-seed the backend device/outlet rows on the LAN backend (config.h)
 
-// Cross-Core Shared Sensor Variables
+// Relay DESIRED state, one entry per outlet: true = contact closed = power ON.
+// This is the single source the telemetry reports from AND the state the pins
+// are driven to, so the dashboard can never claim a state the hardware is not
+// in. Nothing actuates it yet (RULES_ENABLED 0, no switch inputs fitted), so it
+// boots all-true and only a future FR rule or a wired manual switch will clear
+// a bit. NC contacts: closed == HIGH == RELAY_POWER_ON_LEVEL.
+bool relayClosedDesired[OUTLET_COUNT] = { true, true };
+
+// The outlet status ORDINAL the backend last sent for each channel, and a
+// counter used to throttle the "config synced" line (config sync runs at
+// CONFIG_INTERVAL_MS, which is fast enough to flood the console). Purely
+// diagnostic - nothing acts on these, they exist so a mismatch between the
+// backend's view and the device's view is visible on the bench.
+int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1 };
+uint32_t syncCount = 0;
+
+// Drives every relay pin to its desired state. Called at boot, after every
+// config sync, and before each telemetry batch, so the state the backend is
+// told about is the state the hardware is in when the batch is serialised (not
+// merely intended). RELAY_OUTPUT_ENABLED gates only the pin write: the desired
+// state is still tracked and still reported when it is 0, so the dashboard
+// never sees a silent device claim a relay state it is not enforcing.
+void applyRelays() {
+#if RELAY_OUTPUT_ENABLED
+  for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    digitalWrite(RELAY_PINS[i],
+                 relayClosedDesired[i] ? RELAY_POWER_ON_LEVEL : RELAY_POWER_OFF_LEVEL);
+  }
+#endif
+}
+
+// Cross-core Shared Sensor Variables
+// Written by loop() (core 1) or sensorTask (core 0), read by the other core.
+// EVERY access to these is inside a dataMutex critical section.
 float inaBusVoltage_V = 0.0;
+// The ONE mains voltage the whole firmware reports against: the INA226 bus-pin
+// volts x INA226_MAIN_VOLT_DIVIDER, or FALLBACK_MAINS_VOLTS if the sensor is
+// silent. Both the posted branch volts and every branch watt are derived from
+// this single value, so the two can never contradict each other on the
+// dashboard (they used to: 228 V posted next to 238 V-derived watts).
+float mainsVolts_V = FALLBACK_MAINS_VOLTS;
 float inaShuntVoltage_mV = 0.0;
 float inaCurrent_A = 0.0;
 float inaPower_W = 0.0;
 
-float currentAmpsCH1 = 0.0;
-float currentAmpsCH2 = 0.0;
-float currentAmpsCH3 = 0.0;
-float currentAmpsCH4 = 0.0;
+// Per-branch CT current, index 0 = CH1 (ADS1220 AIN0/AVSS) .. index 1 = CH2
+// (ADS1220 AIN1/AVSS).
+// Watts are deliberately NOT stored per branch: storing them beside the amps
+// they came from is what let the firmware publish a voltage and a wattage
+// derived from two different mains readings. They are computed from amps and
+// mainsVolts_V at the point of use instead (see branchWatts).
+float branchAmps[BRANCH_CT_COUNT] = {0.0f};
 
-float wattageCH1 = 0.0;
-float wattageCH2 = 0.0;
-float wattageCH3 = 0.0;
-float wattageCH4 = 0.0;
+// Last raw sweep per channel, so the calibration mode can print the un-
+// calibrated chain without disturbing sampling. Same mutex as everything else.
+ZmctReading branchRaw[BRANCH_CT_COUNT];
 
 // FreeRTOS Handles
 SemaphoreHandle_t dataMutex = NULL;
 TaskHandle_t sensorTaskHandle = NULL;
 
+// I2C BUS mutex - a DIFFERENT lock from dataMutex, and the absence of it is the
+// single most damaging bug this firmware ever shipped. It is kept even though
+// the CT sweep no longer needs it: the CT ADC moved from the shared I2C bus
+// (ADS1015) to SPI (ADS1220), so the INA226 poll is now the only bus user on
+// core 1. The lock is still what guarantees that any Wire code added later
+// cannot re-introduce the interleaved-transfer failure, and the failure it
+// describes is worth keeping in the file precisely because it looked like
+// something else.
+//
+// dataMutex protects the shared VARIABLES. It does nothing for the bus itself.
+// Before the ADC moved to SPI, the ADS1015 sweep on core 0 and the INA226 poll
+// on core 1 issued interleaved transactions on one shared Wire bus with nothing
+// serialising them, so each core could begin a transfer while the other was
+// mid-transaction. Observed failure on the bench: both devices ACK at boot, then
+// the instant the sweep starts the INA226 reads 0.000 V and every CT channel
+// reads exactly 0.000 A forever - the rig keeps posting telemetry, so the
+// dashboard shows a healthy online device reporting a confident 0 W on every
+// channel, which is indistinguishable from "no load connected". That is how this
+// presented as "the bus went silent" and was mistaken for a wiring fault.
+//
+// Every function that touches Wire must hold this lock. Today that is the
+// INA226 poll in loop() and nothing else; do not delete the lock on the grounds
+// that "only one core uses the bus now".
+SemaphoreHandle_t i2cMutex = NULL;
+
+// SPI BUS mutex - same reasoning, same "do not delete" rule, for the ADS1220.
+// The CT sweep on core 0 is the only SPI user today, but it holds the chip
+// select low across a conversion window and any future core-1 register access
+// (calibration pre-flight, IDAC routing, a temperature read) would interleave
+// with it in exactly the same way the I2C transactions used to.
+SemaphoreHandle_t spiMutex = NULL;
+
 // Serial Output Timer (Core 1)
 unsigned long lastSerialPrint = 0;
-const unsigned long SERIAL_PRINT_INTERVAL_MS = 250; // 4Hz refresh for responsive serial feedback
+const unsigned long SERIAL_PRINT_INTERVAL_MS = 250; // 4 Hz refresh for responsive serial feedback
 
 // Telemetry / config sync (Core 1). Kept separate from the sensor engine so the
 // measurement code above stays exactly as validated.
@@ -100,12 +246,22 @@ unsigned long missedPosts = 0;
 
 // Function Prototypes
 void sensorTask(void *pvParameters);
-float readChannelRMS(uint8_t channelPin, float calFactor);
+ZmctReading readChannel(uint8_t channel);
 float applyPiecewiseCalibration(float rawAmps);
 float updateFilteredAmps(float rawAmps, float currentStored);
+float branchWatts(float amps, float mainsVolts);
+void applyRelays();
 void printSerialTelemetry();
 bool postTelemetry();
 bool syncConfig();
+
+// The ADS1015 config-register pre-flight (adsReadConfigRegister +
+// printCalibrationPreflight) was removed with the part: it existed to decode
+// ADS1X15 register bits over I2C before trusting an amps figure, and the
+// ADS1220 is configured and verified on SPI instead. Its purpose is preserved
+// by the ZMCT_CALIBRATION_MODE chain in printSerialTelemetry(), which prints the
+// un-calibrated counts/mV/amps per channel so a wrong reference or PGA shows up
+// as a number rather than as a silently-scaled current.
 
 // =========================================================================
 // SETUP (Core 1)
@@ -116,40 +272,143 @@ void setup() {
 
   // Create Mutex for cross-core memory protection
   dataMutex = xSemaphoreCreateMutex();
+  // Separate lock for each BUS. Created before anything touches Wire or SPI, so
+  // no code path can reach a bus unguarded.
+  i2cMutex = xSemaphoreCreateMutex();
+  spiMutex = xSemaphoreCreateMutex();
 
-  // Initialize Fast-Mode I2C (400 kHz)
-  Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setClock(400000);
+  // I2C bus. Pin pair AND speed come from config.h. The speed is 100 kHz
+  // because a 400 kHz build found NEITHER I2C device on this wiring while
+  // 100 kHz found both - overriding it here would make both sensors vanish.
+  // Only the INA226 is on this bus now; the CT ADC is on SPI.
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(I2C_CLOCK_HZ);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
-  // Initialize INA226 Power Monitor (Rob Tillaart Library)
+  // Initialize INA226 Voltage Reference (Rob Tillaart Library)
   if (!ina226.begin()) {
-    Serial.println("Error: INA226 module not detected at 0x40!");
+    Serial.print("Error: INA226 module not detected at 0x");
+    Serial.println(INA226_ADDR, HEX);
     while (1) { delay(10); }
   }
-  ina226.setMaxCurrentShunt(8.0, 0.010); // Max current first (8.0A), then shunt (10 mOhm)
+  // Max current first, then shunt: 8 A full scale on a 10 mOhm shunt. Wrong
+  // values scale every current and watt reading (this pairing once reported
+  // 0 A on a healthy sensor).
+  ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
 
-  // Initialize ADS1015 ADC for ZMCT103C sensors
-  if (!ads.begin(ADS1015_ADDRESS, &Wire)) {
-    Serial.println("Error: ADS1015 not detected at 0x48!");
+  // ---- Relay outputs ----
+  // Park every relay pin in its SAFE state BEFORE the sensor task exists and
+  // before anything can be posted. The contacts are NC, so RELAY_POWER_ON_LEVEL
+  // (HIGH) is the safe level: power passes while the coil is idle. The pinMode
+  // is written before the level precisely so the pin is an output when it is
+  // driven HIGH - a pin left as a floating input would let the coil state be
+  // undefined, and undefined is not an acceptable state for 220 V.
+  for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    pinMode(RELAY_PINS[i], OUTPUT);
+    digitalWrite(RELAY_PINS[i], RELAY_POWER_ON_LEVEL);
+  }
+  // Then enforce the desired state (all-true on this rig) from one place, so
+  // boot and steady state cannot disagree.
+  applyRelays();
+
+  // ---- ADS1220: 24-bit SPI ADC for the ZMCT103C CT sensors ----
+  // init() brings up SPI on the remapped pins, resets the ADC and verifies it
+  // answers by reading a configuration register back; false means the ADC is
+  // not there. Halt on that, exactly as the INA226 path halts above: continuing
+  // would post a confident 0.0 A on every channel.
+  if (!ads1220.init()) {
+    Serial.println("Error: ADS1220 not detected (SPI CS=");
+    Serial.print(ADS1220_CS_PIN);
+    Serial.println(")");
     while (1) { delay(100); }
   }
-  ads.setGain(GAIN_TWOTHIRDS);
-  ads.setDataRate(RATE_ADS1015_3300SPS);
+  ads1220.setSPIClockSpeed(ADS1220_SPI_CLOCK_HZ);
+  // AVDD as VREF, calibrated by the ADC's own internal measurement. The CT
+  // modules are biased at 2.5 V, which the internal 2.048 V reference would
+  // clip - see the ADS1220 block in config.h.
+  if (ADS1220_USE_AVDD_AS_VREF) {
+    ads1220.setAvddAvssAsVrefAndCalibrate();
+  } else {
+    ads1220.setIntVRef();
+  }
+  ads1220.setGain(ADS_PGA_GAIN);
+  ads1220.setOperatingMode(ADS_OP_MODE);
+  ads1220.setDataRate(ADS_DATA_RATE);
+  ads1220.setConversionMode(ADS1220_SINGLE_SHOT);
+  // Configured BEFORE the sensor task is created, so no conversion can be in
+  // flight while the MUX is being set. readChannel() also switches MUX per
+  // channel; this first switch both primes the gain bookkeeping and gives the
+  // task a known starting point.
+  ads1220.setCompareChannels(CT_MUX[0]);
 
-  // Pin High-Speed Sampling Engine to Core 0 (Priority 2)
+  // ---- ADC self-test: is it ACTUALLY converting, and how fast? ----
+  // This is the ADS1220's replacement for the deleted ADS1015 register
+  // pre-flight, and it checks the thing a register decode could not: whether a
+  // conversion ever completes. One blocking single-shot read, timed, plus the
+  // DRDY level before and after. It runs here, on core 1, BEFORE the sensor task
+  // exists, so a slow or stuck ADC is reported instead of silently turning the
+  // sweep into a multi-second CPU hog that starves IDLE0 and trips the task
+  // watchdog (a live rig reboot loop caused exactly that - see below).
+  Serial.print("[ADC] self-test: DRDY(GPIO"); Serial.print(ADS1220_DRDY_PIN);
+  Serial.print(") before="); Serial.print(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
+  uint32_t t0 = micros();
+  const int32_t probeCode = ads1220.getRawData();
+  const uint32_t t1 = micros();
+  Serial.print(" | 1 conversion="); Serial.print((uint32_t)(t1 - t0));
+  Serial.print(" us | code="); Serial.print(probeCode);
+  Serial.print(" | DRDY after="); Serial.println(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
+  if (t1 - t0 > 5000) {
+    Serial.println("[ADC] WARNING: one conversion took > 5 ms, so ADS_DATA_RATE is not");
+    Serial.println("[ADC]   in force (2000 SPS = ~500 us) OR DRDY is not wired/asserted.");
+    Serial.println("[ADC]   A 600-sample sweep would overrun METER_INTERVAL_MS and trip the");
+    Serial.println("[ADC]   task watchdog. Fix the ADC config or the DRDY wiring first.");
+  }
+  // Per-sample cost at the configured rate, used to bound the sweep budget below.
+  const uint32_t probeUs = (t1 > t0) ? (uint32_t)(t1 - t0) : 500;
+
+  Serial.print("[ADC] ADS1220 ready: CS="); Serial.print(ADS1220_CS_PIN);
+  Serial.print(" DRDY="); Serial.print(ADS1220_DRDY_PIN);
+  Serial.print(" SCLK="); Serial.print(ADS1220_SCLK_PIN);
+  Serial.print(" MISO="); Serial.print(ADS1220_MISO_PIN);
+  Serial.print(" MOSI="); Serial.print(ADS1220_MOSI_PIN);
+  Serial.println();
+  Serial.print("[ADC] VREF="); Serial.print(ads1220.getVRef_V(), 3);
+  Serial.print(" V (AVDD-calibrated) | single-shot | window=");
+  Serial.print(ZMCT_DEDICATED_SAMPLES);
+  Serial.print(" samples/channel | opmode+DR=ADS_OP_MODE/ADS_DATA_RATE (turbo, 2000 SPS)");
+  Serial.print(" | channels="); Serial.print(BRANCH_CT_COUNT);
+  Serial.print(" | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
+  Serial.println(" s");
+
+  // Hand the measured per-conversion cost to the sweep so it can bound itself
+  // instead of running flat out into the watchdog. See sensorTask().
+  gSampleCostUs = probeUs;
+
+  // Pin High-Speed Sampling Engine to Core 0
   xTaskCreatePinnedToCore(
-    sensorTask,         /* Task function */
-    "SensorEngine",     /* Task name */
-    4096,               /* Stack size */
-    NULL,               /* Parameters */
-    2,                  /* Priority */
-    &sensorTaskHandle,  /* Task handle */
-    0                   /* Core ID: 0 */
+    sensorTask,                 /* Task function */
+    "SensorEngine",             /* Task name */
+    SENSOR_TASK_STACK,          /* Stack size (config.h) */
+    NULL,                       /* Parameters */
+    SENSOR_TASK_PRIORITY,       /* Priority (config.h) */
+    &sensorTaskHandle,          /* Task handle */
+    0                           /* Core ID: 0 */
   );
 
   Serial.println("Initialization Complete. Dual-Core Monitoring Active.\n");
+
+  if (ZMCT_CALIBRATION_MODE) {
+    Serial.println("[CAL MODE ON] printing the un-calibrated CT chain per channel.");
+    if (ZMCT_CAL_REF_WATTS > 0.0f) {
+      Serial.print("[CAL MODE ON] reference load = ");
+      Serial.print(ZMCT_CAL_REF_WATTS, 1);
+      Serial.println(" W - suggested factors follow. PRINT ONLY, no behaviour changed.");
+    } else {
+      Serial.println("[CAL MODE ON] no reference wattage set (ZMCT_CAL_REF_WATTS = 0), "
+                     "so no suggested factor is printed. PRINT ONLY, no behaviour changed.");
+    }
+  }
 
   // Network, then first config sync so P_limit matches the dashboard.
   WiFi.mode(WIFI_STA);
@@ -168,23 +427,50 @@ void setup() {
   }
 }
 
+unsigned long lastInaPoll = 0;
+
 // =========================================================================
 // CORE 1: MAIN LOOP (Serial Telemetry & INA226 Polling)
 // =========================================================================
 void loop() {
-  // Read INA226 (DC Monitor) directly on Core 1 using Rob Tillaart functions
-  float busV   = ina226.getBusVoltage();       // Returns Bus Voltage in V
-  float shuntV = ina226.getShuntVoltage_mV();  // Returns Shunt Voltage in mV
-  float inAmps = ina226.getCurrent();          // Returns Current in A
-  float inWatts = ina226.getPower();           // Returns Power in W
+  // Read the INA226 (24 V DC rail / voltage reference) on Core 1, on a fixed
+  // interval rather than on every pass. loop() executes thousands of times per
+  // second; an unguarded poll on each pass contends with the core-0 sweep for
+  // the shared I2C bus and starves it. The INA226 is a voltage reference, so a
+  // 4 Hz sample is far more than the mains supply needs.
+  if (millis() - lastInaPoll >= INA226_POLL_INTERVAL_MS) {
+    lastInaPoll = millis();
 
-  // Update INA226 shared variables under mutex
-  if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-    inaBusVoltage_V = busV;
-    inaShuntVoltage_mV = shuntV;
-    inaCurrent_A = inAmps;
-    inaPower_W = inWatts;
-    xSemaphoreGive(dataMutex);
+    float busV = 0.0, shuntV = 0.0, inAmps = 0.0, inWatts = 0.0;
+    bool readOk = false;
+    // Bus lock FIRST, then the variable lock: never the reverse, so the bus is
+    // never held while waiting on dataMutex.
+    if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+      busV   = ina226.getBusVoltage();       // V at the INA226 bus pin (~24.1 V)
+      shuntV = ina226.getShuntVoltage_mV();  // mV across the 10 mOhm shunt
+      inAmps = ina226.getCurrent();          // A through the 10 mOhm shunt
+      inWatts = ina226.getPower();           // W at the INA226 bus pin
+      readOk = true;
+      xSemaphoreGive(i2cMutex);
+    }
+
+    if (readOk) {
+      // The mains voltage is computed ONCE, here, and shared from then on. The
+      // bench meter reads 228 V where the old sketch assumed a flat 238 V, so the
+      // old split (measured volts posted, assumed volts multiplied) overstated
+      // every watt by ~4%. Falling back is for a dead sensor only.
+      float mainsV = busV * INA226_MAIN_VOLT_DIVIDER;
+      if (!(mainsV > 1.0f)) mainsV = FALLBACK_MAINS_VOLTS;
+
+      if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        inaBusVoltage_V = busV;
+        mainsVolts_V = mainsV;
+        inaShuntVoltage_mV = shuntV;
+        inaCurrent_A = inAmps;
+        inaPower_W = inWatts;
+        xSemaphoreGive(dataMutex);
+      }
+    }
   }
 
   // Print Telemetry at 4Hz interval
@@ -206,96 +492,183 @@ void loop() {
 }
 
 // =========================================================================
-// CORE 0: HIGH-SPEED 4-CHANNEL ZMCT103C SAMPLING TASK
+// CORE 0: HIGH-SPEED ZMCT103C SAMPLING TASK
 // =========================================================================
 void sensorTask(void *pvParameters) {
+  (void)pvParameters;
+
+  // Absolute wake time, so METER_INTERVAL_MS is the sweep PERIOD rather than
+  // period + sweep duration (a two-channel pass is ~600 ms of blocking
+  // conversions, which would otherwise stretch the cycle to 1.6 s).
+  TickType_t previousWake = xTaskGetTickCount();
+  bool overrunWarned = false;
+
   for (;;) {
-    // Read all 4 channels sequentially from ADS1015 (A0, A1, A2, A3)
-    float raw1 = applyPiecewiseCalibration(readChannelRMS(0, CALIBRATION_FACTOR));
-    float raw2 = applyPiecewiseCalibration(readChannelRMS(1, CALIBRATION_FACTOR));
-    float raw3 = applyPiecewiseCalibration(readChannelRMS(2, CALIBRATION_FACTOR));
-    float raw4 = applyPiecewiseCalibration(readChannelRMS(3, CALIBRATION_FACTOR));
+    const uint32_t sweepStartUs = micros();
+
+    // Read every CT-wired ADS1220 channel sequentially (AIN0/AVSS, AIN1/AVSS).
+    // The MUX index in CT_MUX[] is the same order as the outlet channel number
+    // on this rig, so BRANCH_CT_COUNT drives the loop.
+    ZmctReading raw[BRANCH_CT_COUNT];
+    float calibrated[BRANCH_CT_COUNT];
+
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      // The SPI lock is taken PER CHANNEL, not around the whole sweep. Each
+      // channel window is ~300 ms, so releasing between channels lets anything
+      // else that needs SPI get in during the gaps instead of being starved for
+      // the full ~600 ms pass.
+      //
+      // NOTE this is spiMutex, NOT i2cMutex: the CT ADC left the I2C bus when it
+      // moved from the ADS1015 to the ADS1220. Holding i2cMutex here would block
+      // the core-1 INA226 poll for the entire sweep - it is the exact starvation
+      // that lock existed to prevent, aimed at the wrong bus.
+      if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+        raw[ch] = readChannel(ch);
+        xSemaphoreGive(spiMutex);
+      } else {
+        raw[ch] = ZmctReading{0.0f, 0.0f, 0.0f};
+      }
+      calibrated[ch] = applyPiecewiseCalibration(raw[ch].amps);
+    }
+
+    // The sweep must leave IDLE0 a scheduler slot inside every period, or the
+    // task watchdog reboots the rig (observed live on 2026-10-15: SensorEngine
+    // ran flat out, IDLE0 never ran, WDT aborted the firmware every ~11 s and the
+    // board never reached a telemetry POST). Nothing inside a channel window
+    // yields, so the bound has to be applied here: if this sweep has eaten its
+    // whole period, the next one is shortened rather than skipped.
+    //
+    // Skipping instead would starve the INA226 and the telemetry far worse, and
+    // vTaskDelayUntil() with an already-expired wake time returns immediately -
+    // which is precisely how a too-slow sweep turns into a continuous hog. A
+    // forced delay is the belt-and-braces answer to that.
+    if ((uint32_t)(micros() - sweepStartUs) >= METER_INTERVAL_MS * 1000UL / 2UL) {
+      const uint32_t overrun = (uint32_t)(micros() - sweepStartUs);
+      if (!overrunWarned) {
+        overrunWarned = true;
+        Serial.print("[SWEEP] WARNING: pass took ");
+        Serial.print(overrun / 1000);
+        Serial.print(" ms of a ");
+        Serial.print(METER_INTERVAL_MS);
+        Serial.println(" ms period. Shortening the window; the ADC is slower than");
+        Serial.println("[SWEEP]   ADS_DATA_RATE implies, or DRDY is stretching each read.");
+      }
+      // Long enough for IDLE0 to run and for loop() to post telemetry, but short
+      // enough that the dashboard still sees a fresh reading this second.
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
 
     // Safely update shared global states under mutex protection
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-      currentAmpsCH1 = updateFilteredAmps(raw1, currentAmpsCH1);
-      wattageCH1 = currentAmpsCH1 * AC_VOLTAGE;
-
-      currentAmpsCH2 = updateFilteredAmps(raw2, currentAmpsCH2);
-      wattageCH2 = currentAmpsCH2 * AC_VOLTAGE;
-
-      currentAmpsCH3 = updateFilteredAmps(raw3, currentAmpsCH3);
-      wattageCH3 = currentAmpsCH3 * AC_VOLTAGE;
-
-      currentAmpsCH4 = updateFilteredAmps(raw4, currentAmpsCH4);
-      wattageCH4 = currentAmpsCH4 * AC_VOLTAGE;
-
+      for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+        branchAmps[ch] = updateFilteredAmps(calibrated[ch], branchAmps[ch]);
+        branchRaw[ch] = raw[ch];
+      }
       xSemaphoreGive(dataMutex);
     }
 
-    // Yield 1 tick to feed Core 0 watchdog timer
-    vTaskDelay(pdMS_TO_TICKS(1));
+    // Idle until the next scheduled sweep. This task is pinned to core 0, so
+    // this is what leaves that core free; core 1 keeps running loop() (serial,
+    // INA226 poll, telemetry) throughout.
+    vTaskDelayUntil(&previousWake, pdMS_TO_TICKS(METER_INTERVAL_MS));
   }
 }
 
-// Single-pass RMS computation across dedicated 600 ADC samples
-float readChannelRMS(uint8_t channelPin, float calFactor) {
+// Single-pass RMS computation across one channel's dedicated ADC samples.
+// Takes the CHANNEL INDEX (0-based), not a pin: the channel selects the ADS1220
+// MUX, not an ESP32 GPIO.
+ZmctReading readChannel(uint8_t channel) {
   double sumRaw = 0.0;
   double sumSqRaw = 0.0;
 
-  for (uint16_t i = 0; i < DEDICATED_SAMPLES; i++) {
-    int16_t rawADC = ads.readADC_SingleEnded(channelPin);
+  // Point the ADC at this branch BEFORE the window, not per sample. setCompareChannels
+  // rewrites the MUX field and makes the library re-read the gain field, which is a
+  // few SPI round trips - doing that 600 times per window would dominate the pass.
+  // It also clamps the PGA for a single-ended (AINx/AVSS) input, so the gain the
+  // mV scale below uses is the post-clamp one, not whatever was set at boot.
+  ads1220.setCompareChannels(CT_MUX[channel]);
+
+  for (uint16_t i = 0; i < ZMCT_DEDICATED_SAMPLES; i++) {
+    // Single-shot, blocking: the library issues START and waits on DRDY (GPIO
+    // 14) before clocking out 3 bytes, so each iteration is one conversion. The
+    // returned code is the signed 24-bit result, 8388607 = full scale.
+    const int32_t rawADC = ads1220.getRawData();
     sumRaw += rawADC;
     sumSqRaw += (double)rawADC * rawADC;
   }
 
-  double meanRaw = sumRaw / DEDICATED_SAMPLES;
-  double variance = (sumSqRaw / DEDICATED_SAMPLES) - (meanRaw * meanRaw);
+  // Mean-subtracted variance: the CT output sits on a large DC bias, so only
+  // the AC ripple around that bias is of interest. Rounding can push a
+  // near-constant window slightly negative, hence the clamp.
+  double meanRaw = sumRaw / ZMCT_DEDICATED_SAMPLES;
+  double variance = (sumSqRaw / ZMCT_DEDICATED_SAMPLES) - (meanRaw * meanRaw);
   if (variance < 0.0) variance = 0.0;
 
-  float rawRMS = sqrt(variance);
-  float voltsRMS = rawRMS * ads.computeVolts(1);
-
-  return voltsRMS * calFactor;
+  ZmctReading out;
+  out.countsRms = (float)sqrt(variance);
+  // Counts -> mV, using the reference and gain the library is actually running
+  // with (getVRef_V / getGainFactor), not a hardcoded volts-per-count. This
+  // replaced ads.computeVolts(1) from the ADS1015 build: that was a fixed
+  // table lookup for a 12-bit ADC whose gain came from a different part, and
+  // hardcoding the ADS1220 equivalent instead would bake in the same lie if the
+  // reference or gain is ever changed in config.h.
+  const float mVPerCount = (ads1220.getVRef_V() * 1000.0f) /
+                           (ADS1220_WE::ADS1220_RANGE * static_cast<float>(ads1220.getGainFactor()));
+  out.millivoltsRms = out.countsRms * mVPerCount;
+  // ZMCT_CAL_FACTOR is amps per volt, so the volts come straight out of the
+  // mV reading. NOTE: that factor was measured on the ADS1015 build, not on
+  // this ADC - see the warning above it in config.h and re-measure with
+  // ZMCT_CALIBRATION_MODE before treating any amps figure as real.
+  out.amps = (out.millivoltsRms / 1000.0f) * ZMCT_CAL_FACTOR;
+  return out;
 }
 
 // Piecewise Calibration: Protects low currents while scaling mid/high range
 float applyPiecewiseCalibration(float rawAmps) {
-  if (rawAmps < NOISE_FLOOR_AMPS) {
+  if (rawAmps < ZMCT_NOISE_FLOOR_AMPS) {
     return 0.0;
   }
-  if (rawAmps <= 0.080) {
+  if (rawAmps <= ZMCT_MID_RANGE_AMPS) {
     return rawAmps; // Pass 1:1 on low range
   }
-  const float MID_RANGE_FACTOR = 0.264 / 0.274; // ~0.9635
-  return rawAmps * MID_RANGE_FACTOR;
+  return rawAmps * ZMCT_MID_RANGE_FACTOR; // ~0.9635, per config.h
 }
 
 // Adaptive EMA Filter: Snaps immediately during load changes, smooths steady state
 float updateFilteredAmps(float rawAmps, float currentStored) {
-  if (fabs(rawAmps - currentStored) > ADAPTIVE_STEP_THRESHOLD) {
+  if (fabs(rawAmps - currentStored) > ZMCT_ADAPTIVE_STEP_AMPS) {
     return rawAmps;
-  } else {
-    return (currentStored * 0.7) + (rawAmps * 0.3);
   }
+  // Weights are ZMCT_ADAPTIVE_EMA_HISTORY old (0.7) / (1 - that) new (0.3).
+  return (currentStored * ZMCT_ADAPTIVE_EMA_HISTORY) +
+         (rawAmps * (1.0f - ZMCT_ADAPTIVE_EMA_HISTORY));
+}
+
+// Watts for one branch. Takes the mains volts as an argument on purpose: both
+// the posted voltage and this product come from the SAME snapshot taken under
+// one mutex hold, which is what guarantees powerWatts == currentAmps * voltage
+// on every branch of every telemetry batch.
+float branchWatts(float amps, float mainsVolts) {
+  return amps * mainsVolts;
 }
 
 // Serial Telemetry Output
 void printSerialTelemetry() {
-  float inaV, inaShunt, inaI, inaP;
-  float a1, a2, a3, a4;
-  float w1, w2, w3, w4;
+  float inaV, mainsV, inaShunt, inaI, inaP;
+  float amps[BRANCH_CT_COUNT];
+  ZmctReading raw[BRANCH_CT_COUNT];
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     inaV     = inaBusVoltage_V;
+    mainsV   = mainsVolts_V;
     inaShunt = inaShuntVoltage_mV;
     inaI     = inaCurrent_A;
     inaP     = inaPower_W;
 
-    a1 = currentAmpsCH1; w1 = wattageCH1;
-    a2 = currentAmpsCH2; w2 = wattageCH2;
-    a3 = currentAmpsCH3; w3 = wattageCH3;
-    a4 = currentAmpsCH4; w4 = wattageCH4;
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      amps[ch] = branchAmps[ch];
+      raw[ch]  = branchRaw[ch];
+    }
     xSemaphoreGive(dataMutex);
   } else {
     return;
@@ -307,11 +680,105 @@ void printSerialTelemetry() {
   Serial.print(" mV | Current: "); Serial.print(inaI, 3);
   Serial.print(" A | Power: "); Serial.print(inaP, 3); Serial.println(" W");
   Serial.println("--------------------------------------------------");
-  Serial.print("[ZMCT103C AC Channels @ "); Serial.print(AC_VOLTAGE, 1); Serial.println("V Grid Voltage]");
-  Serial.print("  CH1 (A0) -> "); Serial.print(a1, 3); Serial.print(" A | "); Serial.print(w1, 1); Serial.println(" W");
-  Serial.print("  CH2 (A1) -> "); Serial.print(a2, 3); Serial.print(" A | "); Serial.print(w2, 1); Serial.println(" W");
-  Serial.print("  CH3 (A2) -> "); Serial.print(a3, 3); Serial.print(" A | "); Serial.print(w3, 1); Serial.println(" W");
-  Serial.print("  CH4 (A3) -> "); Serial.print(a4, 3); Serial.print(" A | "); Serial.print(a4 * AC_VOLTAGE, 1); Serial.println(" W");
+  // The grid voltage printed here is the one every watt below was multiplied
+  // by, taken from the same snapshot as the amps.
+  Serial.print("[ZMCT103C AC Channels @ "); Serial.print(mainsV, 1); Serial.println("V Mains]");
+  for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+    Serial.print("  CH"); Serial.print(ch + 1);
+    Serial.print(" (AIN"); Serial.print(ch); Serial.print("/AVSS) -> ");
+    Serial.print(amps[ch], 3);
+    Serial.print(" A | "); Serial.print(branchWatts(amps[ch], mainsV), 1);
+    Serial.print(" W | relay CH"); Serial.print(ch + 1);
+    Serial.print(" desired="); Serial.print(relayClosedDesired[ch] ? "CLOSED" : "OPEN");
+    Serial.print(" pin GPIO"); Serial.print(RELAY_PINS[ch]);
+    // The level actually on the pin, read back after the write. This is the
+    // whole point of printing it: "desired=OPEN" is what the firmware INTENDS,
+    // "pin=LOW" is what the hardware has. If the relay module is active-LOW
+    // (RELAY_ACTIVE_LEVEL_INVERTED in config.h) those two disagree, and this
+    // line is how that gets noticed on a bench with no one listening for a
+    // click.
+    Serial.print("="); Serial.print(digitalRead(RELAY_PINS[ch]) ? "HIGH" : "LOW");
+    Serial.println();
+  }
+  // No UNMETERED line any more: every outlet on this rig has a CT behind it, so
+  // there is nothing honest to print for a channel with no sensor.
+
+#if ZMCT_CALIBRATION_MODE
+  // ---- CT calibration helper (config.h ZMCT_CALIBRATION_MODE 1) ----
+  // PRINT ONLY. Nothing in this block feeds back into sampling, the piecewise
+  // curve, the EMA, the noise floor or the posted telemetry - it exists so the
+  // CT channels can be calibrated against a real known load in one pass instead
+  // of by guessing ZMCT_CAL_FACTOR. The factor currently in config.h came off
+  // the previous ADS1015 ADC, so on the ADS1220 this is a REQUIRED step, not an
+  // optional nicety.
+  //
+  // It also replaces what the deleted ADS1015 pre-flight used to do: the ADS1X15
+  // register decode is gone with the part, so the ADC configuration actually in
+  // force is printed here from the library's own state (VREF, gain factor, codes
+  // full scale) instead. Those three numbers are what the mV column below was
+  // computed with - if they do not match config.h, the mV figures are wrong and
+  // NO amount of tuning ZMCT_CAL_FACTOR will fix it.
+  static bool calBannerPrinted = false;
+  static uint8_t calPrintTick = 0;
+  if (!calBannerPrinted) {
+    calBannerPrinted = true;
+    Serial.println("---- ZMCT103C CALIBRATION (un-calibrated chain) ----");
+    Serial.print("[CAL] ADS1220 VREF = "); Serial.print(ads1220.getVRef_V(), 4);
+    Serial.print(" V (ADS1220_USE_AVDD_AS_VREF="); Serial.print(ADS1220_USE_AVDD_AS_VREF);
+    Serial.println(")");
+    Serial.print("[CAL] PGA gain factor = "); Serial.print(ads1220.getGainFactor());
+    Serial.print(" (ADS_PGA_GAIN="); Serial.print(ADS_PGA_GAIN);
+    Serial.println("; the library clamps this for single-ended AINx/AVSS inputs)");
+    Serial.print("[CAL] full scale = "); Serial.print(ADS1220_WE::ADS1220_RANGE, 0);
+    Serial.print(" codes -> ");
+    Serial.print((ads1220.getVRef_V() * 1000.0f) /
+                 (ADS1220_WE::ADS1220_RANGE * (float)ads1220.getGainFactor()), 6);
+    Serial.println(" mV per code");
+    Serial.print("[CAL] ZMCT_CAL_FACTOR = "); Serial.print(ZMCT_CAL_FACTOR, 4);
+    Serial.print(" A/V   ZMCT_CAL_REF_WATTS = "); Serial.print(ZMCT_CAL_REF_WATTS, 1);
+    Serial.println(" W  (0 = no reference load applied, so no suggestion is printed)");
+    Serial.println("[CAL] PROCEDURE: clamp ONE known load onto ONE branch, measure its");
+    Serial.println("[CAL]   watts with a meter, put that number in ZMCT_CAL_REF_WATTS");
+    Serial.println("[CAL]   (config.h) and reflash. Read 'suggested=' below, then write");
+    Serial.println("[CAL]   that factor into ZMCT_CAL_FACTOR ALONGSIDE the date and the");
+    Serial.println("[CAL]   load used (the provenance block above it), then set");
+    Serial.println("[CAL]   ZMCT_CALIBRATION_MODE back to 0 before shipping.");
+    Serial.println("[CAL] NO SIGNAL means a wiring/sensor fault, not a factor fault.");
+  }
+  // The chain itself is throttled to 1 Hz. printSerialTelemetry() runs at 4 Hz,
+  // and 2 channels of full chain at 4 Hz buries the boot line, the INA226 line
+  // and the telemetry result in the very log this mode exists to read.
+  if ((calPrintTick++ % 4) == 0) {
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      Serial.print("[CAL] CH"); Serial.print(ch + 1);
+      Serial.print(" counts="); Serial.print(raw[ch].countsRms, 1);
+      Serial.print(" | mV_rms="); Serial.print(raw[ch].millivoltsRms, 3);
+      Serial.print(" mV | @factor="); Serial.print(ZMCT_CAL_FACTOR, 4);
+      Serial.print(" -> "); Serial.print(raw[ch].amps, 4);
+      Serial.print(" A");
+      // Suggested factor: the known load's amps (W / mains volts) divided by the
+      // volts the CT actually produced (mV RMS / 1000), i.e. the A/V that would
+      // make this channel report exactly ZMCT_CAL_REF_WATTS.
+      if (raw[ch].millivoltsRms > 0.0f && mainsV > 0.0f && ZMCT_CAL_REF_WATTS > 0.0f) {
+        const float suggested = (ZMCT_CAL_REF_WATTS / mainsV) / (raw[ch].millivoltsRms / 1000.0f);
+        Serial.print(" | suggested="); Serial.print(suggested, 4);
+        Serial.print(" A/V for "); Serial.print(ZMCT_CAL_REF_WATTS, 1);
+        Serial.print(" W (x"); Serial.print(suggested / ZMCT_CAL_FACTOR, 2);
+        Serial.println(" current)");
+      } else {
+        Serial.println();
+      }
+      // A dead channel and a mis-scaled channel look identical in the amps
+      // column - both read far too low - so say which one this is. Chasing
+      // ZMCT_CAL_FACTOR when the CT is simply not delivering signal would bake
+      // the fault into the constant permanently.
+      if (raw[ch].millivoltsRms <= 0.0f) {
+        Serial.print("[CAL]   NO SIGNAL on CH"); Serial.print(ch + 1);
+        Serial.println(": check the CT, its wiring and the ADC config first.");
+      }
+    }
+  }
+#endif
 }
 
 // =========================================================================
@@ -327,55 +794,66 @@ String backendUrl(const char* path) {
   return url;
 }
 
-// One batch per second. CH1-CH4 carry the measured CT currents; CH5 is the USB
-// rail, which has no current sensor, so it is reported at its nominal rating
-// rather than being given a fabricated reading.
+// One batch per second. Both outlets carry their measured CT current against
+// the one shared mains voltage. There is no third reading and no unmetered
+// filler: every posted outletId is a channel with a sensor behind it.
 bool postTelemetry() {
-  float a[4], w[4];
+  float amps[BRANCH_CT_COUNT];
+  float mainsV;
+
+  // One hold, one snapshot: the amps posted and the voltage they are multiplied
+  // by are read together, so powerWatts == currentAmps * voltage holds exactly.
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-    a[0] = currentAmpsCH1; w[0] = wattageCH1;
-    a[1] = currentAmpsCH2; w[1] = wattageCH2;
-    a[2] = currentAmpsCH3; w[2] = wattageCH3;
-    a[3] = currentAmpsCH4; w[3] = wattageCH4;
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      amps[ch] = branchAmps[ch];
+    }
+    mainsV = mainsVolts_V;
     xSemaphoreGive(dataMutex);
   } else {
     return false;
   }
 
-  // Mains volts from the INA226 through the divider; AC_VOLTAGE is the
-  // fallback if the sensor is not answering, never a silently zeroed reading.
-  float mainsV = inaBusVoltage_V * INA226_MAIN_VOLT_DIVIDER;
-  if (!(mainsV > 1.0f)) mainsV = AC_VOLTAGE;
-
   JsonDocument doc;
   doc["deviceId"] = DEVICE_ID;
-  doc["sFault"] = false;                  // no protective rules run yet
+  // Hardcoded, and that is deliberate: no protective rule evaluates in this
+  // phase (RULES_ENABLED 0), so the firmware has evaluated no fault condition
+  // at all. Claiming sFault = true would assert a fault-isolated state it never
+  // checked; claiming it because nothing tripped would also be a claim. Until
+  // FR-01/02/03 run on the board, false is the only honest answer.
+  doc["sFault"] = false;
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   JsonArray readings = doc["readings"].to<JsonArray>();
-  for (int i = 0; i < 4; i++) {
+  float totalW = 0.0f;
+  for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+    const float watts = branchWatts(amps[ch], mainsV);
     JsonObject r = readings.add<JsonObject>();
-    r["outletId"] = i + 1;
+    r["outletId"] = ch + 1;
     r["voltage"] = mainsV;
-    r["currentAmps"] = a[i];
-    r["powerWatts"] = w[i];
+    r["currentAmps"] = amps[ch];
+    r["powerWatts"] = watts;
     r["energyKwh"] = 0.0;                // no cumulative counter on this rig
+    totalW += watts;
   }
-  // CH5: USB 5 V rail, no CT fitted. Reported as nominal, not measured.
-  {
-    JsonObject r = readings.add<JsonObject>();
-    r["outletId"] = 5;
-    r["voltage"] = 5.0;
-    r["currentAmps"] = 0.0;
-    r["powerWatts"] = 0.0;
-    r["energyKwh"] = 0.0;
-  }
+  // No extra entry after the loop: outletId 1..BRANCH_CT_COUNT is the whole
+  // rig, and totalW is the sum of every reading above it - it used to under-
+  // report by whatever a phantom USB channel drew.
 
+  // Push the desired contact states to the pins before reporting them, so the
+  // state the backend is told about is the state the hardware is in when this
+  // batch is serialised (not merely intended).
+  applyRelays();
   JsonArray relays = doc["relayStates"].to<JsonArray>();
-  for (int i = 0; i < 5; i++) {
+  for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
     JsonObject s = relays.add<JsonObject>();
     s["outletId"] = i + 1;
-    s["relayClosed"] = true;              // relays are not driven in this phase
+    // The real desired state, not a hardcoded true. On this rig nothing
+    // actuates it yet (RULES_ENABLED 0, no switch inputs), so every entry
+    // currently reports true - but it now reports what relayClosedDesired[]
+    // holds, which is the same array the pins are driven from, so the day a
+    // rule clears a bit the dashboard cannot be told "closed" while the pin is
+    // driven LOW. NC contacts: closed == HIGH == power present.
+    s["relayClosed"] = relayClosedDesired[i];
   }
 
   String payload;
@@ -392,35 +870,140 @@ bool postTelemetry() {
   http.end();
 
   if (!ok || missedPosts % 10 == 1) {
-    Serial.printf("telemetry: HTTP %d, total=%.0f W\n", code, w[0] + w[1] + w[2] + w[3]);
+    Serial.printf("telemetry: HTTP %d, total=%.0f W\n", code, totalW);
   }
   return ok;
 }
 
-// Picks up P_limit and the warning threshold from the Decision Point so the
-// console and the device cannot disagree about the operating limit.
+// Picks up P_limit, the warning threshold AND the per-outlet desired status, so
+// a Disconnect (or a shed / selective response) on the dashboard actually
+// reaches the relays.
+//
+// This function used to read ONLY the two thresholds. That was the whole reason
+// disconnect did nothing on the bench: outlets[].desiredStatus was in the JSON
+// the whole time, unused, while relayClosedDesired[] kept the value it was
+// initialised with (closed) forever. Nothing downstream was broken - the pins
+// were driven, the telemetry reported a real desired state - the command simply
+// never arrived. A status the device receives and ignores is worse than a
+// status it never receives, because the dashboard shows the outlet as
+// disconnected while the load is still live.
 bool syncConfig() {
   WiFiClient client;
   HTTPClient http;
-  if (!http.begin(client, backendUrl("/Device/config"))) return false;
+  if (!http.begin(client, backendUrl("/Device/config"))) {
+    // Never silent. This function failing quietly for a whole session is how a
+    // disconnect command can sit in the backend forever while the firmware
+    // cheerfully reports every outlet as CLOSED and the dashboard shows the
+    // load still live.
+    Serial.println("[CFG] sync FAILED: could not open the config URL");
+    return false;
+  }
+  // The device endpoints are behind DeviceApiKeyEndpointFilter. Telemetry has
+  // always sent the key; config sync did NOT, so as soon as Device:ApiKey was
+  // configured the GET was rejected and every desiredStatus silently never
+  // arrived. Same key, same header, on both calls - one call that works and one
+  // that does not is a bug in the call that does not.
+  if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
 
   int code = http.GET();
   if (code != 200) {
+    Serial.print("[CFG] sync FAILED: GET /Device/config -> HTTP ");
+    Serial.println(code);
     http.end();
     return false;
   }
 
-  JsonDocument doc;
-  DeserializationError err = deserializeJson(doc, http.getStream());
+  // Read the whole body BEFORE parsing. deserializeJson(doc, http.getStream())
+  // is the usual ArduinoJson + HTTPClient idiom and it is wrong here: the WiFi
+  // stream hands over whatever has arrived at that instant, which on this
+  // backend was zero bytes, so every sync died with "InvalidInput" and the
+  // desiredStatus never reached the relays. getString() buffers the complete
+  // response first.
+  const String body = http.getString();
   http.end();
-  if (err) return false;
+
+  JsonDocument doc;
+  DeserializationError err = deserializeJson(doc, body);
+  if (err) {
+    Serial.print("[CFG] sync FAILED: JSON parse -> ");
+    Serial.println(err.c_str());
+    return false;
+  }
 
   float limit = doc["criticalThresholdWatts"] | cfgLimit;
   cfgLimit = limit > 0 ? limit : cfgLimit;
   float warn = doc["warningThresholdWatts"] | cfgWarning;
   cfgWarning = warn > 0 ? warn : cfgWarning;
 
-  Serial.printf("config synced: P_limit=%.0f W, %d channels\n",
-                cfgLimit, (doc["outlets"].size()));
+  // ---- Per-outlet desired status -> relay desired state ----
+  // channelsSeen counts the outlets actually present in the table so a SHORT
+  // table cannot silently re-close every outlet it failed to mention: an outlet
+  // missing from the response keeps its current state and is reported, rather
+  // than being treated as "not mentioned, therefore on".
+  uint8_t channelsSeen = 0;
+  bool policyChanged = false;
+  JsonArray outlets = doc["outlets"];
+  for (JsonObject o : outlets) {
+    // channelId is 1-based and is the same number the telemetry posts as
+    // outletId, so it maps straight onto relayClosedDesired[channelId - 1].
+    const int channelId = o["channelId"] | 0;
+    if (channelId < 1 || channelId > OUTLET_COUNT) {
+      Serial.print("[RELAY] config lists channel ");
+      Serial.print(channelId);
+      Serial.println(" - outside OUTLET_COUNT, ignored");
+      continue;
+    }
+    const uint8_t idx = (uint8_t)(channelId - 1);
+    // Missing or non-numeric desiredStatus means "no instruction", NOT "on".
+    // Defaulting an absent command to CLOSED is how a shed would be undone by
+    // the next poll.
+    if (o["desiredStatus"].isNull()) {
+      Serial.print("[RELAY] CH"); Serial.print(channelId);
+      Serial.println(" has no desiredStatus in the config - keeping current state");
+      channelsSeen++;
+      continue;
+    }
+    const int status = o["desiredStatus"].as<int>();
+    lastDesiredStatus[idx] = (int8_t)status;
+    const bool shouldClose = (status != OUTLET_STATUS_DISCONNECTED);
+    const bool wasClosed = relayClosedDesired[idx];
+    if (shouldClose != wasClosed) {
+      Serial.print("[RELAY] CH"); Serial.print(channelId);
+      Serial.print(" backend desiredStatus="); Serial.print(status);
+      Serial.print(shouldClose ? " -> CONNECTED (closing)" : " -> DISCONNECTED (opening)");
+      relayClosedDesired[idx] = shouldClose;
+      policyChanged = true;
+      // Drive the pin FIRST, then report it. If the write is what actually
+      // fails (bad level, dead module), the log shows the pin level and the
+      // operator can see the command did not reach the hardware.
+      applyRelays();
+      Serial.print(" | pin GPIO");
+      Serial.print(RELAY_PINS[idx]);
+      Serial.print(" now ");
+      Serial.println(digitalRead(RELAY_PINS[idx]) ? "HIGH" : "LOW");
+    } else {
+      relayClosedDesired[idx] = shouldClose;
+    }
+    channelsSeen++;
+  }
+
+  // Enforce the state even when nothing changed: this is the "apply after
+  // config sync" leg, so the pins always reflect the last known policy rather
+  // than whatever the last transition happened to leave behind.
+  applyRelays();
+
+  // Print the ordinals the device actually parsed, not just the count. A
+  // mismatch between what the backend holds and what appears here is the only
+  // way to tell "the command never arrived" from "it arrived and was read
+  // wrong", and those two look identical from the dashboard.
+  if (policyChanged || (++syncCount % 4 == 0)) {
+    Serial.printf("config synced: P_limit=%.0f W, %d channels (%u applied) raw status:",
+                  cfgLimit, (int)outlets.size(), (unsigned)channelsSeen);
+    for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+      Serial.printf(" CH%u=%d(%s)", i + 1, lastDesiredStatus[i],
+                    relayClosedDesired[i] ? "CLOSED" : "OPEN");
+    }
+    Serial.println();
+  }
   return true;
 }

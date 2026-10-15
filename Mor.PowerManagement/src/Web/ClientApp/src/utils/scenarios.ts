@@ -18,6 +18,15 @@ import type { Outlet, Priority } from '../types/dashboard'
 /** Outlets at or above this are treated as candidates for shedding. */
 const HIGH_PRIORITY: Priority[] = ['High', 'Critical']
 
+/**
+ * Channel that carries the POL-04 overload injection. CH1 exists in both the
+ * 2-outlet and the 4+USB rig, so one value covers the whole demo.
+ *
+ * FUTURE: retarget if CH1 becomes critical infra — pick a branch the engine is
+ * allowed to shed, and keep the value 1 otherwise.
+ */
+const OVERLOAD_CHANNEL = 1
+
 export type ScenarioProfile = {
   /** Multiplier applied to each outlet's current draw. */
   loadFactor: number
@@ -75,7 +84,7 @@ export function buildScenarioPayload(
 
     // Stagger activation so each new channel is not switched on at the exact
     // same instant; this keeps the trace readable without faking the totals.
-    const isEnergized = energized && (index < 5 || profile.energize.includes(outlet.id))
+    const isEnergized = energized && (index < 2 || profile.energize.includes(outlet.id))
 
     let watts = 0
     if (isEnergized) {
@@ -107,7 +116,7 @@ export function normalProfile(outlets: Outlet[]): ScenarioProfile {
     energize: outlets.filter((o) => o.status === 'Active' || o.status === 'Standby').map((o) => o.id),
     shed: [],
     overloadWatts: 0,
-    overloadChannel: 6,
+    overloadChannel: OVERLOAD_CHANNEL,
   }
 }
 
@@ -121,7 +130,7 @@ export function capacityBlockProfile(outlets: Outlet[]): ScenarioProfile {
     energize: outlets.filter((o) => o.status !== 'Disconnected').map((o) => o.id),
     shed: [],
     overloadWatts: 0,
-    overloadChannel: 6,
+    overloadChannel: OVERLOAD_CHANNEL,
   }
 }
 
@@ -131,7 +140,7 @@ export function capacityBlockProfile(outlets: Outlet[]): ScenarioProfile {
  * real; nothing here decides the outcome.
  */
 export function overloadProfile(outlets: Outlet[]): ScenarioProfile {
-  const overloadChannel = 6
+  const overloadChannel = OVERLOAD_CHANNEL
   return {
     loadFactor: 1.05,
     // The overload channel MUST be energized or the injected watts are silently
@@ -150,8 +159,11 @@ export function overloadProfile(outlets: Outlet[]): ScenarioProfile {
 /**
  * Selective response (POL-05): shed the lowest-priority energized channels.
  * Ordering uses the same Low -> Critical rank the policies use.
+ *
+ * `count` stays 1 on purpose: it is safe for the 2-outlet rig and for the full
+ * 4+USB bench, where shedding one Low-priority branch leaves the rest live.
  */
-export function selectiveProfile(outlets: Outlet[], count = 2): ScenarioProfile {
+export function selectiveProfile(outlets: Outlet[], count = 1): ScenarioProfile {
   const candidates = outlets
     .filter((outlet) => outlet.status === 'Active' || outlet.status === 'Standby')
     .sort((a, b) => priorityRankFor(a.priority) - priorityRankFor(b.priority))
@@ -163,7 +175,7 @@ export function selectiveProfile(outlets: Outlet[], count = 2): ScenarioProfile 
     energize: [],
     shed: candidates,
     overloadWatts: 0,
-    overloadChannel: 6,
+    overloadChannel: OVERLOAD_CHANNEL,
   }
 }
 
@@ -180,7 +192,7 @@ export function idleProfile(outlets: Outlet[]): ScenarioProfile {
       .filter((outlet) => outlet.status === 'Standby' || outlet.watts <= 80)
       .map((outlet) => outlet.id),
     overloadWatts: 0,
-    overloadChannel: 6,
+    overloadChannel: OVERLOAD_CHANNEL,
   }
 }
 

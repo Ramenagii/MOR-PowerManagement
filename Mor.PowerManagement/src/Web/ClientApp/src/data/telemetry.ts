@@ -26,15 +26,31 @@ export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
   '7d': null,
 }
 
-/** Testing rig: 5 wired channels (MUST_READ.md, until 31 Oct 2026). */
-export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 5 }, (_, i) => i + 1)
+/** Testing rig: 2 wired channels (MUST_READ.md, until 31 Oct 2026). */
+export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 2 }, (_, i) => i + 1)
+
+// FUTURE 4+USB: change the length above to 5 to restore the full bench. CHANNEL_COLORS
+// already carries CH1-CH5 (mains ramp + the violet USB rail), so nothing else changes.
+
+/**
+ * Width of the dashboard's history strip, in seconds.
+ *
+ * The bucket grid belongs to the server, so this is a *span* and not a bucket
+ * count: the number of columns that cover it is derived per response as
+ * `ceil(HISTORY_SPAN_SECONDS / bucketSeconds)`. A 15 m window served at 60 s
+ * buckets yields five columns; served at 5 s buckets it yields sixty. Either way
+ * the strip shows the same five minutes rather than a varying stretch of time
+ * that would silently change what two charts side by side are comparing.
+ */
+export const HISTORY_SPAN_SECONDS = 300
 
 /**
  * Grouped by rail so the chart reads structurally rather than as arbitrary
- * hues: blue/teal ramp for the 220 V outlets (CH1-CH4), violet for the 5 V
- * USB rail (CH5). Colors for CH6-CH13 are retained so the full rig restores
- * without touching this table. All are >= 3:1 against --surface #ffffff, and
- * none reads as --accent #0677ad when used as a fill.
+ * hues: blue/teal ramp for the 220 V outlets, violet for the 5 V USB rail.
+ * The bench currently wires CH1-CH2 only; the rest are retained so the full rig
+ * restores without touching this table. All are >= 3:1 against
+ * --surface-container-lowest #ffffff, and none reads as --primary #0059c2 when
+ * used as a fill.
  */
 export const CHANNEL_COLORS: string[] = [
   '#0677ad', // CH1  mains
@@ -82,24 +98,26 @@ export const METERING_MODE_LABEL: Record<string, string> = {
 /**
  * All honesty copy lives here so the telemetry view, the hardware view and the
  * architecture doc cannot drift apart. Never say "measured" for anything derived.
+ *
+ * These strings are tooltip bodies, not banners: the views that used to print
+ * them as paragraphs now carry them on a single ⓘ chip, so the provenance stays
+ * available without a block of prose sitting above the chart.
  */
 export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> = {
   Simulated: {
     tone: 'simulated',
     banner:
-      'Simulated — not measured. No PZEM-004T is wired; the ESP32 synthesises these readings ' +
-      '(SIMULATE_METERS = 1). Per-channel volts are nominal ratings (CH1–CH4 220 V, CH5 5 V). ' +
-      'Current is derived as P/V; per-channel watts are the mains total distributed ' +
-      'across energized channels by allowance. The USB rail counts toward P_total.',
+      'Simulated — not measured. The ESP32 synthesises these readings (SIMULATE_METERS = 1). ' +
+      'Per-channel volts are nominal ratings (CH1–CH2 220 V). Current is derived as P/V; per-channel ' +
+      'watts are the mains total distributed across energized channels by allowance.',
   },
   Metered: {
     tone: 'measured',
     banner:
-      'One meter, five channels. CH1–CH4 volts are read from the single mains PZEM-004T v3.0 on ' +
-      'the common feed. CH5 (5 V USB) reports its nominal rating — it is not ' +
-      'individually metered. Per-channel current and watts are derived by distributing the measured mains ' +
-      'total across energized channels, weighted by each channel’s allowance. This is an estimation ' +
-      'method for DSM research, not revenue-grade metering.',
+      'One INA226 on the common mains feed reads volts and the total; each branch CT behind an ADS1015 ' +
+      'reads its own current. CH1–CH2 volts are the rated 220 V rail. Per-channel current and watts are ' +
+      'derived by distributing the measured mains total across energized channels, weighted by allowance. ' +
+      'An estimation method for DSM research, not revenue-grade metering.',
   },
   Unknown: {
     tone: 'unknown',
@@ -108,16 +126,16 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
 }
 
 export const VOLTS_CAPTION_METERED =
-  'CH1–CH4 carry the single mains PZEM-004T v3.0 reading; the mains total is distributed across energized channels by allowance.'
+  'CH1–CH2 carry the rated 220 V mains rail; the INA226 total on the common feed is what the branch current is referenced against.'
 
 export const VOLTS_CAPTION =
-  'CH5 (5 V USB) appears as a flat line because the channel reports its nominal rating. It is not individually metered, but it counts toward P_total.'
+  'The channel reports its rated rail, not a live sample, so the line is flat. It still counts toward P_total.'
 
 export const AMPS_CAPTION =
-  'Current is not sampled. It is derived per channel as P_branch / V_branch, so it is only as trustworthy as the derived power.'
+  'Current is derived per channel as P_branch / V_branch, so it is only as trustworthy as the derived power.'
 
 export const WATTS_CAPTION =
-  'Per-channel watts are an allowance-weighted share of the single measured mains total — an estimation method suitable for DSM policy research, not revenue-grade metering.'
+  'Per-channel watts are an allowance-weighted share of the measured mains total — an estimation method suitable for DSM policy research, not revenue-grade metering.'
 
 export const WATTS_CAPTION_SIMULATED =
   'Per-channel watts are an allowance-weighted share of a synthesised mains total. Nothing here is measured.'

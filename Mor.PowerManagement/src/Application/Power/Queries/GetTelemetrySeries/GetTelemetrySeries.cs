@@ -162,6 +162,10 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     // sums exactly and the chart axis does not jitter between requests (E3).
     public static readonly DateTimeOffset BinEpoch = new(2001, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
+    // Upper bound on the ids a caller may ask for, kept at the FULL rig's 13 even
+    // though the bench rig has 2: ids above the bench channel count simply match
+    // no rows and come back empty rather than erroring, which is the behaviour
+    // that lets the same query run on both rigs without a rebuild.
     private const int MaxChannels = 13;
 
     private readonly IApplicationDbContext _context;
@@ -390,25 +394,31 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     // Provenance copy must track the hardware actually on the bench.
     //
     // The PZEM-004T v3.0 is RETIRED. What is fitted now is an INA226 on the
-    // mains feed and an ADS1015 four-channel ADC, with a ZMCT103C branch
-    // current sensor on EACH mains branch (CH1-CH4). So per-branch current is
-    // MEASURED, not apportioned from a mains total - that distinction is the
-    // whole point of the "Measured" provenance label, and the earlier copy
-    // ("distributing the mains total across energized channels weighted by
-    // allowance") told the operator the opposite of what the hardware does.
+    // mains feed and an ADS1220 two-channel ADC driven over SPI, with a
+    // ZMCT103C branch current sensor on EACH mains branch (CH1-CH2). So
+    // per-branch current is MEASURED, not apportioned from a mains total -
+    // that distinction is the whole point of the "Measured" provenance label,
+    // and the earlier copy ("distributing the mains total across energized
+    // channels weighted by allowance") told the operator the opposite of what
+    // the hardware does.
     //
-    // The 220 V / non-220 V split is therefore a hardware split, not a wording
-    // split, which is what keeps the two Metered arms meaningfully different:
-    // a mains branch has its own CT on the ADS1015, while the 5 V USB rail has
-    // no sensor at all and is only ever a nominal rating.
+    // Both wired channels are 220 V mains branches with their own CT, so the
+    // non-220 V arm below is now dead code on the bench rig: it survives only
+    // so the full 13-channel rig (which has a 110 V branch and USB rails with
+    // no sensor) still reads correctly when TestingRig is flipped back off.
+    //
+    // FUTURE 4+USB: the USB 5V rail (CH5, ratedVolts 5) uses this non-220 V
+    // arm on the 4+USB rig. It is deliberately kept generic - it names "this
+    // rail", not "the USB rail" - so that bump needs no string edit here, only
+    // the rig spec change.
     private static string ResolveNote(MeteringMode mode, int ratedVolts) => mode switch
     {
         MeteringMode.Simulated =>
-            "Synthesized on the ESP32 (SIMULATE_METERS = 1). No INA226, ADS1015 or branch current sensor is being read; these values are generated, not measured.",
+            "Synthesized on the ESP32 (SIMULATE_METERS = 1). No INA226, ADS1220 or branch current sensor is being read; these values are generated, not measured.",
         MeteringMode.Metered when Math.Abs(ratedVolts - 220) < 1 =>
-            "Volts read from the INA226 on the mains feed. Current is measured on this channel's own ADS1015 input via its ZMCT103C branch sensor - it is read directly, not distributed from a mains total. Power is volts x current on this channel.",
+            "Volts read from the INA226 on the mains feed. Current is measured on this channel's own ADS1220 SPI input via its ZMCT103C branch sensor - it is read directly, not distributed from a mains total. Power is volts x current on this channel.",
         MeteringMode.Metered =>
-            $"Volt is this channel's {ratedVolts} V nominal rating, not a measurement - the USB rail has no current sensor wired to it. Current and power are derived from the INA226 mains feed, not from a CT on this branch.",
+            $"Volt is this channel's {ratedVolts} V nominal rating, not a measurement - this rail has no current sensor wired to it. Current and power are derived from the INA226 mains feed, not from a CT on this branch.",
         _ => "The device has not reported a metering mode yet, so this channel's provenance is unknown.",
     };
 

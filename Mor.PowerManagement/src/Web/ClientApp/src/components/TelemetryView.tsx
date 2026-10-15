@@ -37,6 +37,14 @@ import {
   channelDash,
 } from '../data/telemetry'
 import {
+  BAND_DOT,
+  BAND_LABEL,
+  CRITICAL_THRESHOLD,
+  WARNING_THRESHOLD,
+  loadBand,
+  type LoadBand,
+} from '../data/dashboard'
+import {
   backoffMs,
   describeSeries,
   formatValue,
@@ -474,6 +482,12 @@ export function TelemetryView() {
   const wattsCaption = meterMode === 'Simulated' ? WATTS_CAPTION_SIMULATED : WATTS_CAPTION
   const scopeLabel = isFiltered ? 'selected channels' : 'all rig channels'
 
+  // Band and headroom are stated against the rig's configured thresholds rather
+  // than hardcoded, so an admin threshold change moves the indicator with it.
+  const currentBand: LoadBand =
+    wattsNow === null ? 'normal' : loadBand(wattsNow, WARNING_THRESHOLD, CRITICAL_THRESHOLD)
+  const headroomWatts = wattsNow === null ? null : CRITICAL_THRESHOLD - wattsNow
+
   const cards: StatCardSpec[] = [
     {
       key: 'min',
@@ -576,11 +590,16 @@ export function TelemetryView() {
       aria-label="Telemetry"
     >
       {/* ---------------- Header & filter bar ---------------- */}
+      {/*
+        No lede paragraph. The view is read as an instrument, so the header is
+        just the live dot and the window label; the explanation of what this
+        view is for lives in the retention tooltip at the foot.
+      */}
       <header className="flex flex-col gap-space-md lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-space-xs">
           <div className="flex flex-wrap items-center gap-space-sm">
             <h1 className="font-headline-md text-headline-md text-on-surface">
-              Telemetry &amp; Statistical Analytics
+              Telemetry &amp; Analytics
             </h1>
             <span
               className="inline-flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant"
@@ -590,10 +609,6 @@ export function TelemetryView() {
               {LIVE_LABEL[staleness.tone]}
             </span>
           </div>
-          <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">
-            Real-time telemetry stream from the rig&apos;s Postgres rollups, window statistics over
-            the aggregate trace, and the load distribution for the selected window.
-          </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-space-sm">
@@ -738,87 +753,72 @@ export function TelemetryView() {
         </div>
       </header>
 
-      {/* ---------------- Provenance nameplate (honesty banner) ---------------- */}
-      <div className={`flex flex-col gap-space-sm rounded-lg border p-space-md ${BANNER_FRAME}`}>
-        <div className="flex flex-wrap items-baseline gap-x-space-sm gap-y-1">
-          <span className="font-body-sm text-body-sm font-medium uppercase tracking-wide text-on-surface-variant">
-            {METERING_MODE_LABEL[meterMode] ?? 'Unknown'}
-          </span>
-          <span className="font-title-md text-title-md text-on-surface">
-            {meterMode === 'Metered'
-              ? 'One meter, five channels — CH1–CH4 share the mains reading, CH5 reports its nominal rating'
-              : meterMode === 'Simulated'
-                ? 'No meter is wired — the ESP32 is synthesising these readings'
-                : 'Provenance not reported by the device'}
-          </span>
-        </div>
-        <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-          {meterCopy.banner}
-        </p>
+      {/*
+        Provenance chip. This was a full-width honesty banner — the one block of
+        prose the view opened with. The text is not deleted, it is the tooltip;
+        the chip itself states the mode in two words so the fact is never more
+        than a glance away, and it stays monochrome because "simulated" is a
+        provenance fact and not one of the three health states.
+      */}
+      <div
+        className={`flex w-fit max-w-full items-center gap-2 rounded-full border px-3 py-1 ${BANNER_FRAME}`}
+        title={meterCopy.banner}
+      >
+        <span className="font-body-sm text-body-sm font-medium uppercase tracking-wide text-on-surface-variant">
+          {METERING_MODE_LABEL[meterMode] ?? 'Unknown'}
+        </span>
+        <span className="font-metric-value text-metric-value text-outline">
+          {meterMode === 'Metered'
+            ? 'INA226 + branch CT'
+            : meterMode === 'Simulated'
+              ? 'ESP32 synthesised'
+              : 'not reported'}
+        </span>
       </div>
 
       {status === 'unauthorized' ? (
         <article className="ant-card">
-          <div className="ant-card-body flex flex-col gap-space-sm">
-            <div className="flex items-center gap-space-sm">
-              <Info size={18} className="text-error" aria-hidden="true" />
-              <h2 className="font-title-lg text-title-lg text-on-surface">
-                Sign in to view telemetry
-              </h2>
-            </div>
-            <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">{error}</p>
+          <div className="ant-card-body flex items-center gap-space-sm">
+            <Info size={18} className="shrink-0 text-error" aria-hidden="true" />
+            <span className="font-title-lg text-title-lg text-on-surface">{error}</span>
           </div>
         </article>
       ) : series === null && (status === 'loading' || status === 'idle') ? (
         <article className="ant-card">
-          <div className="ant-card-body flex flex-col gap-space-sm">
-            <div className="flex items-center gap-space-sm">
-              <Activity size={18} className="text-primary" aria-hidden="true" />
-              <h2 className="font-title-lg text-title-lg text-on-surface">
-                Reading the telemetry window
-              </h2>
-            </div>
-            <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">
-              Fetching the {activeWindow} buckets from Postgres. Nothing is drawn until the first
-              bucket arrives — an empty axis would read as a zero load that was never measured.
-            </p>
+          <div className="ant-card-body flex items-center gap-space-sm">
+            <Activity size={18} className="shrink-0 text-primary" aria-hidden="true" />
+            <span
+              className="font-title-lg text-title-lg text-on-surface"
+              title="Fetching the buckets from Postgres. Nothing is drawn until the first bucket arrives — an empty axis would read as a zero load that was never measured."
+            >
+              {`Reading ${activeWindow}…`}
+            </span>
           </div>
         </article>
       ) : allValuesNull ? (
         <article className="ant-card">
-          <div className="ant-card-body flex flex-col gap-space-sm">
-            <div className="flex items-center gap-space-sm">
-              <Info size={18} className="text-tertiary" aria-hidden="true" />
-              <h2 className="font-title-lg text-title-lg text-on-surface">
-                No telemetry in this window
-              </h2>
-            </div>
-            <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">
-              The ESP32 posts every 5 s, so an empty {series?.windowLabel.toLowerCase() ?? 'window'}{' '}
-              means the device has not reported in that period — it may be offline, or the host may
-              have been asleep. Nothing is plotted rather than plotting zeros.
-            </p>
+          <div className="ant-card-body flex items-center gap-space-sm">
+            <Info size={18} className="shrink-0 text-tertiary" aria-hidden="true" />
+            <span
+              className="font-title-lg text-title-lg text-on-surface"
+              title="The ESP32 posts every second, so an empty window means the device has not reported in that period — it may be offline, or the host may have been asleep. Nothing is plotted rather than plotting zeros."
+            >
+              No samples in window
+            </span>
           </div>
         </article>
       ) : channelFilter.length === 0 ? (
         <article className="ant-card">
-          <div className="ant-card-body flex flex-col items-start gap-space-sm">
-            <div className="flex items-center gap-space-sm">
-              <Info size={18} className="text-tertiary" aria-hidden="true" />
-              <h2 className="font-title-lg text-title-lg text-on-surface">
-                No channels selected
-              </h2>
-            </div>
-            <p className="max-w-[76ch] font-body-md text-body-md text-on-surface-variant">
-              Every channel is filtered out, so there is nothing to plot. The last good data is kept
-              on screen rather than blanked — re-enable at least one channel to read the window.
-            </p>
-            <button
-              type="button"
-              className="ant-btn ant-btn-primary"
-              onClick={() => setHidden([])}
+          <div className="ant-card-body flex flex-wrap items-center gap-space-sm">
+            <Info size={18} className="shrink-0 text-tertiary" aria-hidden="true" />
+            <span
+              className="font-title-lg text-title-lg text-on-surface"
+              title="Every channel is filtered out, so there is nothing to plot. The last good data is kept on screen rather than blanked."
             >
-              Show all {ALL_CHANNEL_IDS.length} channels
+              No channels
+            </span>
+            <button type="button" className="ant-btn ant-btn-primary" onClick={() => setHidden([])}>
+              {`Show all ${ALL_CHANNEL_IDS.length}`}
             </button>
           </div>
         </article>
@@ -1020,13 +1020,25 @@ export function TelemetryView() {
                 />
               )}
 
-              <p className="mt-space-md max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-                {activeTab === 'amps'
-                  ? AMPS_CAPTION
-                  : activeTab === 'volts'
-                    ? `${VOLTS_CAPTION}${meterMode === 'Metered' ? ` ${VOLTS_CAPTION_METERED}` : ''}`
-                    : wattsCaption}
-              </p>
+              {/*
+                The per-axis caption used to sit under the chart as a paragraph.
+                It is the most important honesty note in this view — derived
+                amps, nominal volts — so it is kept verbatim as a tooltip and
+                flagged by a ⓘ rather than deleted or truncated.
+              */}
+              <span
+                className="mt-space-md inline-flex w-fit items-center gap-1.5 font-code text-code text-outline"
+                title={
+                  activeTab === 'amps'
+                    ? AMPS_CAPTION
+                    : activeTab === 'volts'
+                      ? `${VOLTS_CAPTION}${meterMode === 'Metered' ? ` ${VOLTS_CAPTION_METERED}` : ''}`
+                      : wattsCaption
+                }
+              >
+                <Info size={12} aria-hidden="true" />
+                {activeTab === 'watts' ? 'derived share' : activeTab === 'amps' ? 'derived P/V' : 'rated rail'}
+              </span>
             </div>
           </article>
 
@@ -1133,10 +1145,12 @@ export function TelemetryView() {
                   </div>
                 </>
               ) : (
-                <p className="font-body-sm text-body-sm text-on-surface-variant">
-                  No aggregate buckets were reported in this window, so there is no distribution to
-                  draw. A gap is not a zero-load sample.
-                </p>
+                <span
+                  className="font-body-sm text-body-sm text-on-surface-variant"
+                  title="No aggregate buckets were reported in this window, so there is no distribution to draw. A gap is not a zero-load sample."
+                >
+                  No buckets reported — a gap is not a zero-load sample.
+                </span>
               )}
             </div>
           </article>
@@ -1146,6 +1160,20 @@ export function TelemetryView() {
             <div className="flex items-center gap-space-sm">
               <Activity size={18} className="text-primary" aria-hidden="true" />
               <span className="font-body-md text-body-md text-on-surface">{staleness.label}</span>
+              <span
+                className={`ant-dot ${BAND_DOT[currentBand]}`}
+                title={
+                  currentBand === 'normal'
+                    ? `Below the ${WARNING_THRESHOLD} W warning threshold`
+                    : currentBand === 'warning'
+                      ? 'Inside the warning band — FR-05 raises an event'
+                      : 'At or over the critical threshold — FR-06 sheds'
+                }
+                aria-hidden="true"
+              />
+              <span className="font-metric-value text-metric-value text-on-surface-variant">
+                {BAND_LABEL[currentBand]}
+              </span>
             </div>
 
             <dl className="flex flex-wrap items-center gap-x-space-lg gap-y-space-sm font-body-sm text-body-sm text-on-surface-variant">
@@ -1153,6 +1181,29 @@ export function TelemetryView() {
                 <dt>Total now</dt>
                 <dd className="font-metric-value text-metric-value font-medium text-on-surface">
                   {wattsNow !== null ? `${formatMetric(wattsNow, 'W')} W` : '—'}
+                </dd>
+              </div>
+              <div
+                className="flex items-center gap-1"
+                title={`Margin between the newest reported bucket and the ${CRITICAL_THRESHOLD} W critical threshold`}
+              >
+                <dt>Headroom</dt>
+                <dd
+                  className={`font-metric-value text-metric-value font-medium ${
+                    headroomWatts === null
+                      ? 'text-on-surface'
+                      : headroomWatts <= 0
+                        ? 'text-error'
+                        : currentBand === 'warning'
+                          ? 'text-tertiary-container'
+                          : 'text-on-surface'
+                  }`}
+                >
+                  {headroomWatts === null
+                    ? '—'
+                    : headroomWatts <= 0
+                      ? `${formatMetric(Math.abs(headroomWatts), 'W')} W over`
+                      : `${formatMetric(headroomWatts, 'W')} W`}
                 </dd>
               </div>
               <div className="flex items-center gap-1">
@@ -1203,12 +1254,12 @@ export function TelemetryView() {
             </dl>
           </div>
 
-          <p className="max-w-[96ch] font-body-sm text-body-sm text-on-surface-variant">
-            Retention:{' '}
-            <span className="font-metric-value text-metric-value">{TELEMETRY_RETENTION_DAYS}</span>{' '}
-            days of raw samples are stored; older samples are pruned. Pruning runs only while the host is
-            awake, so history can be shorter than that.
-          </p>
+          <div
+            className="font-body-sm text-body-sm text-on-surface-variant"
+            title={`Retention: ${TELEMETRY_RETENTION_DAYS} days of raw samples are stored; older samples are pruned. Pruning runs only while the host is awake, so history can be shorter than that.`}
+          >
+            {`ⓘ ${TELEMETRY_RETENTION_DAYS}d retention`}
+          </div>
         </>
       )}
     </section>

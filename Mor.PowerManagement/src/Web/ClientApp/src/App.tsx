@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
-import { Activity, CloudOff, Gauge, LogOut, Plug, PlugZap, RotateCcw, ScanLine, ShieldCheck } from 'lucide-react'
+import { LogOut, RotateCcw } from 'lucide-react'
 import {
   ApiError,
   activateOutlet,
@@ -10,16 +10,13 @@ import {
   ingestScenario,
   logout,
 } from './api'
-import { EventLogPanel } from './components/EventLogPanel'
 import { ChannelInventoryView } from './components/ChannelInventoryView'
+import { Dashboard } from './components/Dashboard'
 import { HardwareView } from './components/HardwareView'
 import { LoadingScreen } from './components/LoadingScreen'
 import { LoginGate } from './components/LoginGate'
-import { MetricCard } from './components/MetricCard'
-import { OutletCard } from './components/OutletCard'
-import { PoliciesView } from './components/PoliciesView'
 import { PolicyAdminView } from './components/PolicyAdminView'
-import { ScenarioPanel } from './components/ScenarioPanel'
+import { PoliciesView } from './components/PoliciesView'
 import { TelemetryView } from './components/TelemetryView'
 import { AppTopBar } from './components/AppTopBar'
 import {
@@ -64,25 +61,6 @@ const INTRO_MS = 700
 // screen an operator may switch several times a minute.
 const ROUTE_TRANSITION_S = 0.2
 const SHELL_TRANSITION_S = 0.22
-
-/** The three operating bands the capacity meter is calibrated against. */
-function stateTagClass(state: string): string {
-  if (state === 'Critical') return 'ant-tag ant-tag-error'
-  if (state === 'Warning') return 'ant-tag ant-tag-warning'
-  return 'ant-tag ant-tag-success'
-}
-
-function meterFillClass(state: string): string {
-  if (state === 'Critical') return 'bg-error'
-  if (state === 'Warning') return 'bg-tertiary-container'
-  return 'bg-primary'
-}
-
-/** Clamp a threshold onto the meter's 0-100% track. */
-function trackPercent(value: number, max: number): number {
-  if (!(max > 0)) return 0
-  return Math.min(Math.max((value / max) * 100, 0), 100)
-}
 
 function App() {
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
@@ -182,11 +160,8 @@ function App() {
   }, [introDone])
 
   const load = totalLoad(outlets)
-  const remaining = Math.max(thresholds.max - load, 0)
-  const activeCount = outlets.filter((outlet) => isEnergizedOutlet(outlet.status)).length
   const currentState =
     load >= thresholds.critical ? 'Critical' : load >= thresholds.warning ? 'Warning' : 'Normal'
-  const loadPercent = Math.min((load / thresholds.max) * 100, 100)
 
   const addEvent = (title: string, detail: string, severity: Severity = 'info') => {
     setEvents((current) => [
@@ -279,15 +254,18 @@ function App() {
     void runScenario(idleProfile(outlets), 'Idle shutdown')
   }
 
+  // FUTURE 4+USB: SIM-02 id 1 stays valid — CH1 exists in both the 2-outlet and
+  // the 4+USB rig, so this activation request needs no retarget when the full
+  // bench is restored.
   const requestActivationLocal = () => {
-    const requested = outlets.find((outlet) => outlet.id === 6)
+    const requested = outlets.find((outlet) => outlet.id === 1)
     if (!requested) return
 
     const projectedLoad = load + requested.allowance
     if (projectedLoad > thresholds.critical) {
       addEvent(
         'Activation blocked',
-        `Outlet 6 request denied: ${formatWatts(load)} current load + ${formatWatts(
+        `Outlet 1 request denied: ${formatWatts(load)} current load + ${formatWatts(
           requested.allowance,
         )} allowance exceeds the configured critical threshold.`,
         'warning',
@@ -297,18 +275,18 @@ function App() {
 
     setOutlets((current) =>
       current.map((outlet) =>
-        outlet.id === 6 ? { ...outlet, status: 'Active', watts: 190 } : outlet,
+        outlet.id === 1 ? { ...outlet, status: 'Active', watts: 190 } : outlet,
       ),
     )
     addEvent(
       'Outlet activation allowed',
-      'Pre-activation capacity assessment passed; Outlet 6 relay energized.',
+      'Pre-activation capacity assessment passed; Outlet 1 relay energized.',
       'success',
     )
   }
 
   const requestActivation = () => {
-    void runLive(() => activateOutlet(6), requestActivationLocal)
+    void runLive(() => activateOutlet(1), requestActivationLocal)
   }
 
   const replayIntro = () => {
@@ -398,9 +376,6 @@ function App() {
   const connectionLabel =
     session === 'authed' && backendOnline ? 'Live — backend' : 'Simulated — backend offline'
 
-  const warningTrack = trackPercent(thresholds.warning, thresholds.max)
-  const criticalTrack = trackPercent(thresholds.critical, thresholds.max)
-
   return (
     <LayoutGroup id={`loadwise-${introKey}`}>
       <AnimatePresence mode="popLayout">
@@ -425,31 +400,12 @@ function App() {
           userEmail={userEmail}
         />
 
-        {session === 'offline' && (
-          <div className="mx-auto w-full max-w-[1440px] px-margin pt-space-lg">
-            <section
-              role="status"
-              className="ant-card flex flex-col items-start gap-space-sm border-l-4 border-l-error p-space-lg"
-              aria-label="Backend unreachable"
-            >
-              <div className="flex flex-wrap items-center gap-2">
-                <CloudOff size={18} className="text-error" aria-hidden="true" />
-                <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
-                  Backend unreachable
-                </h2>
-                <span className="ant-tag ant-tag-error">OFFLINE</span>
-              </div>
-              <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
-                The console could not reach <code className="font-code text-code">/api/Dashboard/state</code>,
-                so nothing below is live telemetry. The figures are the stored baseline for the test rig and
-                the buttons below write nothing. Sign in again once the device is reachable.
-              </p>
-              <button type="button" className="ant-btn ant-btn-primary" onClick={() => setSession('login')}>
-                Sign in
-              </button>
-            </section>
-          </div>
-        )}
+        {/*
+          The OFFLINE banner now lives inside <Dashboard>, next to the figures
+          it explains. It used to sit here as a standalone card above the shell,
+          which meant two places to describe the same failure and a banner whose
+          sign-in button was far from the readouts it invalidated.
+        */}
 
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
@@ -475,187 +431,25 @@ function App() {
               }
             >
               {activeView === 'dashboard' && (
-                <>
-                  {/* --- Page head ------------------------------------------------- */}
-                  <header className="flex flex-col gap-1">
-                    <nav
-                      aria-label="Breadcrumb"
-                      className="flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant"
-                    >
-                      <span>Console</span>
-                      <span className="text-xs text-outline" aria-hidden="true">
-                        /
-                      </span>
-                      <span className="font-medium text-on-surface">Dashboard</span>
-                    </nav>
-                    <div className="mt-1 flex flex-wrap items-center gap-space-sm">
-                      <h1 className="font-headline-md text-headline-md tracking-tight text-on-surface">
-                        Power Operations Dashboard
-                      </h1>
-                      <span className={`${stateTagClass(currentState)} font-code uppercase`}>
-                        {`System ${currentState}`}
-                      </span>
-                    </div>
-                    <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
-                      Live load against the configured master capacity, every controlled channel, and
-                      what the policy engine decided about them.
-                    </p>
-                  </header>
-
-                  {/* --- Four-up summary ------------------------------------------- */}
-                  <section
-                    className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-4"
-                    aria-label="System overview"
-                  >
-                    <MetricCard
-                      icon={<Gauge />}
-                      label="Total load"
-                      value={formatWatts(load)}
-                      note={`${Math.round(loadPercent)}% of ${formatWatts(thresholds.max)} capacity`}
-                    />
-                    <MetricCard
-                      icon={<ShieldCheck />}
-                      label="Remaining capacity"
-                      value={formatWatts(remaining)}
-                      note={`${formatWatts(thresholds.warning)} warning / ${formatWatts(thresholds.critical)} critical`}
-                    />
-                    <MetricCard
-                      icon={<PlugZap />}
-                      label="Energized outlets"
-                      value={`${activeCount}/${outlets.length}`}
-                      note="Active and standby relay channels"
-                    />
-                    {/* The sensor copy is the honest one: the PZEM-004T that used to sit
-                        on the common feed is retired. Mains V/A/W now comes from an
-                        INA226 on that feed, each mains branch carries its own CT behind
-                        an ADS1015, and the 5 V USB rail has no CT at all — it is
-                        reported as a residual. */}
-                    <MetricCard
-                      icon={<ScanLine />}
-                      label="Metering channels"
-                      value={`${outlets.length}`}
-                      note="INA226 on the mains feed, ADS1015 CT per mains branch · CH5 USB is a residual"
-                    />
-                  </section>
-
-                  {/* --- Capacity meter -------------------------------------------- */}
-                  <section className="ant-card overflow-hidden" aria-label="Load capacity meter">
-                    <div className="ant-card-header">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Activity size={18} className="shrink-0 text-primary" aria-hidden="true" />
-                        <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
-                          Capacity and thresholds
-                        </h2>
-                        <code className="hidden rounded bg-surface-container px-2 py-0.5 font-code text-code text-on-surface-variant sm:inline">
-                          P_limit
-                        </code>
-                      </div>
-                      <div className="flex shrink-0 items-baseline gap-1.5">
-                        <span className="font-metric-display text-metric-display text-on-surface">
-                          {Math.round(load).toLocaleString()}
-                          <span className="font-code text-code font-semibold text-on-surface-variant"> W</span>
-                        </span>
-                        <span className="font-code text-code text-outline">
-                          {`/ ${Math.round(thresholds.max).toLocaleString()} W`}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="ant-card-body flex flex-col gap-space-md">
-                      {/* The two ticks are the signature of this panel: margin to trip
-                          read as a position on a calibrated scale, not as two numbers
-                          the operator has to compare by eye. */}
-                      <div className="relative">
-                        <div
-                          className="ant-meter"
-                          role="meter"
-                          aria-valuenow={Math.round(loadPercent)}
-                          aria-valuemin={0}
-                          aria-valuemax={100}
-                          aria-label={`Total load, ${Math.round(loadPercent)} percent of configured capacity`}
-                        >
-                          <div
-                            className={`ant-meter-fill ${meterFillClass(currentState)}`}
-                            style={{ width: `${loadPercent}%` }}
-                          />
-                        </div>
-                        <span
-                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-tertiary-container"
-                          style={{ left: `${warningTrack}%` }}
-                          aria-hidden="true"
-                        />
-                        <span
-                          className="absolute -top-1 h-4 w-0.5 -translate-x-1/2 rounded-sm bg-error"
-                          style={{ left: `${criticalTrack}%` }}
-                          aria-hidden="true"
-                        />
-                      </div>
-
-                      <div className="grid grid-cols-1 gap-space-sm sm:grid-cols-3">
-                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-secondary pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Normal band</span>
-                          <span className="font-metric-value text-metric-value font-semibold text-secondary">
-                            {`0 – ${Math.round(thresholds.warning).toLocaleString()} W`}
-                          </span>
-                        </div>
-                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-tertiary-container pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Warning · FR-05</span>
-                          <span className="font-metric-value text-metric-value font-semibold text-tertiary-container">
-                            {`${Math.round(thresholds.warning).toLocaleString()} – ${Math.round(
-                              thresholds.critical,
-                            ).toLocaleString()} W`}
-                          </span>
-                        </div>
-                        <div className="flex items-baseline justify-between gap-2 border-l-2 border-l-error pl-2">
-                          <span className="font-code text-code text-on-surface-variant">Critical · FR-06</span>
-                          <span className="font-metric-value text-metric-value font-semibold text-error">
-                            {`≥ ${Math.round(thresholds.critical).toLocaleString()} W`}
-                          </span>
-                        </div>
-                      </div>
-
-                      <p className="font-code text-code text-outline">
-                        Ticks are placed at {warningTrack.toFixed(0)}% and {criticalTrack.toFixed(0)}% of
-                        P_limit. State refreshes every 5 s from GET /api/Dashboard/state.
-                      </p>
-                    </div>
-                  </section>
-
-                  {/* --- Controlled channels -------------------------------------- */}
-                  <section className="ant-card overflow-hidden" aria-label="Outlet-level monitoring">
-                    <div className="ant-card-header">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <Plug size={18} className="shrink-0 text-primary" aria-hidden="true" />
-                        <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">
-                          {`${outlets.length} controlled channels`}
-                        </h2>
-                      </div>
-                      <span className="shrink-0 font-code text-code text-on-surface-variant">
-                        {`${activeCount} energized · ${outlets.length - activeCount} open or idle`}
-                      </span>
-                    </div>
-                    <div className="ant-card-body">
-                      <div className="grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-3">
-                        {outlets.map((outlet) => (
-                          <OutletCard key={outlet.id} outlet={outlet} onToggle={toggleOutlet} />
-                        ))}
-                      </div>
-                    </div>
-                  </section>
-
-                  <ScenarioPanel
-                    onNormal={scenarioNormal}
-                    onActivate={requestActivation}
-                    onBlock={scenarioCapacityBlock}
-                    onOverload={scenarioOverload}
-                    onSelective={scenarioSelective}
-                    onIdle={scenarioIdle}
-                    notice={scenarioNotice}
-                    busy={scenarioBusy}
-                  />
-
-                  <EventLogPanel events={events} />
-                </>
+                <Dashboard
+                  outlets={outlets}
+                  thresholds={thresholds}
+                  events={events}
+                  deviceOnline={deviceOnline}
+                  backendOnline={backendOnline}
+                  scenario={{
+                    onNormal: scenarioNormal,
+                    onActivate: requestActivation,
+                    onBlock: scenarioCapacityBlock,
+                    onOverload: scenarioOverload,
+                    onSelective: scenarioSelective,
+                    onIdle: scenarioIdle,
+                    notice: scenarioNotice,
+                    busy: scenarioBusy,
+                  }}
+                  onToggleOutlet={toggleOutlet}
+                  onSignIn={() => setSession('login')}
+                />
               )}
 
               {activeView === 'channels' && <ChannelInventoryView />}

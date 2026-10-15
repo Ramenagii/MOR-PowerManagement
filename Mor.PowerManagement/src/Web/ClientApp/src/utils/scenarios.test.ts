@@ -27,14 +27,14 @@ function outlet(id: number, watts: number, status: OutletStatus, priority: Prior
   }
 }
 
+/**
+ * The trimmed testing rig: two 220 V mains channels (CH1 260 W, CH2 180 W).
+ * Priorities differ so the selective-response ordering still has something to
+ * rank: CH1 is the Critical channel that must survive, CH2 the Medium one.
+ */
 const rig: Outlet[] = [
-  outlet(1, 520, 'Active', 'Low'),
-  outlet(2, 500, 'Active', 'Low'),
-  outlet(3, 420, 'Active', 'Medium'),
-  outlet(4, 330, 'Active', 'Medium'),
-  outlet(5, 150, 'Standby', 'High'),
-  outlet(6, 0, 'Disconnected', 'Critical'),
-  outlet(10, 8, 'Active', 'Low', 5),
+  outlet(1, 260, 'Active', 'Critical'),
+  outlet(2, 180, 'Active', 'Medium'),
 ]
 
 const sum = (readings: Array<{ powerWatts: number }>) => readings.reduce((t, r) => t + r.powerWatts, 0)
@@ -77,40 +77,44 @@ describe('buildScenarioPayload', () => {
   })
 
   it('drives a shed channel to zero watts with its relay open', () => {
-    const profile = selectiveProfile(rig, 2)
+    const profile = selectiveProfile(rig)
     const { readings, relayStates } = buildScenarioPayload(rig, profile)
 
-    // selectiveProfile picks the two lowest-priority energized channels.
-    expect(profile.shed).toEqual([1, 2])
+    // selectiveProfile picks the lowest-priority energized channel of the pair.
+    expect(profile.shed).toEqual([2])
     for (const id of profile.shed) {
       expect(readings.find((r) => r.outletId === id)?.powerWatts).toBe(0)
       expect(relayStates.find((r) => r.outletId === id)?.relayClosed).toBe(false)
     }
+    // The channel that was not shed stays energized at its rated draw.
+    expect(readings.find((r) => r.outletId === 1)?.powerWatts).toBe(260)
+    expect(relayStates.find((r) => r.outletId === 1)?.relayClosed).toBe(true)
   })
 
   it('sheds the lowest priority first, never a High or Critical channel', () => {
-    const profile = selectiveProfile(rig, 2)
-    expect(profile.shed).not.toContain(5) // High
-    expect(profile.shed).not.toContain(6) // Critical
+    const profile = selectiveProfile(rig)
+    expect(profile.shed).not.toContain(1) // Critical
   })
 
-  it('leaves an already-disconnected channel de-energized under normal operation', () => {
+  it('keeps every energized channel live at its rated draw under normal operation', () => {
     const { readings, relayStates } = buildScenarioPayload(rig, normalProfile(rig))
-    expect(readings.find((r) => r.outletId === 6)?.powerWatts).toBe(0)
-    expect(relayStates.find((r) => r.outletId === 6)?.relayClosed).toBe(false)
+    expect(readings.find((r) => r.outletId === 1)?.powerWatts).toBe(260)
+    expect(readings.find((r) => r.outletId === 2)?.powerWatts).toBe(180)
+    expect(relayStates.every((r) => r.relayClosed)).toBe(true)
   })
 
   it('derives current from the channel rail, so the same draw needs more amps on a low rail', () => {
     // Equal power on two different rails. Comparing the rig's own channels would
-    // prove nothing: CH1 draws 520 W and CH10 draws 8 W, so their currents are
-    // not comparable. The claim under test is I = P / V for a fixed P.
+    // prove nothing: both rig channels sit on the same 220 V rail, so their
+    // currents are not comparable. The claim under test is I = P / V for a
+    // fixed P, checked against a synthetic 5 V USB branch.
     const equalDraw = [outlet(1, 100, 'Active', 'Low', 220), outlet(10, 100, 'Active', 'Low', 5)]
     const { readings } = buildScenarioPayload(equalDraw, {
       loadFactor: 1,
       energize: [1, 10],
       shed: [],
       overloadWatts: 0,
-      overloadChannel: 6,
+      overloadChannel: 1,
     })
     const mains = readings.find((r) => r.outletId === 1)
     const usb = readings.find((r) => r.outletId === 10)

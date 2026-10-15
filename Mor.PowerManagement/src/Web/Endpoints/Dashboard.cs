@@ -20,9 +20,12 @@ public class Dashboard : IEndpointGroup
         public const string State = "dashboard:state";
     }
 
-    // Testing rig: 5 wired channels (MUST_READ.md, until 31 Oct 2026).
+    // Testing rig: 2 wired channels (MUST_READ.md, until 31 Oct 2026).
     // Restore to 13 with the full rig.
-    private const int MaxChannels = 5;
+    // FUTURE 4+USB: ->5
+    // Next bump is this one line only: every validation and error string below
+    // interpolates MaxChannels, so 1..2 -> 1..5 needs no other edit here.
+    private const int MaxChannels = 2;
 
     public static void Map(RouteGroupBuilder groupBuilder)
     {
@@ -64,10 +67,9 @@ public class Dashboard : IEndpointGroup
     [EndpointDescription(
         "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), " +
         "aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a " +
-        "provenance label: the 220 V mains channels (CH1-CH4) report voltage from the INA226 on the mains " +
-        "feed, and their current is measured on each channel's own ADS1015 input via its branch CT sensor; " +
-        "the USB rail has no current sensor and reports its nominal rating. Empty buckets are returned as " +
-        "null, never zero.")]
+        "provenance label: both 220 V mains channels (CH1-CH2) report voltage from the INA226 on the mains " +
+        "feed, and their current is measured on each channel's own ADS1220 SPI input via its branch CT " +
+        "sensor. Empty buckets are returned as null, never zero.")]
     // BadRequest<string> rather than bare BadRequest: the 400 body names the
     // valid values so a bad request is self-explanatory.
     public static async Task<Results<Ok<TelemetrySeriesVm>, BadRequest<string>>> GetTelemetry(
@@ -119,7 +121,7 @@ public class Dashboard : IEndpointGroup
     }
 
     // Accepts whitespace, duplicates and any order (E5); rejects anything
-    // non-numeric, outside the rig's 1..5 channel range, or longer than the rig.
+    // non-numeric, outside the rig's 1..2 channel range, or longer than the rig.
     private static bool TryParseChannels(string value, out IReadOnlyList<int> ids, out string error)
     {
         ids = Array.Empty<int>();

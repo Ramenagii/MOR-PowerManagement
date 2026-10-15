@@ -738,8 +738,8 @@ export function ScenarioPanel({
         id: 'SIM-05',
         name: 'Selective response',
         intent:
-          'Sheds the two lowest-priority energized channels, ordered by the same Low → Critical rank the policy engine uses.',
-        expectation: 'Load drops by exactly the shed channels\' contribution. The remainder stays energized.',
+          'Sheds the lowest-priority energized channel, ordered by the same Low → Critical rank the policy engine uses.',
+        expectation: 'Load drops by exactly the shed channel\'s contribution. The remainder stays energized.',
         endpoint: 'POST /api/Dashboard/scenarios/ingest',
         icon: ClipboardList,
         label: 'Priority shed',

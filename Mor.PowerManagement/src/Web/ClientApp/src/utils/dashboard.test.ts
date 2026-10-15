@@ -10,8 +10,8 @@ import {
 
 describe('dashboard utilities', () => {
   it('sums outlet load from the configured baseline outlets', () => {
-    // Testing rig: 260 + 180 + 120 + 0 + 7 (USB counts toward P_total).
-    expect(totalLoad(baseOutlets)).toBe(567)
+    // Testing rig: 260 + 180 (CH1 + CH2).
+    expect(totalLoad(baseOutlets)).toBe(440)
   })
 
   it('formats watt values as rounded display text', () => {

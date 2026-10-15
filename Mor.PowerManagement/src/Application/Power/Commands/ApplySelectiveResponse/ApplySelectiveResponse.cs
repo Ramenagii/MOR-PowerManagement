@@ -8,7 +8,9 @@ namespace Mor.PowerManagement.Application.Power.Commands.ApplySelectiveResponse;
 // POL-05 load shedding level 1: disconnect the lowest-priority energized outlets first.
 public record ApplySelectiveResponseCommand : IRequest<SelectiveResponseResult>
 {
-    public int Count { get; init; } = 2;
+    // Default 1, not 2: the bench rig has two outlets, so a default of 2 would
+    // shed the entire rig in one call and leave nothing to recover from.
+    public int Count { get; init; } = 1;
 }
 
 public record SelectiveResponseResult(
@@ -20,7 +22,13 @@ public class ApplySelectiveResponseCommandValidator : AbstractValidator<ApplySel
 {
     public ApplySelectiveResponseCommandValidator()
     {
-        RuleFor(x => x.Count).InclusiveBetween(1, 13);
+        // Upper bound is the bench rig's channel count (2). Raise back to 13 with
+        // the full rig, otherwise a shed request can name outlets that exist
+        // only in the full-rig spec.
+        // FUTURE 4+USB: (1, 5)
+        // Only the upper bound moves on that bump; the default Count = 1 above
+        // is already safe for both the 2-channel and 5-channel rig.
+        RuleFor(x => x.Count).InclusiveBetween(1, 2);
     }
 }
 
