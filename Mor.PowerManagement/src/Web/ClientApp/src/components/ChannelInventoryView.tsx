@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Activity,
-  CircuitBoard,
   CloudOff,
   Cpu,
   Info,
@@ -440,7 +438,6 @@ export function ChannelInventoryView() {
 
   const energized = rows.filter((r) => r.wired && (r.status === 'Active' || r.status === 'Standby')).length
   const standby = rows.filter((r) => r.status === 'Standby').length
-  const wiredCount = rows.filter((r) => r.wired).length
 
   /*
    * Trip points are the framework's CONFIGURATION and they are read from
@@ -470,16 +467,10 @@ export function ChannelInventoryView() {
     <div className="stitch mx-auto flex w-full max-w-[1440px] flex-col gap-6 px-margin py-space-lg">
       {/* ---------------- Header ---------------- */}
       <header className="flex flex-col gap-1.5">
-        <nav aria-label="Breadcrumb" className="st-micro">
-          <span>Dashboard</span>
-          <span className="px-1.5 text-[#cfd3db]">/</span>
-          <span className="font-medium text-[#2a3039]">Channels</span>
-        </nav>
-
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-col gap-0.5">
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="st-title">Channel Inventory &amp; Sensor Matrix</h1>
+              <h1 className="st-title">Channels</h1>
               <span className="st-chip st-chip-info" title={`Polling every ${Math.round(REFRESH_MS / 1000)} s on the ${LIVE_WINDOW} window`}>
                 <span className="relative flex h-1.5 w-1.5 items-center justify-center" aria-hidden="true">
                   <span className={`st-dot ${live ? 'st-dot-ok' : 'st-dot-off'}`} />
@@ -487,13 +478,10 @@ export function ChannelInventoryView() {
                     <span className="st-dot st-dot-ok st-ping absolute" />
                   )}
                 </span>
-                {live ? 'Live Stream' : 'No Signal'}
+                {live ? 'Live' : 'Offline'}
               </span>
             </div>
-            <p className="st-body">
-              {`${rows.length} branches across ${rows.filter((r) => r.rail !== '5V USB').length} AC outlets (220V) and ${rows.filter((r) => r.rail === '5V USB').length} USB-C DC rail`}
-              {rows.some((r) => r.rail === 'Unrated') ? ' · some branches are unrated' : ''}
-            </p>
+            <p className="st-body">{rows.length} channels</p>
           </div>
 
           <button
@@ -503,7 +491,7 @@ export function ChannelInventoryView() {
             aria-label="Refresh telemetry now"
           >
             <RefreshCw size={15} className={status === 'loading' ? 'animate-spin' : ''} aria-hidden="true" />
-            Refresh Telemetry
+            Refresh
           </button>
         </div>
       </header>
@@ -573,7 +561,7 @@ export function ChannelInventoryView() {
             <span className="st-unit">V RMS</span>
           </div>
           <div className="st-stat-foot st-micro">
-            <span className="st-accent">{'↗'} INA226 on mains feed</span>
+            <span className="st-accent">{'↗'} INA226 · ESP32 I²C DC shunt</span>
             <span>{ratedVolts > 0 ? `Rated ${ratedVolts} V` : `Rated ${UNAVAILABLE}`}</span>
           </div>
         </article>
@@ -701,21 +689,6 @@ export function ChannelInventoryView() {
         </section>
       )}
 
-      {/* ---------------- Provenance footer ---------------- */}
-      <footer className="st-card st-card-pad flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Activity size={16} className="st-accent" aria-hidden="true" />
-          <p className="st-micro min-w-0">
-            Thesis Defense Provenance: {wiredCount} wired rail branch
-            {wiredCount === 1 ? '' : 'es'} via ADS1220 SPI front end reading a CT per branch, INA226 on the
-            common mains feed. Unwired branches report zero because nothing is fitted.
-          </p>
-        </div>
-        <span className="st-chip st-chip-info">
-          <CircuitBoard size={12} aria-hidden="true" />
-          {`${LIVE_WINDOW} window`}
-        </span>
-      </footer>
     </div>
   )
 }

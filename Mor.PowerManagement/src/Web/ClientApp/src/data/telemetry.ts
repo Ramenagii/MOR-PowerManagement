@@ -117,11 +117,9 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
   Metered: {
     tone: 'measured',
     banner:
-      'One INA226 on the common mains feed reads volts and the total; each branch CT behind an ADS1015 ' +
-      'reads its own current on CH1–CH4. CH5 is a 5 V USB socket with no CT, so it carries no current ' +
-      'reading of its own. Per-channel current and watts are ' +
-      'derived by distributing the measured mains total across energized channels, weighted by allowance. ' +
-      'An estimation method for DSM research, not revenue-grade metering.',
+      'The ESP32 polls the INA226 over I2C for its DC bus and shunt current. Branch CTs are read separately ' +
+      'through the ADS1220 on CH1–CH4. CH5 has no CT. Per-channel current and watts are derived from ' +
+      'reported channel loads and rated voltage in this demo mode.',
   },
   Unknown: {
     tone: 'unknown',
@@ -130,7 +128,7 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
 }
 
 export const VOLTS_CAPTION_METERED =
-  'CH1–CH4 carry the rated 220 V mains rail; the INA226 total on the common feed is what the branch current is referenced against.'
+  'CH1–CH4 carry their branch CT readings. The INA226 DC bus reading is separate and is not used as a mains voltage reference.'
 
 export const VOLTS_CAPTION =
   'The channel reports its rated rail, not a live sample, so the line is flat. It still counts toward P_total.'

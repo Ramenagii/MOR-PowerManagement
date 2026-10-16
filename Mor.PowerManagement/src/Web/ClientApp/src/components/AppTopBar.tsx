@@ -1,4 +1,6 @@
-import { Bolt, Power } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { LogOut, Power } from 'lucide-react'
+import { PowerShieldMark } from './PowerShieldMark'
 import type { AppView } from '../types/dashboard'
 
 /**
@@ -33,6 +35,7 @@ type AppTopBarProps = {
   systemState: string
   deviceOnline: boolean
   userEmail: string | null
+  onLogout: () => void
 }
 
 /**
@@ -61,18 +64,17 @@ export function AppTopBar({
   systemState,
   deviceOnline,
   userEmail,
+  onLogout,
 }: AppTopBarProps) {
+  const [profileOpen, setProfileOpen] = useState(false)
+  const profileButton = useRef<HTMLButtonElement>(null)
+
   return (
     <header className="sticky top-0 z-40 h-[60px] border-b border-surface-container bg-surface-container-lowest">
       <div className="mx-auto flex h-full w-full max-w-[1440px] items-center gap-space-md px-margin">
         {/* ---- Identity ---------------------------------------------------- */}
         <div className="flex shrink-0 items-center gap-space-sm">
-          <span
-            className="grid h-8 w-8 place-items-center rounded-md bg-primary text-on-primary"
-            aria-hidden="true"
-          >
-            <Bolt size={18} />
-          </span>
+          <PowerShieldMark className="h-8 w-[29px] shrink-0" title="MOR Power" />
           <span className="hidden whitespace-nowrap font-title-lg text-title-lg font-semibold text-on-surface sm:inline">
             MOR Power
           </span>
@@ -132,12 +134,55 @@ export function AppTopBar({
             scenario panel instead, so the button is omitted rather than faked.
           */}
 
-          <span
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary font-title-md text-title-md font-semibold text-on-primary"
-            title={userEmail ?? 'Signed out'}
+          <div
+            className="relative"
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setProfileOpen(false)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && profileOpen) {
+                setProfileOpen(false)
+                profileButton.current?.focus()
+              }
+            }}
           >
-            {userEmail ? userEmail.slice(0, 1).toUpperCase() : <Power size={16} aria-hidden="true" />}
-          </span>
+            <button
+              ref={profileButton}
+              type="button"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary font-title-md text-title-md font-semibold text-on-primary transition-shadow hover:ring-2 hover:ring-primary/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              title={userEmail ?? 'Profile'}
+              aria-label="Open profile menu"
+              aria-haspopup="menu"
+              aria-expanded={profileOpen}
+              onClick={() => setProfileOpen((open) => !open)}
+            >
+              {userEmail ? userEmail.slice(0, 1).toUpperCase() : <Power size={16} aria-hidden="true" />}
+            </button>
+            {profileOpen && (
+              <div
+                className="absolute right-0 top-11 z-50 w-60 overflow-hidden rounded-xl border border-outline-variant bg-surface-container-lowest p-1.5 shadow-xl"
+                role="menu"
+                aria-label="Profile menu"
+              >
+                <div className="truncate px-3 py-2 font-body-sm text-body-sm text-on-surface-variant" title={userEmail ?? undefined}>
+                  {userEmail ?? 'Signed in'}
+                </div>
+                <div className="my-1 border-t border-surface-container" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left font-body-sm text-body-sm text-on-surface transition-colors hover:bg-surface-container-low focus-visible:bg-surface-container-low focus-visible:outline-none"
+                  onClick={() => {
+                    setProfileOpen(false)
+                    onLogout()
+                  }}
+                >
+                  <LogOut size={16} aria-hidden="true" />
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </header>

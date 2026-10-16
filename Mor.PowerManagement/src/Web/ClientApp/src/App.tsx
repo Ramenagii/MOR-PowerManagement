@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
-import { LogOut, RotateCcw } from 'lucide-react'
+import { RotateCcw } from 'lucide-react'
 import {
   ApiError,
   activateOutlet,
@@ -48,10 +48,8 @@ type Session = 'checking' | 'authed' | 'login' | 'offline'
  */
 const DASHBOARD_POLL_MS = 500
 
-// The intro overlay used to hold the whole app behind it for 3.6 s, which read
-// as a hang on every load. It is a brand beat, not a wait: long enough to read,
-// short enough that the console is usable immediately.
-const INTRO_MS = 700
+// Let the full logo and circuit animation resolve before revealing the console.
+const INTRO_MS = 3400
 
 // Route transitions are 0.48-0.56 s, which is cinema pacing for an operations
 // screen an operator may switch several times a minute.
@@ -166,9 +164,9 @@ function App() {
   }, [session, refreshFromBackend])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setIntroDone(true), INTRO_MS)
+    const timer = window.setTimeout(() => setIntroDone(true), prefersReducedMotion ? 0 : INTRO_MS)
     return () => window.clearTimeout(timer)
-  }, [introKey])
+  }, [introKey, prefersReducedMotion])
 
   useEffect(() => {
     document.body.classList.toggle('intro-active', !introDone)
@@ -477,6 +475,7 @@ function App() {
           systemState={currentState}
           deviceOnline={deviceOnline}
           userEmail={userEmail}
+          onLogout={handleLogout}
         />
 
         {/*
@@ -570,10 +569,6 @@ function App() {
               <button type="button" className="ant-btn ant-btn-default" onClick={replayIntro}>
                 <RotateCcw size={16} className="text-outline" aria-hidden="true" />
                 Replay intro
-              </button>
-              <button type="button" className="ant-btn ant-btn-default" onClick={handleLogout}>
-                <LogOut size={16} className="text-outline" aria-hidden="true" />
-                Sign out
               </button>
             </div>
           </footer>

@@ -200,9 +200,8 @@
 //
 //   - MUST CHANGE if a different shunt is fitted: INA226_MAX_CURRENT_AMPS /
 //     INA226_SHUNT_OHM must be re-checked against the shunt actually in the
-//     path. They are 2 A / 0.1 Ohm because that is the part on this board, not
-//     because a particular load needs it - a low-current rail sitting far below
-//     full scale is expected, not a fault.
+//     path. They are 0.75 A / 0.1 Ohm: 75 mV shunt full-scale, inside the
+//     INA226's +/-81.9 mV input range with margin for shunt tolerance.
 //   - DOES NOT CHANGE: the CH1-4 CT chain (ADS1220, ZMCT_CAL_FACTOR, the
 //     piecewise curve, the adaptive EMA). Current is measured by the CTs and is
 //     entirely independent of the INA226 and of MAINS_FIXED_VOLTS.
@@ -254,26 +253,22 @@
 // shunt value scales EVERY current and watt reading - a wrong shunt value on a
 // healthy sensor is indistinguishable from a dead sensor on the dashboard.
 //
-// WAS 8 A full scale on a 10 mOhm shunt. NOW 2 A full scale on a 100 mOhm
-// shunt, matching the physical part actually in this rig and the reference
-// sketch's `ina226.setResistorRange(0.1, 2.0)` (which is shuntOhms, maxAmps).
-// PROVENANCE: the shunt is a COMPONENT ON THE BOARD, readable off the part
-// marking, not a bench fit. 0.1 Ohm is 10x the 0.01 Ohm the previous values
-// assumed, so every DC current and watt reading on this sensor was reporting
-// 10x HIGH - the 10x is not an estimate, it is the ratio of the two parts.
+// The physical shunt is 100 mOhm. The INA226 shunt input is limited to
+// +/-81.9 mV, so max current must satisfy Imax * Rshunt <= 81.9 mV. A 0.75 A
+// range requests 75 mV and leaves margin for shunt tolerance. The old 2 A /
+// 100 mOhm pair requested 200 mV; the library rejected calibration and left
+// computed current and power at zero even while raw shunt millivolts changed.
+// The shunt is a component on the board, read from its marking, not a bench fit.
 //
 // Consequences to keep in mind before trusting a CH5 reading:
-//   - A 2 A full scale is ~400x what a USB rail actually draws, so the reading
-//     will be a small fraction of full scale. That is the correct place for a
-//     low-current rail to sit on a 2 A part; it is not evidence of a fault.
-//   - Past ~2 A the INA226 saturates at the ADC. A fault on the rail that draws
-//     more than 2 A will therefore read as a flat maximum rather than as an
+//   - Past ~0.75 A the INA226 saturates at the ADC. A fault on the rail that draws
+//     more than 0.75 A will therefore read as a flat maximum rather than as an
 //     over-range flag. CH5 has no relay (USB_OUTLET_NO_RELAY), so nothing on
 //     the rig will open a breaker for it - watch this rail, do not trust it to
 //     detect its own overload.
 //   - MAINS_FIXED_VOLTS and the CH1-4 CT chain are untouched by any of this:
 //     current on those channels is measured by CTs, not by this sensor.
-#define INA226_MAX_CURRENT_AMPS 2.0f
+#define INA226_MAX_CURRENT_AMPS 0.75f
 #define INA226_SHUNT_OHM 0.1f
 // NOTE (2026-10-16, mains is now fixed): this value is now IDENTICAL to
 // MAINS_FIXED_VOLTS - it is 238.0 either way (it was 228.0 until the same pass
@@ -689,6 +684,55 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 6 };
 // If a real transient ever has to be caught faster than the 2 s
 // METER_INTERVAL_MS sweep already allows, that is a sampling-period question for
 // the watchdog budget above - not a reason to publish step-contaminated RMS.
+
+// ---- Post-CLOSE settle blanking (CLOSE_SETTLE_WINDOWS) ----
+// ONE new tunable, and it is a COUNT OF WINDOWS, not a time and not a
+// calibration: how many FULL sweeps after a relay CLOSE have their CT windows
+// discarded before the branch is measured and published again.
+//
+// WHY IT EXISTS - the 2026-10-16 second observation on this rig. The version
+// stamp above kills the window that CONTAINS a transition, and that alone left
+// a residual spike: a 792 W / 3.33 A phantom was still seen on the GUI for one
+// to two batches after a CH1 close, while the branch's entire 15-minute history
+// peaked at 121 W. The spanning-window drop is not sufficient, because a CLOSE
+// does not end when the pin changes level. Two physical effects outlive it:
+//   - CONTACT BOUNCE. The mechanical contacts make/break several times over
+//     milliseconds around the transition, so the window AFTER the spanning one
+//     can still straddle a residual step.
+//   - CAPACITIVE INRUSH. Switching a load on charges its input capacitance
+//     (switch-mode PSU bulk caps, motor/transformer windings, lamp filaments),
+//     which is a real current surge for the first few AC cycles and is settled
+//     well before the branch reaches its steady draw.
+// Both are exactly what the mean-subtracted RMS reports as signal, and the
+// adaptive EMA snaps through anything above ZMCT_ADAPTIVE_STEP_AMPS, so the
+// fake value is published untouched and then lingers.
+//
+// WHICH DIRECTION. CLOSE ONLY, and the asymmetry is deliberate:
+//   - CLOSE is the noisy direction (bounce + inrush), so it gets the extra
+//     blanked window.
+//   - OPEN keeps the existing single spanning-window drop. Cutting a load
+//     removes current immediately; there is no inrush, and the residual
+//     settling that does exist decays toward zero - which is the safe
+//     direction to publish. Blanking OPEN too would hide the operator's own
+//     disconnect taking effect for longer than it already takes, for no
+//     measured benefit.
+//
+// WHAT IT IS NOT: it is not a latch (nothing holds the channel until some later
+// event clears it - it is a fixed window count), it is not a delay or a retry
+// loop, and it does not touch the window length, the piecewise curve, the EMA
+// weights, the noise floor, ZMCT_CAL_FACTOR, the PGA or the VREF. None of those
+// numbers was ever the fault: they are all calibrated against STEADY-STATE
+// loads, and a contact bounce is not a steady state.
+//
+// 1 = discard the NEXT one full sweep after a close (the spanning window is
+//     already discarded by the version stamp, so a close costs at most two
+//     held readings, i.e. held values for up to ~2 x METER_INTERVAL_MS).
+// 0 = spanning-window drop only, i.e. exactly the previous behaviour.
+// Raising it above 1 hides more of a real load ramp for longer and is only
+// justified by a measurement, not by suspicion. On this rig the whole close
+// transient is gone by the second sweep, so 1 is the setting the bench
+// evidence supports; do not climb it because one batch was still settling.
+#define CLOSE_SETTLE_WINDOWS 1
 
 // NC (normally closed) contact wiring, as built on the bench:
 //   power PASSES while the relay coil is idle  (pin HIGH)

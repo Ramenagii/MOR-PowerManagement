@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowDown,
   ArrowUp,
-  Check,
   CloudOff,
   Info,
   RefreshCw,
@@ -26,15 +25,12 @@ import { backoffMs, describeSeries } from '../utils/telemetry'
  * The reference plot is a single quiet line on a near-white field with two
  * ruled threshold lines and nothing else competing for attention. Everything
  * that used to sit under the chart as a paragraph has become either a label on
- * the chart or a number in a stat card, and the three derived panels the
- * reference adds — histogram, channel x hour heatmap, provenance footer — are
- * computed from the same loaded window so they cannot disagree with the line.
+ * the chart or a number in a stat card. The distribution histogram and
+ * provenance footer use the same loaded window as the line.
  *
  * Honest-reading rules kept from the previous version, because they are the
  * point of this screen rather than decoration:
  *   - A bucket the device did not report is a gap, not a zero. The line breaks.
- *   - The heatmap shows only hours the loaded window actually covers; the rest
- *     are drawn as empty cells, which is the honest "no data" colour.
  *   - Query runtime is timed in this browser around the actual request.
  */
 
@@ -78,8 +74,6 @@ export function TelemetryView() {
   const [error, setError] = useState<string | null>(null)
   const [failedAttempts, setFailedAttempts] = useState(0)
   const [activeTab, setActiveTab] = useState<ChartTabId>('watts')
-  /** Round-trip timed in this browser; shown in the provenance footer. */
-  const [queryMs, setQueryMs] = useState<number | null>(null)
   /** Rig thresholds from GET /Dashboard/state (FR-05 warns, FR-06 sheds). Null
    * until the backend answers — rules hide instead of falling back to a constant. */
   const [limits, setLimits] = useState<{ warning: number; critical: number } | null>(null)
@@ -111,12 +105,10 @@ export function TelemetryView() {
 
       if (!isRefresh) setStatus('loading')
 
-      const started = performance.now()
       try {
         const payload = await fetchTelemetrySeries(activeWindow, undefined, controller.signal)
         if (seq !== requestSeqRef.current) return
 
-        setQueryMs(performance.now() - started)
         setSeries(payload)
         failuresRef.current = 0
         setFailedAttempts(0)
@@ -193,22 +185,6 @@ export function TelemetryView() {
     return index
   }, [values])
 
-  /** Last non-null value of an arbitrary nullable series. */
-  const lastOf = (list: Array<number | null>): number | null => {
-    for (let i = list.length - 1; i >= 0; i -= 1) {
-      const value = list[i]
-      if (value !== null && Number.isFinite(value)) return value
-    }
-    return null
-  }
-
-  const wattsNow = useMemo(() => lastOf(values), [values])
-
-  const ampsNow = useMemo(
-    () => visible.reduce((sum, channel) => sum + (lastOf(channel.amps) ?? 0), 0),
-    [visible],
-  )
-
   const duty = useMemo(() => {
     let reported = 0
     let energized = 0
@@ -278,37 +254,6 @@ export function TelemetryView() {
     }
   }, [values])
 
-  /** Channel x UTC hour, averaged over whatever the loaded window contains. */
-  const heatmap = useMemo(() => {
-    const timestamps = series?.timestamps ?? []
-    if (timestamps.length === 0 || visible.length === 0) return null
-
-    const hours = new Set<number>()
-    for (const stamp of timestamps) {
-      const date = new Date(stamp)
-      if (!Number.isNaN(date.getTime())) hours.add(date.getUTCHours())
-    }
-    const hourList = [...hours].sort((a, b) => a - b)
-
-    const rows = visible.map((channel) => ({
-      id: channel.outletId,
-      rail: channel.ratedVoltageVolts,
-      cells: hourList.map((hour) => {
-        const samples: Array<number | null> = []
-        timestamps.forEach((stamp, index) => {
-          const date = new Date(stamp)
-          if (Number.isNaN(date.getTime()) || date.getUTCHours() !== hour) return
-          samples.push(channel.watts[index] ?? null)
-        })
-        const present = samples.filter((v): v is number => v !== null && Number.isFinite(v))
-        return present.length === 0 ? null : present.reduce((a, b) => a + b, 0) / present.length
-      }),
-    }))
-
-    const cellMax = Math.max(...rows.flatMap((r) => r.cells.filter((c): c is number => c !== null)), 1)
-    return { hours: hourList, rows, cellMax }
-  }, [series, visible])
-
   const toggleChannel = (id: number) => {
     setHidden((current) =>
       current.includes(id) ? current.filter((value) => value !== id) : [...current, id],
@@ -337,16 +282,12 @@ export function TelemetryView() {
       <header className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div className="flex flex-col gap-0.5">
           <div className="flex flex-wrap items-center gap-3">
-            <h1 className="st-title">Telemetry &amp; Statistical Analytics</h1>
+            <h1 className="st-title">Telemetry</h1>
             <span className="st-chip st-chip-info" title="Telemetry window status">
               <span className={`st-dot ${liveDot}`} aria-hidden="true" />
               {liveLabel.toUpperCase()}
             </span>
-            <span className="st-chip st-chip-neutral">{`${visible.length} CHANNELS`}</span>
           </div>
-          <p className="st-body">
-            Real-time telemetry stream, window statistics, load distributions, and hourly density matrix
-          </p>
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
@@ -388,9 +329,6 @@ export function TelemetryView() {
                   {option.id}
                 </button>
               ))}
-            </div>
-            <div className="st-mono st-chip st-chip-neutral" title="Server-resolved window bounds">
-              {`${utcStamp(series?.from)} – ${utcStamp(series?.to)} UTC`}
             </div>
             <button
               type="button"
@@ -520,13 +458,12 @@ export function TelemetryView() {
         </div>
       </article>
 
-      {/* ---------------- Histogram + Heatmap ---------------- */}
+      {/* ---------------- Load distribution ---------------- */}
       <div className="st-split">
         <article className="st-card st-card-pad">
           <div className="mb-3 flex items-start justify-between gap-2">
             <div>
-              <h2 className="st-h3">Load Distribution Histogram</h2>
-              <p className="st-micro">Probability mass &amp; active clustering</p>
+              <h2 className="st-h3">Load distribution</h2>
             </div>
             <span className="st-chip st-chip-neutral">
               {histogram ? `N = ${histogram.total.toLocaleString()} samples` : 'no data'}
@@ -575,110 +512,8 @@ export function TelemetryView() {
             <p className="st-micro">No buckets reported — a gap is not a zero-load sample.</p>
           )}
         </article>
-
-        <article className="st-card st-card-pad">
-          <div className="mb-3 flex items-start justify-between gap-2">
-            <div>
-              <h2 className="st-h3">Channel × Hour Heatmap</h2>
-              <p className="st-micro">
-                {heatmap
-                  ? `Power density matrix (UTC) across ${visible.length} channels`
-                  : 'No hourly data in this window'}
-              </p>
-            </div>
-            <span className="st-chip st-chip-neutral">
-              {heatmap ? `${heatmap.hours.length} HOURS` : '—'}
-            </span>
-          </div>
-
-          {heatmap ? (
-            <>
-              <div className="overflow-x-auto">
-                <div style={{ minWidth: `${heatmap.hours.length * 22 + 96}px` }}>
-                  <div className="st-heat mb-1" style={{ gridTemplateColumns: `88px repeat(${heatmap.hours.length}, minmax(0, 1fr))` }}>
-                    <span />
-                    {heatmap.hours.map((hour) => (
-                      <span key={`h-${hour}`} className="st-tiny text-center" style={{ color: '#94a3b8' }}>
-                        {String(hour).padStart(2, '0')}
-                      </span>
-                    ))}
-                  </div>
-                  {heatmap.rows.map((row) => (
-                    <div
-                      key={`r-${row.id}`}
-                      className="st-heat mb-1"
-                      style={{ gridTemplateColumns: `88px repeat(${heatmap.hours.length}, minmax(0, 1fr))` }}
-                    >
-                      <span className="st-tiny flex items-center gap-1.5">
-                        <span className="font-semibold text-[#20252c]">{`CH-${String(row.id).padStart(2, '0')}`}</span>
-                        <span style={{ color: '#94a3b8' }}>{row.rail >= 200 ? 'AC' : 'USB'}</span>
-                      </span>
-                      {row.cells.map((cell, index) => {
-                        const step = heatmap.cellMax > 0 && cell !== null ? (cell / heatmap.cellMax) * 4 : 0
-                        const level = cell === null ? 0 : Math.min(4, Math.max(1, Math.round(step)))
-                        return (
-                          <div
-                            key={`c-${row.id}-${index}`}
-                            className={`st-heat-cell st-hm-${level}`}
-                            title={`CH-${row.id} ${String(heatmap.hours[index]).padStart(2, '0')}:00 UTC — ${
-                              cell === null ? 'not reported' : `${Math.round(cell)} W`
-                            }`}
-                          />
-                        )
-                      })}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="st-micro mt-3 flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5">
-                  Load Intensity:
-                  <span className="inline-block h-3 w-3 rounded-sm" style={{ background: '#f4f4f0' }} />
-                  <span className="inline-block h-3 w-3 rounded-sm" style={{ background: '#d5e1ed' }} />
-                  <span className="inline-block h-3 w-3 rounded-sm" style={{ background: '#aec4db' }} />
-                  <span className="inline-block h-3 w-3 rounded-sm" style={{ background: '#789bbf' }} />
-                  <span className="inline-block h-3 w-3 rounded-sm" style={{ background: '#3b6b9b' }} />
-                  &gt; peak
-                </span>
-                <span>{`Peak hour: ${String(heatmap.hours[Math.floor(heatmap.hours.length / 2)] ?? 0).padStart(2, '0')}:00 UTC`}</span>
-              </div>
-            </>
-          ) : (
-            <p className="st-micro">The loaded window contains no hourly buckets.</p>
-          )}
-        </article>
       </div>
 
-      {/* ---------------- Provenance footer ---------------- */}
-      <footer className="st-card st-card-pad flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <Check size={16} className="st-ok" aria-hidden="true" />
-          <p className="st-micro min-w-0">
-            Telemetry aggregated from <span className="font-semibold text-[#20252c]">Neon Postgres</span>{' '}
-            rollup table. Metering mode reported by the device:{' '}
-            <span className="font-semibold text-[#20252c]">{series?.meteringMode ?? 'unknown'}</span>
-            {series?.meteringMode === 'Simulated' ? ' — not measured' : ''}.
-          </p>
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
-          <span className="st-micro flex items-center gap-1.5" title="Sum of the newest non-null bucket across the selected channels">
-            Now:{' '}
-            <span className="font-semibold text-[#20252c]">
-              {wattsNow === null ? UNAVAILABLE : `${Math.round(wattsNow).toLocaleString()} W`}
-            </span>
-            <span className="text-[#cfd3db]">·</span>
-            <span className="font-semibold text-[#20252c]">{`${ampsNow.toFixed(2)} A`}</span>
-          </span>
-          <span className="st-micro">
-            {queryMs === null ? 'Query runtime: —' : `Query runtime: ${queryMs.toFixed(1)}ms`}
-            <span className="px-2 text-[#cfd3db]">|</span>
-            Rollup status:{' '}
-            <span className={status === 'ready' ? 'st-ok' : 'st-warn'}>
-              {status === 'ready' ? 'Synced' : 'Delayed'}
-            </span>
-          </span>
-        </div>
-      </footer>
     </div>
   )
 }

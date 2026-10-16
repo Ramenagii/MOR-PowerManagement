@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="17 3 94 140" fill="none">
+  <defs>
+    <linearGradient id="shield" x1="64" y1="47" x2="64" y2="137" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#2EC4F1"/><stop offset=".52" stop-color="#1E88E5"/><stop offset="1" stop-color="#0D47A1"/>
+    </linearGradient>
+    <linearGradient id="shade" x1="56" y1="90" x2="106" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0B2A4A" stop-opacity="0"/><stop offset=".58" stop-color="#0B2A4A" stop-opacity=".03"/><stop offset="1" stop-color="#0B2A4A" stop-opacity=".34"/>
+    </linearGradient>
+    <clipPath id="shield-clip"><path d="M32 47h64a7 7 0 0 1 7 7v29c0 22-18 41-39 54a8 8 0 0 1-8 0C35 124 25 105 25 83V54a7 7 0 0 1 7-7Z"/></clipPath>
+  </defs>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M42 48V27" stroke="#1E88E5" stroke-width="5"/><path d="M64 48V19" stroke="#1E88E5" stroke-width="5"/><path d="M86 48V32" stroke="#0B2A4A" stroke-width="5"/>
+    <circle cx="42" cy="19" r="7" stroke="#1E88E5" stroke-width="5"/><circle cx="64" cy="11" r="7" stroke="#1E88E5" stroke-width="5"/><circle cx="86" cy="24" r="7" stroke="#0B2A4A" stroke-width="5"/>
+  </g>
+  <path d="M32 47h64a7 7 0 0 1 7 7v29c0 22-18 41-39 54a8 8 0 0 1-8 0C35 124 25 105 25 83V54a7 7 0 0 1 7-7Z" fill="url(#shield)"/>
+  <rect x="56" y="47" width="52" height="96" fill="url(#shade)" clip-path="url(#shield-clip)"/>
+  <rect x="43" y="65" width="42" height="43" rx="10" fill="#fff"/>
+  <g fill="#0B2A4A"><rect x="52" y="74" width="6" height="16" rx="3"/><rect x="70" y="74" width="6" height="16" rx="3"/><path d="M59 97q5 6 10 0" fill="none" stroke="#0B2A4A" stroke-width="4" stroke-linecap="round"/></g>
+</svg>

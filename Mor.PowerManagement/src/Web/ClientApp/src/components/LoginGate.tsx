@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react'
+import { Eye, EyeOff, LockKeyhole, Mail, Radio, WifiOff } from 'lucide-react'
+import { motion, useReducedMotion } from 'framer-motion'
 import { login } from '../api'
 import { LoadwiseBrand } from './LoadwiseBrand'
 
@@ -12,6 +14,8 @@ export function LoginGate({ onAuthenticated, onOffline }: LoginGateProps) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
+  const reduceMotion = useReducedMotion()
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -28,45 +32,85 @@ export function LoginGate({ onAuthenticated, onOffline }: LoginGateProps) {
   }
 
   return (
-    <main className="app-shell is-ready">
-      <section className="panel" aria-label="Dashboard login" style={{ maxWidth: 420, margin: '12vh auto' }}>
-        <LoadwiseBrand variant="header" />
-        <div className="section-heading compact">
+    <main className="login-screen">
+      <div className="login-glow login-glow-a" aria-hidden="true" />
+      <div className="login-glow login-glow-b" aria-hidden="true" />
+      <motion.section
+        className="login-card"
+        aria-label="Dashboard login"
+        initial={reduceMotion ? false : { opacity: 0, y: 18, scale: 0.985 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ duration: reduceMotion ? 0 : 0.45, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <div className="login-brand">
+          <LoadwiseBrand variant="login" />
           <div>
-            <p className="eyebrow">Power Management Console</p>
-            <h2>Sign in</h2>
+            <p className="login-eyebrow">MOR POWER</p>
+            <p className="login-brand-name">Power Management</p>
           </div>
         </div>
-        <form onSubmit={submit} style={{ display: 'grid', gap: 12 }}>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Email
-            <input
-              type="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              autoComplete="username"
-              required
-            />
+
+        <div className="login-heading">
+          <span className="login-access-icon"><Radio size={17} aria-hidden="true" /></span>
+          <p>CONTROL CONSOLE</p>
+          <h1>Sign in</h1>
+          <span>Use your administrator account to continue.</span>
+        </div>
+
+        <form className="login-form" onSubmit={submit}>
+          <label className="login-field">
+            <span>Email address</span>
+            <span className="login-input-wrap">
+              <Mail size={17} aria-hidden="true" />
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="username"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder="name@example.com"
+                required
+              />
+            </span>
           </label>
-          <label style={{ display: 'grid', gap: 4 }}>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              autoComplete="current-password"
-              required
-            />
+          <label className="login-field">
+            <span>Password</span>
+            <span className="login-input-wrap">
+              <LockKeyhole size={17} aria-hidden="true" />
+              <input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                autoComplete="current-password"
+                placeholder="Enter your password"
+                required
+              />
+              <button
+                className="login-password-toggle"
+                type="button"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                aria-pressed={showPassword}
+                onClick={() => setShowPassword((show) => !show)}
+              >
+                {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </span>
           </label>
-          {error && <p role="alert">{error}</p>}
-          <button type="submit" disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          <button type="button" onClick={onOffline}>
-            Continue offline (simulated)
+          {error && <p className="login-error" role="alert">{error}</p>}
+          <button className="login-submit" type="submit" disabled={busy}>
+            {busy ? <><span className="login-spinner" aria-hidden="true" /> Signing in…</> : 'Sign in'}
           </button>
         </form>
-      </section>
+
+        <div className="login-divider"><span>OR</span></div>
+        <button className="login-offline" type="button" onClick={onOffline}>
+          <WifiOff size={16} aria-hidden="true" />
+          Explore offline demo
+        </button>
+        <p className="login-footnote">Offline mode uses simulated readings.</p>
+      </motion.section>
+      <p className="login-footer">MOR POWER <span>·</span> POWER MANAGEMENT CONSOLE</p>
     </main>
   )
 }

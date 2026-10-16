@@ -294,7 +294,7 @@ export function DashboardHero({
       {!live && (
         <div className="mp-banner" role="status">
           <span className="num" style={{ color: 'var(--mute)' }}>
-            GET /api/Dashboard/state did not answer — readings below are not live and the controls are disabled.
+            Dashboard offline. Readings and controls are unavailable.
           </span>
           <button type="button" className="mp-btn" onClick={onSignIn}>
             Sign in

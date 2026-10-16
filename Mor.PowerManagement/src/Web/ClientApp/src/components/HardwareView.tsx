@@ -23,7 +23,7 @@ import { Disclosure } from './Disclosure'
  *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1220
  *     four-channel 16-bit ADC over SPI with a CT on EACH mains branch (CH1-CH4),
  *     which is why per-branch current is MEASURED rather than apportioned from a
- *     mains total. An INA226 sits on the 3.3 V DC supply rail as a standalone DC
+ *     mains total. An INA226 connects to the ESP32 over I²C and measures its own DC shunt path
  *     block — it is NOT the mains reference, and nothing else on the rig is. CH5
  *     has no sensor at all — its figure is the rail's nominal rating, and is
  *     labelled as nominal wherever it appears.
@@ -65,7 +65,7 @@ const perOutletParts = [
 const systemParts = [
   'ESP32 DevKit / ESP32-WROOM-32 controller',
   'ADS1220 four-channel 16-bit ADC over SPI — one branch CT per mains outlet',
-  'INA226 DC block on the 3.3V supply rail (100 mOhm shunt, 2 A range)',
+  'INA226 DC shunt monitor on ESP32 I²C (100 mOhm shunt)',
   'I2C bus: SDA = GPIO 8, SCL = GPIO 9',
   'Inverting transistor driver per relay, GPIO 10 to GPIO 14',
   'Isolated 5 V supply such as Mean Well IRM-05-5',
@@ -290,7 +290,7 @@ export function HardwareView() {
               16-bit ADC over SPI · one CT per branch
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
-              INA226 · 3.3V DC rail
+              INA226 · ESP32 I²C · DC shunt
             </p>
           </div>
         </article>
@@ -308,7 +308,7 @@ export function HardwareView() {
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant">
-              INA226 · 3.3V DC rail
+              INA226 · ESP32 I²C · DC shunt
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
               Relay GPIOs 10–14
@@ -523,7 +523,7 @@ export function HardwareView() {
             <p className="mt-2 font-body-sm text-body-sm text-on-surface-variant">
               The INA226 is the only device on this bus. The branch ADC is an{' '}
               <strong className="text-on-surface">ADS1220 on SPI</strong> — SCLK 12, MISO 13, MOSI 11,
-              CS 10, DRDY 14 — so a wiring fault here affects the 3.3V DC block only, not the four
+              CS 10, DRDY 14 — so a wiring fault here affects the INA226 DC shunt readings only, not the four
               mains branches.
             </p>
           </div>

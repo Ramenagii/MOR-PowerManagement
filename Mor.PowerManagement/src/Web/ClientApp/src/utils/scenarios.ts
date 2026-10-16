@@ -53,8 +53,8 @@ export type ScenarioProfile = {
 /**
  * Per-channel electrical model.
  *
- * The rig has ONE INA226 on the common mains feed, so volts and amps are derived,
- * never independently metered. For a channel we know the draw (P) and the rail
+ * The INA226 monitors a separate DC shunt path. Scenario channel volts and amps
+ * are derived, never taken from the INA226. For a channel we know the draw (P) and the rail
  * (V), so I = P / V. For a 5 V USB rail that yields a large current, which is
  * the honest consequence of the derivation rather than a plausible-looking
  * number picked to look right.

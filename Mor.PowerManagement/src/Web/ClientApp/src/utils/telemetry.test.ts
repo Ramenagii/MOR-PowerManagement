@@ -229,7 +229,7 @@ describe('shuntFillPercent', () => {
   it('places the drop inside the converter input range', () => {
     // Full scale is 200 mV: the reference configures `setResistorRange(0.1, 2.0)`
     // — a 100 mOhm shunt on a 2 A range — and the register stores the product.
-    expect(INA226_SHUNT_FULL_SCALE_MV).toBe(200)
+    expect(INA226_SHUNT_FULL_SCALE_MV).toBe(75)
     expect(shuntFillPercent(50)).toBe(25)
     expect(shuntFillPercent(INA226_SHUNT_FULL_SCALE_MV)).toBe(100)
   })

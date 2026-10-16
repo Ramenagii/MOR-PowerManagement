@@ -151,16 +151,12 @@ export const INA226_STALE_SECONDS = 30
  * can be drawn against the range the converter can actually resolve, which turns
  * a bare "3.21 mV" into a position on a scale.
  *
- * 200 mV, not the INA226's 100 mV power-on default. The reference firmware calls
- * `ina226.setResistorRange(0.1, 2.0)` — a 100 mOhm shunt across a 2 A range — and
- * the register that takes holds the PRODUCT, so full-scale is 0.1 V x 2 A = 200 mV.
- * Drawing that rail against 100 mV put every reading past 2 A — which the
- * reference's own `mapFloat(..., 0.500, 2.000, 0.490, 1.960)` calibration treats
- * as the top of its range — permanently pegged at 100%, and pegged rails stop
- * carrying information. Source: `ina226.setResistorRange(0.1, 2.0)` in the
- * reference sketch, alongside `DCBlock` on the 3.3V rail.
+ * 75 mV: the firmware configures a 100 mOhm shunt for 0.75 A, staying within
+ * the INA226's +/-81.9 mV shunt input range. The earlier 2 A setting requested
+ * 200 mV and was rejected by the driver, which left current and power at zero.
+ * This scale must match INA226_MAX_CURRENT_AMPS * INA226_SHUNT_OHM in firmware.
  */
-export const INA226_SHUNT_FULL_SCALE_MV = 200
+export const INA226_SHUNT_FULL_SCALE_MV = 75
 
 export type Ina226Freshness = 'live' | 'stale' | 'unmeasured'
 

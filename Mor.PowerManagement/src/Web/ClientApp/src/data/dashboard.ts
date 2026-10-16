@@ -5,8 +5,8 @@ import type { EventLog, Outlet, Priority } from '../types/dashboard'
 // 5 V USB socket (CH5) that has no relay behind it and is monitored only.
 //
 // The reference device is 4400 W total across four branches capped at 1100 W
-// each (4400 / 1100 / 1100 / 1100), with the mains at 238 V and an INA226 on
-// the 3.3 V DC rail. Those numbers are NOT constants here: they are
+// each (4400 / 1100 / 1100 / 1100), with the mains at 238 V and a separate
+// INA226 DC shunt monitor polled by the ESP32 over I2C. Those numbers are NOT constants here: they are
 // configuration read from GET /Dashboard/state and edited through the Framework
 // admin, so this rig reads whatever the operator saved (4400 / 3520 / 4400 as
 // seeded). A copy of those numbers kept in the client was a measurement the
@@ -360,12 +360,8 @@ export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'No
  * not answered has none. Tooltips that assert a threshold the client is guessing
  * are how a default becomes a specification in someone's head.
  *
- * `ina226` names the RAIL, and it is the 3.3 V DC rail. It used to say "the
- * common mains feed", which is the sentence the whole INA226 card was built on
- * — and on this hardware it is wrong twice over: the converter sits on a DC
- * supply rail, not on the AC feed, and the mains branches are read from a
- * separate reference. A tooltip that puts a 238 V mains reading in the reader's
- * head while the card prints 3.3 V is worse than no tooltip.
+ * The INA226 is a separate DC shunt monitor polled directly by the ESP32 over
+ * I2C. Its current is independent of the branch CTs read through the ADS1220.
  */
 export const DASHBOARD_TIPS = {
   total: 'Sum of every channel the policy engine currently reports as energized. Polled from GET /api/Dashboard/state.',
@@ -380,7 +376,7 @@ export const DASHBOARD_TIPS = {
   live:
     'Live state, polled from GET /api/Dashboard/state. Outlets post telemetry at 1 Hz; the freshness shown is the age of the newest stored sample.',
   ina226:
-    'INA226 on the 3.3V rail: a DC block, not the mains feed. Bus volts, current and power read straight off the converter over a 100 mOhm shunt configured for a 2 A range (200 mV full scale). Past 30 s the sample is treated as unmeasured.',
+    'INA226 polled directly by the ESP32 over I2C. It reports its own DC bus voltage and shunt current; CT branch currents are read separately through the ADS1220. The 100 mOhm shunt is configured for 0.75 A (75 mV full scale). Past 30 s the sample is treated as unmeasured.',
   status:
     'Relay state as the server sends it. OPEN means the relay is open — which is also exactly what a firmware trip and a policy shed look like from here, because DisconnectOutlet and the shed paths write the same value and the wire carries no way to tell them apart. LATCHED is the one state the switch cannot clear: the engine ignores relay reports for a restricted outlet.',
   outlet:

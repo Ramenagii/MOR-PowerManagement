@@ -1,15 +1,22 @@
 {
-  "short_name": "Mor.PowerManagement.Web",
-  "name": "Mor.PowerManagement.Web",
+  "short_name": "MOR Power",
+  "name": "MOR Power Management Console",
   "icons": [
     {
-      "src": "favicon.ico",
-      "sizes": "64x64 32x32 24x24 16x16",
-      "type": "image/x-icon"
+      "src": "/brand/smart-outlet-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/brand/png/smart-outlet-app-icon-1024.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
     }
   ],
   "start_url": "./index.html",
   "display": "standalone",
-  "theme_color": "#000000",
+  "theme_color": "#0B2A4A",
   "background_color": "#ffffff"
 }

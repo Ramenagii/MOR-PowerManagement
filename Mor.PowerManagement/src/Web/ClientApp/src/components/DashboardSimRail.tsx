@@ -44,7 +44,7 @@ export const VECTOR_TIPS: Record<VectorId, string> = {
     'SIM-06 · Idle timeout cutoff\nReports low-draw channels at 5% of draw and closes their relays so the server sees a genuine idle period.\nExpect: the idle timer runs on the server’s own clock.',
 }
 
-export const ENDPOINT_NOTE = 'Pick a vector to send'
+export const ENDPOINT_NOTE = 'Choose an action'
 
 type DashboardSimRailProps = {
   onRun: (id: VectorId) => void
@@ -93,8 +93,7 @@ export function DashboardSimRail({ onRun, notice, busy, live, runs, lastRun }: D
       <p className={`out ${tone}`} role="status">
         {busy ? (
           <>
-            <b>Sending.</b>{' '}
-            <span className="num">posting a telemetry batch to POST /api/Dashboard/scenarios/ingest…</span>
+            <b>Sending…</b>
           </>
         ) : notice ? (
           <>
@@ -103,8 +102,7 @@ export function DashboardSimRail({ onRun, notice, busy, live, runs, lastRun }: D
           </>
         ) : (
           <>
-            <b>Idle.</b> No vector has been run. The result quotes the server&apos;s response verbatim: rows
-            stored, total watts, and the rules the engine raised.
+            <b>Ready.</b>
             {runs > 0 && <span className="num"> {`· ${runs} run${runs === 1 ? '' : 's'} this session`}</span>}
           </>
         )}

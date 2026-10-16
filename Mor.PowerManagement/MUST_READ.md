@@ -70,7 +70,7 @@ arduino-cli lib install "INA226"
 
 | Constant | Value | What breaks if it is wrong |
 |---|---|---|
-| `INA226_SHUNT_OHM` / `INA226_MAX_CURRENT_AMPS` | **0.010 Ω / 8.0 A** | The INA226 derives current from the shunt voltage. A wrong pair scales **every** current and watt reading on the dashboard. Using `configure(0.1, 0.1, …)` produced 0.000 A on all four channels while the sensor was healthy. |
+| `INA226_SHUNT_OHM` / `INA226_MAX_CURRENT_AMPS` | **0.1 Ω / 0.75 A** | The INA226 shunt input is limited to ±81.9 mV, so `Imax × Rshunt` must stay below that. The old 2 A × 0.1 Ω pair requested 200 mV; the library rejected calibration and `getCurrent()` / `getPower()` stayed at 0 while raw shunt mV changed. Firmware now checks and reports calibration failure. |
 | `INA226_MAIN_VOLT_DIVIDER` | **9.46** | Reported volts. 24.1 V at the pin × 9.46 = 228 V. |
 | `I2C_CLOCK_HZ` | **100000** | A 400 kHz build found *neither* I²C device on the current wiring. If sensors vanish, check the bus first, then this. |
 | `ZMCT_CAL_FACTOR` | **0.52** | Every branch amp is this × the measured RMS. **Untrusted — see §12.** Calibrate against a known load. |
@@ -451,10 +451,14 @@ What the rig actually does right now, as opposed to what the design intends.
 - Relays and rules are disabled (RELAY_OUTPUT_ENABLED 0, RULES_ENABLED 0), so nothing can shed or trip
 
 **Three honest gaps to resolve before the write-up:**
-1. **The INA226 is not a mains power meter.** It sits on a 24 V DC rail that is
-   drawing ~0 A, so mains power and kWh read ~0. It is currently useful only as
-   the voltage reference (24.1 V x 9.46). Either rewire it to the mains feed, or
-   describe it in the manuscript as a voltage reference, not as P_total.
+1. **The INA226 is not a mains power meter.** It currently sits on the rig's 24 V
+   DC rail, so it does not measure mains power or contribute to mains P_total.
+   The old 2 A / 0.1 Ω calibration requested 200 mV from an 81.9 mV-limited
+   shunt input; the library rejected it and current/power stayed at zero while
+   raw shunt mV changed. The firmware now uses 0.75 A / 0.1 Ω (75 mV full scale)
+   and reports calibration errors at boot. Verify its live current against a
+   meter under load. Rewire it before treating it as the intended 3.3 V or USB
+   rail measurement.
 2. **Branch volts are measured; the raw sketch's AC_VOLTAGE is assumed.**
    The framework firmware multiplies measured branch current by the measured
    INA226 voltage. The standalone raw sketch instead assumes a constant 238 V

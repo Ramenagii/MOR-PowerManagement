@@ -784,7 +784,7 @@ export function PoliciesView() {
               </h2>
             </div>
             <p className="font-body-md text-body-md text-on-surface-variant">
-              The ESP32 synchronises outlet states, polls the INA226 on the mains feed and the ADS1015
+              The ESP32 synchronises outlet states, polls the INA226 over I²C for its DC bus and shunt readings, and polls the ADS1015
               on the branch sensors, evaluates the rules above in ascending precedence, and executes one
               deterministic relay action. Activation is always pre-check, then a 500 ms stabilization
               delay, then post-activation verification — and a standby channel is still connected and

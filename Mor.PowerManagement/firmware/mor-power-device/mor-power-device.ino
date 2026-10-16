@@ -84,6 +84,8 @@
 #include "config.h"
 
 INA226 ina226(INA226_ADDR);
+static_assert(INA226_MAX_CURRENT_AMPS * INA226_SHUNT_OHM <= 0.08190f,
+              "INA226 max-current x shunt drop exceeds its 81.9 mV input range");
 
 // The ADS1220 is the ONLY user of SPI on this board. The pins are given
 // explicitly because they are not the ESP32-S3 VSPI defaults (10/12/11/13 would
@@ -231,6 +233,25 @@ volatile uint32_t relayStateVersion = 0;
 // stamp the version once for nothing.
 int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
 
+// A close can still leave contact bounce or input-capacitor inrush in the next
+// complete CT window after the transition-spanning window was discarded. Keep
+// this per outlet because each sensor window is collected at a different time.
+// Core 1 sets the counters and core 0 consumes them, so guard the tiny
+// read/decrement and set operations with a FreeRTOS port mux.
+volatile uint8_t relayCloseSettleRemaining[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
+portMUX_TYPE relaySettleMux = portMUX_INITIALIZER_UNLOCKED;
+
+bool consumeRelayCloseSettleWindow(uint8_t outlet) {
+  bool discard = false;
+  portENTER_CRITICAL(&relaySettleMux);
+  if (relayCloseSettleRemaining[outlet] > 0) {
+    relayCloseSettleRemaining[outlet]--;
+    discard = true;
+  }
+  portEXIT_CRITICAL(&relaySettleMux);
+  return discard;
+}
+
 // The monitored-only channel (the USB socket) is SKIPPED: RELAY_PINS[idx] there
 // is a reserved placeholder, not a wired relay, and driving it would switch a
 // pin that goes nowhere while the dashboard implied the socket had been cut.
@@ -247,6 +268,13 @@ void applyRelays() {
     // level is not a transition and must not cost a CT window.
     const int8_t before = (int8_t)digitalRead(RELAY_PINS[i]);
     digitalWrite(RELAY_PINS[i], target);
+    if (before != target) {
+      portENTER_CRITICAL(&relaySettleMux);
+      relayCloseSettleRemaining[i] = relayClosedDesired[i]
+          ? CLOSE_SETTLE_WINDOWS
+          : 0;
+      portEXIT_CRITICAL(&relaySettleMux);
+    }
     if (relayAppliedLevel[i] < 0 || before != target) {
       relayAppliedLevel[i] = target;
       changed = true;
@@ -307,6 +335,7 @@ float inaPower_W = 0.0;
 //                      than return a clean zero)
 // Either way the device still connects, still posts, and reports the fault.
 bool ina226Present = false;
+bool ina226CalibrationValid = false;
 bool ads1220Present = false;
 
 // Per-branch CT current, index 0 = CH1 (ADS1220 AIN0/AVSS) .. index 3 = CH4
@@ -433,19 +462,24 @@ void setup() {
   // either way - they are a FIXED 238 V constant, not a sensor reading.
   ina226Present = ina226.begin();
   if (ina226Present) {
-    // Max current first, then shunt: 2 A full scale on a 100 mOhm shunt, which
-    // is the part physically fitted on this board (see INA226_SHUNT_OHM). The
-    // previous 8 A / 10 mOhm pairing assumed a mains-side shunt that is not
-    // here, and because current is derived from shunt volts it reported every
-    // DC reading 10x HIGH. Wrong values scale every current and watt reading
-    // on this sensor, so they are stated at boot rather than left implicit.
-    ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
+    // The requested full-scale drop must stay below the INA226's +/-81.9 mV
+    // shunt range. Check the result: an invalid pair leaves the library's
+    // current LSB unset, so getCurrent()/getPower() read as zero while raw
+    // shunt millivolts still move.
+    const int calibrationStatus =
+        ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
+    ina226CalibrationValid = calibrationStatus == INA226_ERR_NONE;
+    if (!ina226CalibrationValid) {
+      Serial.print("INA226 calibration FAILED (status 0x");
+      Serial.print(calibrationStatus, HEX);
+      Serial.println("): current/power invalid; require Imax * Rshunt <= 81.9 mV.");
+    }
     Serial.print("INA226  OK  (0x");
     Serial.print(INA226_ADDR, HEX);
     Serial.print(") - outletId ");
     Serial.print(USB_OUTLET_ID);
     Serial.print(" 3.3V rail monitor, ");
-    Serial.print(INA226_MAX_CURRENT_AMPS, 1);
+    Serial.print(INA226_MAX_CURRENT_AMPS, 2);
     Serial.print("A/");
     Serial.print(INA226_SHUNT_OHM, 3);
     Serial.print("Ohm shunt, bus expected ~3.3 V (raw busV/shuntA). ");
@@ -653,7 +687,7 @@ void loop() {
     // never held while waiting on dataMutex.
     if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
       busV   = ina226.getBusVoltage();       // V at the INA226 bus pin (~3.3 V expected)
-      // Shunt 0.1 Ohm / 2 A full scale - the part actually fitted, not the
+      // Shunt 0.1 Ohm / 0.75 A full scale - the part actually fitted, not the
       // 10 mOhm mains-side shunt these getters used to be annotated with. The
       // annotation mattered: it is the scale every current and watt figure on
       // this sensor is multiplied by, and it was 10x the real part.
@@ -735,6 +769,7 @@ void sensorTask(void *pvParameters) {
     // Per-channel: this window straddled a relay transition and is therefore not
     // a measurement of any steady state. Set below, acted on under dataMutex.
     bool staleDrop[BRANCH_CT_COUNT] = { false, false, false, false };
+    bool closeSettleDrop[BRANCH_CT_COUNT] = { false, false, false, false };
     bool anyStaleDrop = false;
 
     for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
@@ -770,21 +805,29 @@ void sensorTask(void *pvParameters) {
         // window is clean, so one drop per transition is the whole cost.
         staleDrop[ch] = true;
         anyStaleDrop = true;
+      } else if (consumeRelayCloseSettleWindow(ch)) {
+        // The spanning window was already rejected above. Reject this one
+        // additional complete window after a close to cover contact bounce and
+        // short inrush that can survive the pin transition itself.
+        staleDrop[ch] = true;
+        closeSettleDrop[ch] = true;
+        anyStaleDrop = true;
       } else {
         calibrated[ch] = applyPiecewiseCalibration(raw[ch].amps);
       }
     }
 
     if (anyStaleDrop) {
-      Serial.print("[SWEEP] relay transition inside the window on CH");
+      Serial.print("[SWEEP] discarded CT window on ");
       for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
         if (staleDrop[ch]) {
+          Serial.print("CH");
           Serial.print(ch + 1);
-          if (ch + 1 < BRANCH_CT_COUNT) Serial.print(",");
+          Serial.print(closeSettleDrop[ch] ? " (post-close settle)" : " (relay moved mid-window)");
+          Serial.print("; ");
         }
       }
-      Serial.println(" - window DISCARDED (a step is not an RMS): holding the");
-      Serial.println("[SWEEP]   previous amps, raw marked stale. Next sweep is clean.");
+      Serial.println("holding previous amps; raw marked stale.");
     }
 
     // The sweep must leave IDLE0 a scheduler slot inside every period, or the
@@ -989,7 +1032,7 @@ void printSerialTelemetry() {
     // fresh one - this is the one-frame-at-a-time artefact the step-drop causes
     // and it is the price paid for never posting a phantom spike.
     if (stale[ch]) {
-      Serial.print(" | raw STALE-DROPPED (relay moved mid-window, previous amps held)");
+      Serial.print(" | raw STALE-DROPPED (transition/settle window, previous amps held)");
     }
     Serial.println();
   }
@@ -1151,7 +1194,7 @@ bool postTelemetry() {
   // rule condition at all, and claiming a fault it never evaluated would be as
   // dishonest as claiming none. It is raised exactly when a sensor is missing,
   // which is a condition setup() DID evaluate and can therefore speak to.
-  doc["faultFlag"] = !(ina226Present && ads1220Present);
+  doc["faultFlag"] = !(ina226Present && ina226CalibrationValid && ads1220Present);
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   // The INA226's OWN readings, not derived branch figures. Until now these were

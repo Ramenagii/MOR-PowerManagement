@@ -73,12 +73,11 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
         if (assessment.Verdict == ActivationVerdict.Allowed)
         {
             outlet.Status = OutletStatus.Active;
-            // The 90W floor keeps a freshly closed mains relay from looking idle
-            // to the standby detector. It must not apply to the derived low-
-            // voltage rails: a 5V USB port can never carry 90W, so flooring
-            // there would report a load the port is physically unable to serve.
-            var estimate = Math.Round(outlet.AllowanceWatts * 0.72);
-            outlet.CurrentWatts = outlet.RatedVoltageVolts >= 220 ? Math.Max(90, estimate) : estimate;
+            // Relay state is a control result, not a meter reading. Keep the
+            // measured load at zero until the ESP32 posts a fresh CT sample;
+            // an allowance-based estimate here showed 792 W / 3.33 A as if it
+            // were measured current immediately after relay activation.
+            outlet.CurrentWatts = 0;
             outlet.CommandedAtUtc = now;
 
             _context.PowerEvents.Add(new PowerEvent

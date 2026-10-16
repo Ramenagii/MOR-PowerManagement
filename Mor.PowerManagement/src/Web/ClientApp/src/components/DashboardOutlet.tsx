@@ -288,8 +288,8 @@ function DashboardOutletRow({ outlet, history, rowIndex, live, mainsVolts, busy,
   // and the tooltip says why.
   //
   // CH5 has no converter of its own, and the one converter on the rig sits on
-  // the 3.3 V DC rail — not the 5 V USB socket, and not the 238 V mains feed.
-  // It used to be handed `ina226.busVolts` as its "volts", which put a 3.3 V
+  // the separate INA226 DC shunt path — not the 5 V USB socket or 238 V mains feed.
+  // It used to be handed `ina226.busVolts` as its "volts", which put a DC
   // figure in the pair on a 5 V socket. `mainsVolts` is already null for that
   // channel, so the pair reads 0 and the tooltip states the reason: nothing on
   // this rig measures that rail.

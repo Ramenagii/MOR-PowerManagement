@@ -112,10 +112,10 @@ type BackendState = {
   recentEvents: BackendEvent[]
   deviceOnline: boolean
   deviceLastSeen: string | null
-  // Live INA226-derived mains volts, averaged over fresh samples. Null when
-  // the device has nothing fresh; callers fall back to the rated rail.
+  // Legacy field: current firmware reports fixed mains voltage separately.
+  // Null when no mains reference is available.
   mainsVolts: number | null
-  // Raw INA226 reading on the common mains feed. Optional AND nullable: the
+  // Raw INA226 DC bus/shunt reading polled by the ESP32 over I2C. Optional AND nullable: the
   // payload predates this field entirely until web-api-client.ts is regenerated,
   // and an absent object must read exactly like one full of nulls.
   ina226?: {
@@ -128,7 +128,7 @@ type BackendState = {
 }
 
 /**
- * One INA226 sample on the mains feed, as the dashboard consumes it.
+ * One INA226 DC bus/shunt sample, polled by the ESP32 over I2C.
  *
  * Every field is nullable and none of them is ever filled in from a default.
  * The whole point of this type is that "the device did not report that" stays

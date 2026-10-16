@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchTelemetrySeries, type Ina226Reading, type TelemetrySeries } from '../api'
 import { POLL_INTERVAL_MS } from '../data/telemetry'
-import { DASHBOARD_TIPS } from '../data/dashboard'
 import type { EventLog, Outlet } from '../types/dashboard'
 import { isEnergizedOutlet, totalLoad } from '../utils/dashboard'
 import { stalenessState } from '../utils/telemetry'
@@ -262,22 +261,6 @@ export function Dashboard({
 
       <h2 className="mp-h">
         <span>Channels</span>
-        {/*
-          Names the sensors, not a volts figure. This header used to print the
-          INA226 reference rail, which put a second copy of the bus voltage on
-          screen that could disagree with the card below it (the header read the
-          server's averaged reference, the card the converter's latest sample)
-          and that fell back to the rated rail whenever the device had nothing
-          fresh. One number, in one place, from one source.
-
-          The trailing count is the reason a row in this list cannot be switched:
-          four branches have a CT and a relay, the fifth is the USB rail and has
-          neither. The row itself says which is which, so this only has to make
-          the shape of the bench legible from across a room.
-        */}
-        <span className="num" title={DASHBOARD_TIPS.outlet}>
-          4 × 238 V mains · branch CT + relay · 1 × 5 V USB · monitored only
-        </span>
       </h2>
       {/* Not "controlled channels": CH5 is in this list and has no control. */}
       {/*
@@ -314,8 +297,8 @@ export function Dashboard({
 
               It used to be handed `ina226.busVolts` as its own, on the claim
               that the INA226 sits on the rail the socket is fed from. It does
-              not: the converter is on the 3.3 V DC rail, so a 5 V USB socket
-              was displaying a 3.3 V figure as though the socket had been
+              not: the converter measures its own DC shunt path, so a 5 V USB socket
+              was displaying an unrelated INA226 figure as though the socket had been
               measured. Passing null makes the row read 0.0 V · 0.00 A with
               the tooltip saying nothing on the rig measures that rail — which
               is a weaker claim than a wrong number, and it is a true one.
@@ -336,7 +319,7 @@ export function Dashboard({
       {/*
         The INA226 sits here, between the branches and the vectors that drive
         them. It is NOT the reference those branches derive against — it is a
-        standalone DC block on the 3.3V rail — so this position is about reading
+        standalone DC shunt monitor polled by the ESP32 over I2C — so this position is about reading
         order rather than signal flow: it is the one card on the page whose
         three headline figures are direct conversions rather than arithmetic on
         somebody else's total, and it belongs where the eye lands after scanning
@@ -345,8 +328,7 @@ export function Dashboard({
       <Ina226Card reading={ina226} live={live} now={now} />
 
       <h2 className="mp-h">
-        <span>Vectors</span>
-        <span className="num">POST /api/Dashboard/scenarios/ingest</span>
+        <span>Actions</span>
       </h2>
       <DashboardSimRail
         onRun={runVector}
@@ -372,12 +354,11 @@ export function Dashboard({
       */}
       {events.length === 0 ? (
         <p className="num" style={{ marginTop: 26, color: 'var(--mute)', fontSize: 12 }}>
-          No policy events yet. GET /api/Dashboard/state returned an empty log; entries appear here the
-          moment the engine raises one — a threshold crossing, a relay action, or a fault lockout.
+          No recent events.
         </p>
       ) : (
         <details className="num" style={{ marginTop: 26, color: 'var(--mute)', fontSize: 12 }}>
-          <summary style={{ cursor: 'pointer' }}>{`${events.length} policy events`}</summary>
+          <summary style={{ cursor: 'pointer' }}>{`Recent events · ${events.length}`}</summary>
           <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
             {events.slice(0, 20).map((event) => (
               <li key={event.id} style={{ marginBottom: 4 }}>
