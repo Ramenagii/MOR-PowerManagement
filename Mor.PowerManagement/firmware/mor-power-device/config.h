@@ -19,9 +19,9 @@
 //                  amps x the ONE mains voltage below, exactly as before.
 //   outletId 5     USB socket, MONITORED ONLY. No CT is fitted, and there is no
 //                  relay: the socket is never actuated by this firmware. Its
-//                  volts/amps/watts come straight off the INA226, which now
-//                  double-duties as the USB rail monitor and the mains voltage
-//                  reference (see the INA226 block below).
+//                  volts/amps/watts come straight off the INA226, which is now
+//                  the 5 V USB rail monitor and nothing else (see the INA226
+//                  block below).
 //
 // Every outlet on this rig therefore has a real sensor behind it: CH1-4 behind
 // a CT, CH5 behind the INA226. Nothing is posted as a fabricated zero or a
@@ -143,53 +143,66 @@
 // pull-ups, verified by an actual bus scan.
 #define I2C_CLOCK_HZ 100000
 
-// ---- INA226: USB rail monitor + mains voltage REFERENCE ----
-// MUST_READ.md section 12 still holds: the INA226 is NOT a mains power meter.
-// It sits on a 24 V DC rail behind a divider, so its current and power
-// registers read ~0 and must never be used as a mains total, as a P_total, or
-// as the basis for any CH1-4 channel's wattage (see the BRANCH_CT_COUNT note
-// below). Its current/power registers are NOT a USB load measurement either on
-// THIS wiring: outlet 5 posts the INA226's own bus volts and shunt current
-// because that is the only rail the socket shares with the sensor. If a USB
-// load is clamped on, the shunt current that appears on outlet 5 IS that load;
-// if the socket is on a different rail than the INA226 shunt, outlet 5 will
-// read that other rail's current - check the wiring before trusting an amps
-// figure on CH5.
+// ---- INA226: 5 V USB RAIL MONITOR (mains is now a fixed constant) ----
+// ROLES REASSIGNED BY OPERATOR DIRECTION, 2026-10-16. Two changes of role:
+//   BEFORE: the INA226 sat on a 24 V DC rail behind a divider and was BOTH the
+//           mains voltage reference (busV x 9.46) and the outlet-5 USB reading.
+//   AFTER:  mains is a FIXED 228 V constant (MAINS_FIXED_VOLTS, below). The
+//           INA226 is ONLY the 5 V USB rail monitor, and its bus pin is
+//           expected to read ~5 V, not ~24 V.
 //
-// WHAT THE INA226 NOW DOES (5-channel rig), two jobs on one sensor:
-//   1. Mains reference. inaBusVoltage_V x INA226_MAIN_VOLT_DIVIDER is the single
-//      mains voltage that CH1-4 volts and CH1-4 watts are both derived from.
-//      UNCHANGED by the 5-channel expansion.
-//   2. USB rail monitor. outletId 5 posts volts = inaBusVoltage_V, amps =
-//      inaCurrent_A, watts = that product. It is the raw bus-pin reading, NOT
-//      the divided mains value: the divider exists to bring a 24 V rail under
-//      the INA226's 36 V limit, and applying it to a USB figure would report a
-//      5 V socket as ~47 V.
+// The INA226 is still NOT a mains power meter (MUST_READ.md section 12). Its
+// bus/current/power registers describe ONE DC rail and must never be used as a
+// mains total, as a P_total, or as the basis for any CH1-4 channel's wattage
+// (see the BRANCH_CT_COUNT note below). Every CH1-4 volt and watt figure now
+// comes from MAINS_FIXED_VOLTS, so no CH1-4 number depends on the sensor at all.
 //
-// IF THE INA226 IS REWIRED TO THE 5 V USB RAIL, TWO THINGS CHANGE AND ONE DOES
-// NOT. FLAGGED HERE, NOT APPLIED - the divider is left at its calibrated 9.46:
-//   - MUST CHANGE: INA226_MAIN_VOLT_DIVIDER would become ~1.0 (or whatever the
-//     new resistor ladder gives), and every CH1-4 volt and watt figure in the
-//     telemetry would be wrong by 9.46x until it was re-fitted. Re-calibrate
-//     with a multimeter on mains and on the 5 V rail together, in one pass.
-//   - MUST CHANGE: INA226_MAX_CURRENT_AMPS / INA226_SHUNT_OHM must be re-checked
-//     against the shunt actually in the USB path; a USB load will sit far below
-//     the 8 A full scale configured for the mains-side shunt.
+// WHAT THE INA226 NOW DOES (5-channel rig), ONE job:
+//   USB rail monitor. outletId 5 posts volts = inaBusVoltage_V, amps =
+//   inaCurrent_A, watts = that product, and doc["ina"] posts the same four raw
+//   figures. The divider is no longer part of any calculation.
+//
+// HARDWARE EXPECTATION - READ THE LIVE BUS READING BEFORE TRUSTING CH5:
+//   the module is expected to be wired across the 5 V USB rail and report
+//   ~5 V at its bus pin. If the serial line still reads ~24 V, the module is
+//   PHYSICALLY STILL ON THE 24 V RAIL and must be rewired to 5 V. Do not fudge
+//   a constant to make that number look like 5 V: a wrong bus voltage with the
+//   right-looking telemetry is worse than an obviously wrong one.
+//
+//   - MUST CHANGE if rewired: INA226_MAX_CURRENT_AMPS / INA226_SHUNT_OHM must be
+//     re-checked against the shunt actually in the USB path; a USB load will sit
+//     far below the 8 A full scale configured for the mains-side shunt.
 //   - DOES NOT CHANGE: the CH1-4 CT chain (ADS1220, ZMCT_CAL_FACTOR, the
 //     piecewise curve, the adaptive EMA). Current is measured by the CTs and is
-//     entirely independent of the INA226, so only the VOLTAGE multiplied against
-//     those amps would move.
-//
-// Until the divider is deliberately re-fitted, treat outlet 5 as a monitor of
-// whatever rail the INA226 is actually on and say so on the dashboard.
+//     entirely independent of the INA226 and of MAINS_FIXED_VOLTS.
 #define INA226_ADDR 0x40
-// Bus-voltage divider ratio, calibrated on the bench. The INA226 reports 24.1 V
-// at its bus pin; mains measured 228 V with a multimeter, so 228 / 24.1 = 9.46.
-// Re-check with a multimeter after touching the resistor ladder and update this
-// one number — it is the only calibration constant in the voltage path.
-// DO NOT "fix" this to 1.0 to make the USB outlet read 5 V without doing the
-// mains re-calibration above; that single edit would make every CH1-4 watt in
-// the telemetry wrong by 9.46x.
+
+// ---- Mains voltage: FIXED CONSTANT ----
+// The single mains voltage every CH1-4 volt and CH1-4 watt is derived from.
+// Operator direction 2026-10-16: mains is a fixed 228 V and is no longer
+// derived from the INA226. PROVENANCE: bench multimeter reading on this rig
+// (228 V, matching the value the old busV x 9.46 derivation produced), frozen
+// as a constant so a sensor fault, a rewire, or an absent module can no longer
+// move the number every watt in the telemetry is multiplied by.
+//
+// This is an ASSUMPTION held constant, not a measurement - there is no voltage
+// transformer on this rig and the CTs measure current only. Re-measure with a
+// meter if the supply is ever changed.
+#define MAINS_FIXED_VOLTS 228.0f
+
+// SUPERSEDED - KEPT AS HISTORY, DO NOT USE.
+// INA226_MAIN_VOLT_DIVIDER was the bus-voltage divider ratio, calibrated on
+// the bench when the INA226 sat on a 24 V DC rail: the sensor reported 24.1 V
+// at its bus pin, mains measured 228 V with a multimeter, so 228 / 24.1 = 9.46.
+// IT IS NOW UNUSED BY DESIGN, because mains is the MAINS_FIXED_VOLTS constant
+// above and the INA226 is only the 5 V USB rail monitor. Nothing in the .ino
+// multiplies by this number any more.
+// It is deliberately NOT deleted: it is the record of how 228 V was originally
+// established, and it is the number to compare against if the sensor is ever put
+// back in a mains-referenced path. DO NOT "restore" it into the voltage path
+// without re-calibrating on mains with a multimeter in the same pass.
+// Kept as a defined constant so a stale reference still compiles and is visible
+// in a grep, rather than disappearing and taking its provenance with it.
 #define INA226_MAIN_VOLT_DIVIDER 9.46f
 
 // Shunt calibration, exactly as the validated bench sketch sets it: 8 A full
@@ -198,8 +211,16 @@
 // reporting 0 A and 0 W while the sensor itself was fine.
 #define INA226_MAX_CURRENT_AMPS 8.0f
 #define INA226_SHUNT_OHM 0.010f
-// Used only when the INA226 is not answering at all, so the rig still reports a
-// plausible voltage instead of reading 0 V on every channel.
+// NOTE (2026-10-16, mains is now fixed): this value is now IDENTICAL to
+// MAINS_FIXED_VOLTS - 228.0 either way. It is kept as a separate name because
+// it still means something different: FALLBACK_MAINS_VOLTS is the value a
+// degraded rig reports when a sensor is missing, MAINS_FIXED_VOLTS is the value
+// a healthy rig reports. Today those two numbers coincide, and that is the
+// POINT: there is no longer a sensor failure that can move the mains figure away
+// from the metered 228 V. If MAINS_FIXED_VOLTS is ever re-measured, change this
+// one too or the fallback path will start reporting a different mains than the
+// normal path, which is exactly the split that used to put 228 V next to
+// 238 V-derived watts on the dashboard.
 #define FALLBACK_MAINS_VOLTS 228.0f
 
 // ---- ADS1220: 24-bit SPI ADC, one ZMCT103C per mains branch ----
@@ -260,7 +281,8 @@
 // to set it is a measured known load. Whenever it changes, write here:
 //   - the date,
 //   - the load (what was clamped on, and its meter-measured watts),
-//   - the mains volts the run saw (it comes from the INA226, not an assumption),
+//   - the mains volts the run saw (now the fixed MAINS_FIXED_VOLTS, 228 V - it
+//     no longer comes from the INA226),
 //   - the resulting counts/mV that run printed.
 // Without those four, this is a magic number, and a magic number in a mains
 // measurement chain is exactly what the rest of this file exists to prevent.
@@ -387,11 +409,12 @@
 // come down with it - the pass duration, not the period, is what starves IDLE0.
 #define METER_INTERVAL_MS 2000UL
 
-// How often the INA226 is read. It is a VOLTAGE REFERENCE (see above), not a
-// power meter, so it does not need a fast sample rate: the mains voltage it
-// reports changes on the order of seconds, not milliseconds. Polling it on a
-// fixed interval rather than on every loop() iteration keeps a core-1 pass from
-// grabbing the I2C lock repeatedly (loop() runs thousands of times a second).
+// How often the INA226 is read. It is the 5 V USB RAIL MONITOR (see above), not
+// a mains meter and not a mains voltage reference any more, so it does not need
+// a fast sample rate: the rail voltage and its load change on the order of
+// seconds, not milliseconds. Polling it on a fixed interval rather than on every
+// loop() iteration keeps a core-1 pass from grabbing the I2C lock repeatedly
+// (loop() runs thousands of times a second).
 #define INA226_POLL_INTERVAL_MS 250UL
 
 // Placeholder for bench tests without hardware wired:
