@@ -169,11 +169,17 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         var outlets = await _context.Outlets.ToListAsync(cancellationToken);
         var byId = outlets.ToDictionary(o => o.Id);
 
+        var readingsStored = 0;
         foreach (var sample in request.Readings)
         {
-            Guard.Against.NotFound(sample.OutletId, byId.GetValueOrDefault(sample.OutletId));
-
-            var outlet = byId[sample.OutletId];
+            // The ESP32 may still be running firmware for a wider rig. Ignore
+            // readings for channels that are not configured in this backend so
+            // valid readings and the INA226 sample from the same batch can
+            // still be persisted. Relay reports already use this behavior.
+            if (!byId.TryGetValue(sample.OutletId, out var outlet))
+            {
+                continue;
+            }
 
             _context.TelemetryReadings.Add(new TelemetryReading
             {
@@ -187,6 +193,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 
             outlet.CurrentWatts = sample.PowerWatts;
             outlet.LastSeen = now;
+            readingsStored++;
         }
 
         // The INA226's own readings for THIS batch, stored against the same
@@ -308,7 +315,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 
         await _context.SaveChangesAsync(cancellationToken);
 
-        return new IngestTelemetryResult(total, state, request.Readings.Count, eventsRaised, shedding);
+        return new IngestTelemetryResult(total, state, readingsStored, eventsRaised, shedding);
     }
 
     /// <summary>
