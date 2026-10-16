@@ -60,6 +60,7 @@ public record PowerEventDto(
 
 public record FrameworkStateDto(
     bool AutomaticPrioritisationEnabled,
+    bool DeviceProtocolReady,
     bool FaultLatched,
     // P_total must fall below this (P_limit less the hysteresis band) before
     // anything is restored.
@@ -216,6 +217,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             hasSeen ? deviceLastSeen : null,
             new FrameworkStateDto(
                 !framework.ManualOverride,
+                config.LastAcquisitionSessionId.HasValue,
                 framework.FaultLatched,
                 LoadSheddingEngine.ComputeRecoveryLimit(config.CriticalThresholdWatts),
                 LoadSheddingSettings.RecoveryHysteresisFraction,

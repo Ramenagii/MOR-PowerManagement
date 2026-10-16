@@ -2591,6 +2591,7 @@ export interface IForgotPasswordRequest {
 
 export class FrameworkStateDto implements IFrameworkStateDto {
     automaticPrioritisationEnabled!: boolean;
+    deviceProtocolReady!: boolean;
     faultLatched!: boolean;
     recoveryLimitWatts!: number;
     hysteresisFraction!: number;
@@ -2622,6 +2623,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
                     this[property] = _data[property];
             }
             this.automaticPrioritisationEnabled = _data["automaticPrioritisationEnabled"];
+            this.deviceProtocolReady = _data["deviceProtocolReady"];
             this.faultLatched = _data["faultLatched"];
             this.recoveryLimitWatts = _data["recoveryLimitWatts"];
             this.hysteresisFraction = _data["hysteresisFraction"];
@@ -2652,6 +2654,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
                 data[property] = this[property];
         }
         data["automaticPrioritisationEnabled"] = this.automaticPrioritisationEnabled;
+        data["deviceProtocolReady"] = this.deviceProtocolReady;
         data["faultLatched"] = this.faultLatched;
         data["recoveryLimitWatts"] = this.recoveryLimitWatts;
         data["hysteresisFraction"] = this.hysteresisFraction;
@@ -2671,6 +2674,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
 
 export interface IFrameworkStateDto {
     automaticPrioritisationEnabled: boolean;
+    deviceProtocolReady: boolean;
     faultLatched: boolean;
     recoveryLimitWatts: number;
     hysteresisFraction: number;

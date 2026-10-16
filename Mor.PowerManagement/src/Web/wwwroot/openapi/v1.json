@@ -1885,6 +1885,7 @@
       "FrameworkStateDto": {
         "required": [
           "automaticPrioritisationEnabled",
+          "deviceProtocolReady",
           "faultLatched",
           "recoveryLimitWatts",
           "hysteresisFraction",
@@ -1898,6 +1899,9 @@
         "type": "object",
         "properties": {
           "automaticPrioritisationEnabled": {
+            "type": "boolean"
+          },
+          "deviceProtocolReady": {
             "type": "boolean"
           },
           "faultLatched": {

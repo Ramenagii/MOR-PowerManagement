@@ -176,6 +176,13 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             config.LastAcquisitionSessionId = request.AcquisitionSessionId;
             config.LastAcquisitionSequence = request.AcquisitionSequence.Value;
         }
+        else
+        {
+            // A legacy/unknown device cannot identify fresh batches or match
+            // relay acknowledgements. Keep monitoring, but do not actuate it.
+            config.LastAcquisitionSessionId = null;
+            config.LastAcquisitionSequence = 0;
+        }
 
         // Provenance is device-sourced (D8): it is only ever written from the
         // device's own report, never assumed here.
@@ -397,6 +404,10 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         if (outlets.Any(o => o.PendingCommandId.HasValue))
         {
             return MakeFrameworkResult(LoadSheddingAction.None, null, "Waiting for the matching relay acknowledgement and a fresh post-switch sample.", pLimit, _framework.Current, outlets);
+        }
+        if (config.LastAcquisitionSessionId is null)
+        {
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Automatic switching is paused until firmware reports acquisition identity and command acknowledgements. Monitoring remains active.", pLimit, _framework.Current, outlets);
         }
         if (outlets.Any(o => !o.LastSeen.HasValue || o.LastSeen < now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds)))
         {

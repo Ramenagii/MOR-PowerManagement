@@ -117,6 +117,7 @@ type BackendState = {
     stabilizationDelayMs: number
   }
   recentEvents: BackendEvent[]
+  framework: { deviceProtocolReady?: boolean }
   deviceOnline: boolean
   deviceLastSeen: string | null
   // Legacy field: current firmware reports fixed mains voltage separately.
@@ -200,6 +201,7 @@ export type DashboardSnapshot = {
   deviceLastSeen: string | null
   mainsVolts: number | null
   ina226: Ina226Reading
+  deviceProtocolReady: boolean
 }
 
 function formatEventTime(timestamp: string): string {
@@ -275,6 +277,7 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
     deviceLastSeen: state.deviceLastSeen ?? null,
     mainsVolts: toMeasurement(state.mainsVolts),
     ina226: mapIna226(state.ina226),
+    deviceProtocolReady: Boolean(state.framework?.deviceProtocolReady),
   }
 }
 

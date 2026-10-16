@@ -16,6 +16,7 @@ export function PoliciesView() {
   const [outlets, setOutlets] = useState<Outlet[]>([])
   const [liveTotal, setLiveTotal] = useState<number | null>(null)
   const [deviceOnline, setDeviceOnline] = useState(false)
+  const [deviceProtocolReady, setDeviceProtocolReady] = useState(false)
   const [initialLimits, setInitialLimits] = useState<OutletLimit[]>([])
   const [limits, setLimits] = useState<OutletLimit[]>([])
   const [systemLimit, setSystemLimit] = useState<number | null>(null)
@@ -33,6 +34,7 @@ export function PoliciesView() {
       setOutlets(snapshot.outlets.slice(0, 4))
       setLiveTotal(snapshot.totalWatts)
       setDeviceOnline(snapshot.deviceOnline)
+      setDeviceProtocolReady(snapshot.deviceProtocolReady)
       setInitialLimits((old) => old.length === 4 ? old : current)
       setLimits((old) => old.length === 4 ? old.map((draft) => current.find((x) => x.id === draft.id) ? { ...current.find((x) => x.id === draft.id)!, allowance: draft.allowance, isProtected: draft.isProtected } : draft) : current)
       setSystemLimit(snapshot.thresholds.critical)
@@ -83,7 +85,7 @@ export function PoliciesView() {
     <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="framework-live-heading">
       <div className="ant-card-header flex items-center justify-between gap-4">
         <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W</p></div>
-        <span className={`rounded-full px-3 py-1 text-xs ${deviceOnline ? 'bg-surface-container text-on-surface' : 'bg-amber-100 text-amber-900'}`}>{deviceOnline ? 'MONITORING' : 'NO FRESH DATA'}</span>
+        <span className={`rounded-full px-3 py-1 text-xs ${deviceOnline && deviceProtocolReady ? 'bg-surface-container text-on-surface' : 'bg-amber-100 text-amber-900'}`}>{!deviceOnline ? 'NO FRESH DATA' : deviceProtocolReady ? 'MONITORING + CONTROL READY' : 'MONITORING · FIRMWARE UPDATE NEEDED'}</span>
       </div>
       <div className="ant-card-body grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {outlets.map((outlet, index) => <article key={outlet.id} className="rounded-lg border border-outline-variant p-3">
