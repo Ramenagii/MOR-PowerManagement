@@ -1,14 +1,17 @@
 import type { EventLog, Outlet, Priority } from '../types/dashboard'
 
 // Testing rig values (MUST_READ.md, valid until 31 Oct 2026):
-// FIVE channels — four 220 V mains outlets (CH1-CH4) on one mains feed, plus a
+// FIVE channels — four 238 V mains outlets (CH1-CH4) on one mains feed, plus a
 // 5 V USB socket (CH5) that has no relay behind it and is monitored only.
 //
-// The thresholds are NOT constants here: they are configuration read from
-// GET /Dashboard/state and edited through the Framework admin, so this rig reads
-// whatever the operator saved (1200/960/1200 as seeded). A copy of those numbers
-// kept in the client was a measurement the server never made, and it was the
-// number the meter and the warning/trip lines were drawn from.
+// The reference device is 4400 W total across four branches capped at 1100 W
+// each (4400 / 1100 / 1100 / 1100), with the mains at 238 V and an INA226 on
+// the 3.3 V DC rail. Those numbers are NOT constants here: they are
+// configuration read from GET /Dashboard/state and edited through the Framework
+// admin, so this rig reads whatever the operator saved (4400 / 3520 / 4400 as
+// seeded). A copy of those numbers kept in the client was a measurement the
+// server never made, and it was the number the meter and the warning/trip lines
+// were drawn from.
 //
 // The seeded rig values themselves live in ApplicationDbContextInitialiser.cs —
 // change them together or the live dashboard will disagree with this roster.
@@ -25,10 +28,10 @@ export const RIG_CHANNEL_COUNT = 5
  *                  the hero summed into a confident 440 W before the backend had
  *                  answered a single request.
  *   - volts      — a rail is CONFIGURATION, so a row carries only the one the rig
- *                  specification names: 220 V on CH3/CH4 and the 5 V USB rail on
+ *                  specification names: 238 V on CH3/CH4 and the 5 V USB rail on
  *                  CH5. CH1/CH2 stay unrated (0), exactly as they have always
  *                  been. It does not leak into the console: the volts figure on
- *                  every row comes from the live INA226 sample or reads 0, never
+ *                  every row comes from the live mains sample or reads 0, never
  *                  from this field.
  *   - Disconnected — no relay state has been reported, so none is claimed. CH5 is
  *                  not an exception: the USB socket has no relay, so it is never
@@ -46,7 +49,7 @@ export const baseOutlets: Outlet[] = [
     meter: 'PZEM-01 - mains bus',
     relay: 'Relay CH1',
     priority: 'Critical',
-    allowance: 300,
+    allowance: 1100,
     volts: 0,
     watts: 0,
     status: 'Disconnected',
@@ -60,7 +63,7 @@ export const baseOutlets: Outlet[] = [
     meter: 'PZEM-01 - mains bus',
     relay: 'Relay CH2',
     priority: 'High',
-    allowance: 300,
+    allowance: 1100,
     volts: 0,
     watts: 0,
     status: 'Disconnected',
@@ -74,8 +77,8 @@ export const baseOutlets: Outlet[] = [
     meter: 'PZEM-01 - mains bus',
     relay: 'Relay CH3',
     priority: 'Medium',
-    allowance: 300,
-    volts: 220,
+    allowance: 1100,
+    volts: 238,
     watts: 0,
     status: 'Disconnected',
     schedule: '08:00-18:00',
@@ -88,8 +91,8 @@ export const baseOutlets: Outlet[] = [
     meter: 'PZEM-01 - mains bus',
     relay: 'Relay CH4',
     priority: 'Medium',
-    allowance: 300,
-    volts: 220,
+    allowance: 1100,
+    volts: 238,
     watts: 0,
     status: 'Disconnected',
     schedule: 'Class hours',
@@ -356,6 +359,13 @@ export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'No
  * does not — it reads them from GET /Dashboard/state, and a rig whose server has
  * not answered has none. Tooltips that assert a threshold the client is guessing
  * are how a default becomes a specification in someone's head.
+ *
+ * `ina226` names the RAIL, and it is the 3.3 V DC rail. It used to say "the
+ * common mains feed", which is the sentence the whole INA226 card was built on
+ * — and on this hardware it is wrong twice over: the converter sits on a DC
+ * supply rail, not on the AC feed, and the mains branches are read from a
+ * separate reference. A tooltip that puts a 238 V mains reading in the reader's
+ * head while the card prints 3.3 V is worse than no tooltip.
  */
 export const DASHBOARD_TIPS = {
   total: 'Sum of every channel the policy engine currently reports as energized. Polled from GET /api/Dashboard/state.',
@@ -370,11 +380,13 @@ export const DASHBOARD_TIPS = {
   live:
     'Live state, polled from GET /api/Dashboard/state. Outlets post telemetry at 1 Hz; the freshness shown is the age of the newest stored sample.',
   ina226:
-    'Bus volts, current and power read straight off the INA226 on the common mains feed. The shunt figure is the millivolts across its 100 mV shunt, which is what the current reading is actually made of. Past 30 s the sample is treated as unmeasured.',
+    'INA226 on the 3.3V rail: a DC block, not the mains feed. Bus volts, current and power read straight off the converter over a 100 mOhm shunt configured for a 2 A range (200 mV full scale). Past 30 s the sample is treated as unmeasured.',
+  status:
+    'Relay state as the server sends it. OPEN means the relay is open — which is also exactly what a firmware trip and a policy shed look like from here, because DisconnectOutlet and the shed paths write the same value and the wire carries no way to tell them apart. LATCHED is the one state the switch cannot clear: the engine ignores relay reports for a restricted outlet.',
   outlet:
-    'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. The volts shown is the live INA226 mains reading and the amps are derived from it; with no fresh bus volts the pair reads 0 rather than falling back to the rated rail.',
+    'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. The volts shown is the live mains reference reading and the amps are derived from it; with no fresh bus volts the pair reads 0 rather than falling back to the rated rail.',
   usb:
-    'CH5 is a 5 V USB socket with no relay behind it — the firmware reserves the pin and never drives it — so the rail is monitored and never switched. Its volts/amps pair is the INA226 bus reading it is fed from, not a sample taken at the socket, and the switch is disabled because there is nothing to dispatch.',
+    'CH5 is a 5 V USB socket with no relay behind it — the firmware reserves the pin and never drives it — so the rail is monitored and never switched. It has no converter of its own and nothing on the rig measures it, so its volts/amps pair reads 0; the switch is disabled because there is nothing to dispatch.',
   relay:
     'Closed passes current to the branch; open isolates it. The API reports this as an outlet status, not as a pin level.',
   amps:

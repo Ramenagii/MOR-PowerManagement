@@ -143,13 +143,34 @@ public class ApplicationDbContextInitialiser
         const bool TestingRig = true;
 
         // Re-derived for the 5-channel bench: seeded load is 260 + 180 + 120 +
-        // 0 + 7 = 567 W, so a 1200 W P_limit leaves ~630 W of headroom above
+        // 0 + 7 = 567 W, so a 4400 W P_limit leaves ~3833 W of headroom above
         // the seeded state and the rig boots healthy, while still reaching the
-        // 960 W warning threshold on one realistic added load.
+        // 3520 W warning threshold on one realistic added load.
         // Thresholds are 80% / 100% of capacity, matching the full-rig ratios.
-        const double TestingMaxCapacityWatts = 1200.0;
-        const double TestingWarningThresholdWatts = 960.0;
-        const double TestingCriticalThresholdWatts = 1200.0;
+        //
+        // 1200/960/1200 -> 4400/3520/4400 (2026-10-16), adopted from the
+        // operator's reference sketch: totalWattageLimit 4400 W with 1100 W per
+        // outlet. Warning stays at exactly 80% of capacity (0.8 x 4400 = 3520).
+        //
+        // WHAT THIS CHANGES ON THE BENCH, stated plainly: the seeded 567 W used
+        // to sit at 47% of a 1200 W P_limit, i.e. the rig booted ALREADY inside
+        // the warning band, and one ordinary added load tripped it. At 4400 W
+        // the same seed sits at 13% and the rig boots comfortably below warning,
+        // so FR-01..FR-12 now need a genuinely large added load to demonstrate
+        // a shed on this rig. That is the honest trade for matching the
+        // operator's real capacity: 1100 W per outlet x 4 outlets cannot be
+        // exceeded on this panel, so the per-outlet allowances (1100 W each,
+        // below) are what actually bind first, and the total is now a backstop
+        // rather than the primary constraint. Anyone demoing a system-wide shed
+        // needs a load approaching 4400 W, not a laptop.
+        //
+        // Note this is now BELOW the full-rig 4000 W capacity below, which is
+        // correct and intentional: this 5-channel bench panel is rated 4400 W by
+        // the operator's own figures, and the full-rig numbers describe the
+        // 13-channel final panel, which is a different machine.
+        const double TestingMaxCapacityWatts = 4400.0;
+        const double TestingWarningThresholdWatts = 3520.0;
+        const double TestingCriticalThresholdWatts = 4400.0;
 
         const double FullRigMaxCapacityWatts = 4000.0;
         const double FullRigWarningThresholdWatts = 3240.0;
@@ -163,9 +184,9 @@ public class ApplicationDbContextInitialiser
         // priority-based load shedding framework runs on - the framework reads
         // the same column rather than a second threshold, so there is exactly
         // one P_limit in the system and an operator cannot set two that
-        // disagree. On this 5-channel bench P_limit is 1200 W (the const
+        // disagree. On this 5-channel bench P_limit is 4400 W (the const
         // above), and the recovery limit the framework restores into is
-        // 1080 W (1200 W less the 10% hysteresis band, LoadSheddingSettings).
+        // 3960 W (4400 W less the 10% hysteresis band, LoadSheddingSettings).
         // Per-outlet allowances come from each outlet's AllowanceWatts below;
         // the tier-1 outlet is exempt from its own cap but is still counted in
         // P_total.
@@ -215,10 +236,23 @@ public class ApplicationDbContextInitialiser
         //                             relieves the least real load
         var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
-            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
-            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+            // Per-outlet AllowanceWatts 300 -> 1100 on CH1-CH4 (2026-10-16), from the
+            // operator's reference sketch's per-outlet wattageLimit1..4. The USB rail
+            // stays at 10 W: it is a different rail with a different part, and the
+            // sketch's 1100 W figure is about 220 V mains outlets, not a 5 V socket.
+            //
+            // The seeded Watts (260 / 180 / 120 / 0 / 7) are DELIBERATELY UNCHANGED.
+            // They are the rig's realistic start state and are not the limits; a
+            // seeded value that was silently rescaled to match a new cap would be a
+            // fabricated measurement, and the whole point of these rows is that they
+            // represent a real (if small) load so the dashboard is not reading zeroes.
+            // Every seeded CH1-3 figure is now well inside its 1100 W allowance
+            // (24% / 16% / 11%), which is what a bench panel actually sitting idle
+            // looks like.
+            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 1100, 220, "Class hours + override", null, OutletStatus.Active, 260),
+            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 1100, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
+            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 1100, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 1100, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
             // No CT on this rail: the seeded figure is its nominal rating, not
             // a sample. Monitored only - the USB 5V load has no relay of its
             // own; it is tracked so the dashboard shows the rail, not switched.
@@ -407,15 +441,15 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 4x220V outlets (CH1-CH4) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT, plus 1xUSB 5V rail (CH5) that is monitored only and has no relay. P_limit is capped at 1200 W until 31 Oct 2026.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 960 W warning threshold.", Severity = EventSeverity.Success },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 4x220V outlets (CH1-CH4) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT, plus 1xUSB 5V rail (CH5) that is monitored only and has no relay. P_limit is capped at 4400 W (1100 W per outlet) until 31 Oct 2026.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 3520 W warning threshold.", Severity = EventSeverity.Success },
                 new PowerEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow,
                     Title = "Priority-based load shedding armed",
-                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 300 W allowance cap), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3), CH5 USB 5V Nonessential (tier 4, shed first - though it relieves the least real load because its figure is a residual of the INA226 mains total). " +
-                        "P_limit 1200 W; overload must persist 3 consecutive batches before anything is shed. " +
-                        "Restoration resumes only below the 1080 W recovery limit (1200 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
+                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 1100 W allowance cap), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3), CH5 USB 5V Nonessential (tier 4, shed first - though it relieves the least real load because its figure is a residual of the INA226 mains total). " +
+                        "P_limit 4400 W; overload must persist 3 consecutive batches before anything is shed. " +
+                        "Restoration resumes only below the 3960 W recovery limit (4400 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
                         "Tier 1 is never shed automatically; an overload that survives every eligible shed raises an alarm instead of being assumed safe. " +
                         "This is prototype software control, not a substitute for fuses and breakers.",
                     Severity = EventSeverity.Info,

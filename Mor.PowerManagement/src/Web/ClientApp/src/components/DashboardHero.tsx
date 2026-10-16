@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { TelemetrySeries } from '../api'
+import { DASHBOARD_TIPS } from '../data/dashboard'
 
 type DashboardHeroProps = {
   /** Live total from GET /Dashboard/state. Ignored while `live` is false. */
@@ -42,8 +43,8 @@ type Domain = { min: number; max: number }
  * Fit the y-domain to the window rather than to 0..P_limit.
  *
  * This is the fix for the flat-line problem. A rig sitting at 67 W against a
- * 600 W ceiling drew its trace in the bottom eighth of the plot, so 15 minutes
- * of real movement was invisible and the chart read as an empty box.
+ * 4400 W ceiling drew its trace in the bottom hundredth of the plot, so 15
+ * minutes of real movement was invisible and the chart read as an empty box.
  *
  * Two guards keep the fit honest:
  *   - The span is floored at a small fraction of P_limit, so a genuinely flat
@@ -52,9 +53,13 @@ type Domain = { min: number; max: number }
  *     "how close am I" read survives the rescale. The meter and the Headroom
  *     figure carry that job the rest of the time.
  *
- * Measured against the reference rig: real ±14% jitter uses 76-81% of the plot
- * height at 67 W, 440 W, 560 W and 900 W; a truly flat line uses 0% and stays
- * flat; and 5 W of noise is held to 15% by the floor rather than filling the box.
+ * `limit` is whatever the server reported and is 0 when it reported nothing; the
+ * 2% floor below then collapses to the 1 W absolute floor, which is the correct
+ * behaviour for a rig with no configured ceiling rather than a silent guess at
+ * one. Every figure quoted here was measured against the reference rig's own
+ * domain — real jitter uses most of the plot height at every load the rig sees,
+ * a truly flat line uses 0% and stays flat, and a few watts of noise is held to
+ * the floor rather than filling the box.
  */
 function fitDomain(values: Array<number | null>, limit: number): Domain {
   let min = Number.POSITIVE_INFINITY
@@ -142,9 +147,10 @@ export function DashboardHero({
 
   /*
    * Threshold rules are drawn only when they fall inside the fitted domain.
-   * With the axis scaled to the data, a 600 W ceiling over a 67 W trace sits far
-   * off the top of the plot; drawing it anyway would either clip or squeeze the
-   * trace back down to the floor, which is the very bug this change fixes.
+   * With the axis scaled to the data, a 4400 W ceiling over a few hundred watts
+   * of trace sits far off the top of the plot; drawing it anyway would either
+   * clip or squeeze the trace back down to the floor, which is the very bug this
+   * change fixes.
    */
   const ruleY = (watts: number): number | null => {
     const span = domain.max - domain.min || 1
@@ -156,24 +162,40 @@ export function DashboardHero({
   const tripY = ruleY(critical)
 
   /*
-   * Thresholds are the server's, and they are only rendered when it supplied
-   * them. `hasLimits` is false both when the backend is down and when it
-   * answered without a capacity; either way there is no ceiling, so every
-   * figure that would be derived from one prints a dash instead of arithmetic
-   * against a number the console made up.
+   * Two gates, not one, because `maxCapacityWatts` and `criticalThresholdWatts`
+   * are two independent settings and the server can legitimately supply either
+   * without the other.
+   *
+   *   hasCapacity  drives the P_limit tag, the meter's scale and the "N % of M W
+   *                limit" line. All three are arithmetic against the CEILING, so
+   *                a rig that reports 4400 W of capacity is entitled to see how
+   *                full it is even if nobody has set a trip point. Folding
+   *                `critical > 0` into this used to blank the meter entirely in
+   *                exactly that case, hiding a true reading behind a missing
+   *                setting.
+   *   hasTripPoint drives headroom and the band colour, both of which are
+   *                meaningless without a threshold to be against. With none
+   *                reported, headroom prints a dash — 0 W of headroom against a
+   *                ceiling of 0 is arithmetically true and operationally a lie.
+   *
+   * Both are false when the backend has not answered, because `max` and `critical`
+   * are both 0 until it has, so an offline hero is entirely dashes. Neither ever
+   * falls back to a remembered number: the reference rig's 4400 W ceiling is a
+   * SETTING the Framework admin writes, and this console does not hold a copy.
    */
-  const hasLimits = max > 0 && critical > 0
-  const percent = hasLimits ? Math.min((load / max) * 100, 100) : 0
+  const hasCapacity = max > 0
+  const hasTripPoint = critical > 0
+  const percent = hasCapacity ? Math.min((load / max) * 100, 100) : 0
   const headroom = critical - load
-  const band = !hasLimits ? 'live' : load >= critical ? 'bad' : load >= warning ? 'warn' : 'live'
+  const band = !hasTripPoint ? 'live' : load >= critical ? 'bad' : load >= warning ? 'warn' : 'live'
 
-  const headroomText = !hasLimits
+  const headroomText = !hasTripPoint
     ? UNAVAILABLE
     : headroom <= 0
       ? `${Math.round(Math.abs(headroom))} W over`
       : `${Math.round(headroom).toLocaleString()} W`
 
-  const limitTag = hasLimits ? `P_limit ${Math.round(max).toLocaleString()} W` : 'P_limit not configured'
+  const limitTag = hasCapacity ? `P_limit ${Math.round(max).toLocaleString()} W` : 'P_limit not configured'
 
   return (
     <>
@@ -189,12 +211,12 @@ export function DashboardHero({
           </div>
 
           <div>
-            <div className="meter" role="meter" aria-valuenow={hasLimits ? Math.round(percent) : undefined} aria-valuemin={0} aria-valuemax={100} aria-label={hasLimits ? 'Total load against the configured limit' : 'Total load; no configured limit has been reported, so there is nothing to measure this against'}>
+            <div className="meter" role="meter" aria-valuenow={hasCapacity ? Math.round(percent) : undefined} aria-valuemin={0} aria-valuemax={100} aria-label={hasCapacity ? 'Total load against the configured limit' : 'Total load; no configured limit has been reported, so there is nothing to measure this against'}>
               <i style={{ width: `${live ? percent : 0}%`, background: band === 'bad' ? 'var(--bad)' : band === 'warn' ? 'var(--warn)' : 'var(--live)' }} />
             </div>
             <div className="lbl num" style={{ marginTop: 6 }}>
-              <span>{hasLimits ? Math.round(percent) : UNAVAILABLE}</span>
-              {hasLimits ? ` % of ${Math.round(max).toLocaleString()} W limit` : ' · no limit reported'}
+              <span>{hasCapacity ? Math.round(percent) : UNAVAILABLE}</span>
+              {hasCapacity ? ` % of ${Math.round(max).toLocaleString()} W limit` : ' · no limit reported'}
             </div>
           </div>
 
@@ -217,7 +239,7 @@ export function DashboardHero({
           as a stack of overlapping layers.
         */}
         <div className="hero-r">
-          <span className="lim num" title="Configured master capacity for this rig, as returned by GET /Dashboard/state">
+          <span className="lim num" title={DASHBOARD_TIPS.pLimit}>
             {limitTag}
           </span>
 

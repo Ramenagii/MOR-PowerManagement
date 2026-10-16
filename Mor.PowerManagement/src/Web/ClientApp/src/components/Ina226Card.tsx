@@ -25,6 +25,17 @@ function formatAmps(amps: number): string {
   return amps < 10 ? amps.toFixed(3) : amps.toFixed(1)
 }
 
+/**
+ * The rail this converter is bolted to.
+ *
+ * A DEVICE CONSTANT in the same sense as the shunt's full scale: it describes
+ * how the hardware was wired, not what it is currently reading, so it is
+ * allowed to be a constant while every figure on the card stays nullable. The
+ * reference sketch prints the same label in its own telemetry block —
+ * `--- DC TELEMETRY (INA226 3.3V Rail)` — which is where the wording comes from.
+ */
+const DC_RAIL_LABEL = '3.3V rail'
+
 /** Which of the three headline figures the sample did not carry. */
 function missingFigures(reading: Ina226Reading): string[] {
   const gaps: string[] = []
@@ -35,18 +46,26 @@ function missingFigures(reading: Ina226Reading): string[] {
 }
 
 /**
- * The INA226 on the common mains feed.
+ * The INA226 on the 3.3V DC rail.
  *
- * This is the only current sensor on the rig that is not a branch CT, and it is
- * the only card whose headline numbers are all direct conversions rather than
- * share-of-a-total arithmetic. So it is also the only place where the three
- * figures can be checked against each other — which is what the shunt rail and
- * the reconciliation line at the foot exist to do.
+ * This is a DC block, not the mains feed. It was described as "the INA226 on the
+ * common mains feed" for the whole life of this card, which is wrong about the
+ * hardware twice: the converter sits on a 3.3 V supply rail, and the mains
+ * branches are read from a separate reference. It mattered because the card also
+ * claimed to be the only volts/amps pair CH5 had — so a 5 V USB socket was
+ * displaying a number from a 3.3 V rail and the prose called it its own source.
+ *
+ * What the card is for is unchanged, and it is still the only place three
+ * headline figures can be checked against each other: the converter measures
+ * volts and shunt millivolts as separate conversions and multiplies them for its
+ * power channel, so V x I and the reported watts are two answers to the same
+ * question. The shunt rail and the reconciliation line at the foot exist to make
+ * that comparison visible.
  *
  * The single rule, enforced once in `measured` below: outside a fresh, complete
  * sample every figure reads 0. Not the rated rail, not the last value seen, not
  * a dash that parses as a number. A 0 here is explicitly labelled as
- * "unmeasured", because 0 V on the bus and "nobody answered" are opposite
+ * "unmeasured", because 0 V on the rail and "nobody answered" are opposite
  * findings and the console has to be able to tell them apart.
  */
 export function Ina226Card({ reading, live, now }: Ina226CardProps) {
@@ -56,7 +75,7 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
   // "Measured" needs all four: a reachable backend, a sample inside the 30 s
   // window, and all three headline figures actually present. A 2 s old sample
   // that omits bus volts is a partial read, and printing 0.0 V beside it would
-  // claim the bus is dead.
+  // claim the rail is dead.
   const measured = live && freshness === 'live' && gaps.length === 0
 
   const bus = measured && reading.busVolts !== null ? reading.busVolts : 0
@@ -93,10 +112,18 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
   return (
     <section
       className={`mp-card ina${measured ? '' : ' is-off'}`}
-      aria-label="INA226 mains sensor"
+      aria-label="INA226 DC rail sensor, 3.3V rail"
     >
       <div className="ina-h">
-        <b title={DASHBOARD_TIPS.ina226}>{`INA226 · ${state}`}</b>
+        {/*
+          The rail is named in the heading, not only in the tooltip. It used to
+          carry no rail at all, which left "bus volts" on screen with nothing
+          telling the reader whether it was 238 V of AC or 3.3 V of DC — and the
+          figure itself cannot say, because 3.30 is a perfectly good voltage on
+          either. Two words in the heading is the cheapest way to make the number
+          below it mean one thing.
+        */}
+        <b title={DASHBOARD_TIPS.ina226}>{`INA226 · ${DC_RAIL_LABEL} · ${state}`}</b>
         <span className="mp-pill num" style={{ padding: '2px 9px' }}>
           <span className={`dot ${dotClass}`} />
           {pillText ?? pillFallback}
@@ -112,7 +139,7 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
             {bus.toFixed(1)}
             <small>V</small>
           </div>
-          <div className="k">Bus volts</div>
+          <div className="k">Rail volts</div>
         </div>
         <div className="ina-fig">
           <div className="v">
@@ -164,13 +191,14 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
         {!live ? (
           <>
             <b>Offline.</b> GET /api/Dashboard/state did not answer, so no INA226 reading is being
-            displayed. The figures above are 0 because nothing was measured — not because the bus is
+            displayed. The figures above are 0 because nothing was measured — not because the rail is
             dead.
           </>
         ) : freshness === 'unmeasured' ? (
           <>
-            <b>Unmeasured.</b> The device has not posted an INA226 sample. The figures above are 0
-            because nothing was measured. Check the converter on SDA GPIO 8 / SCL GPIO 9.
+            <b>Unmeasured.</b> The device has not posted an INA226 sample for the 3.3V rail. The
+            figures above are 0 because nothing was measured. Check the converter on SDA GPIO 8 / SCL
+            GPIO 9.
           </>
         ) : freshness === 'stale' ? (
           <>
@@ -186,7 +214,7 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
           </>
         ) : (
           <>
-            Bus volts x current = {`${reconcile?.computedWatts.toFixed(1)} W`} against the{' '}
+            Rail volts x current = {`${reconcile?.computedWatts.toFixed(1)} W`} against the{' '}
             {`${watts.toFixed(1)} W`} the converter reported ({`${reconcile?.deltaPercent.toFixed(2)}`}%{' '}
             apart). The two are separate conversions on the same chip, so a small gap is expected — a
             large one is a failing converter.
@@ -195,18 +223,30 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
       </p>
 
       {/*
-        What this card feeds, stated once and always — including when the card is
-        unmeasured, because "these are 0 because nothing was measured" and "these
-        0 are what the USB row is currently showing" are the same failure twice.
-        CH5 has no CT and no converter of its own, so the volts/amps pair on that
-        row comes from here and from nowhere else; CH1-CH4 derive their branch
-        amps against this bus reference. The card sits directly above the roster
-        and used to say nothing about the branches that depend on it, which left
-        four rows and one USB row reading as if they were independent of it.
+        The reason the other figures on this page are the figures they are — and
+        the explicit statement of what this card is NOT, which is the half that
+        used to be wrong.
+
+        It used to read: "Feeds outlet 5 (USB 5 V) — the only volts and amps pair
+        that row has — and is the 220 V bus reference behind outlets 1–4." That
+        was two claims and both were false on this hardware. The converter is on
+        a 3.3 V DC rail: it cannot measure a 238 V AC feed, and a 5 V USB socket
+        is not fed from a 3.3 V rail. The card was being cited as the source for
+        numbers it had never produced, which is how a 5 V socket ended up
+        displaying a 3.3 V reading.
+
+        So the statement is now the honest inverse. This card is standalone: the
+        four mains branches derive their amps against the server's own mains
+        reference (`mainsVolts`), CH5 has no converter at all, and neither of
+        those reads one figure from this card. That is a sentence about absence,
+        and it belongs on the card — otherwise the operator is left to assume the
+        two are connected, which is exactly the assumption that put a DC reading
+        in a mains column.
       */}
       <p className="ina-note num">
-        Feeds outlet 5 (USB 5 V) — the only volts and amps pair that row has — and is the 220 V bus
-        reference behind outlets 1–4.
+        Standalone reading on the 3.3V DC rail. Outlets 1–4 derive their amps against the server&apos;s
+        own mains reference, not against this card, and outlet 5 has no converter of its own — so
+        nothing on this page takes a figure from here.
       </p>
     </section>
   )

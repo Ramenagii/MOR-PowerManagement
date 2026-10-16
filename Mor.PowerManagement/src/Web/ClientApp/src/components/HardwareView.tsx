@@ -17,15 +17,16 @@ import { Disclosure } from './Disclosure'
  * Three facts drive this whole page, and all three have been wrong in earlier
  * revisions of this file:
  *
- *  1. The rig is FIVE channels: CH1-CH4 are 220 V AC outlets and CH5 is a 5 V
+ *  1. The rig is FIVE channels: CH1-CH4 are 238 V AC outlets and CH5 is a 5 V
  *     USB socket. The earlier "thirteen control channels" card described the
  *     full build, not what is on the bench.
- *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1015
- *     four-channel 16-bit ADC with a ZMCT103C current transformer on EACH
- *     mains branch (CH1-CH4), which is why per-branch current is MEASURED
- *     rather than apportioned from a mains total. An INA226 sits on the 24 V
- *     rail as a voltage reference. CH5 has no sensor at all — its figure is the
- *     rail's nominal rating, and is labelled as nominal wherever it appears.
+ *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1220
+ *     four-channel 16-bit ADC over SPI with a CT on EACH mains branch (CH1-CH4),
+ *     which is why per-branch current is MEASURED rather than apportioned from a
+ *     mains total. An INA226 sits on the 3.3 V DC supply rail as a standalone DC
+ *     block — it is NOT the mains reference, and nothing else on the rig is. CH5
+ *     has no sensor at all — its figure is the rail's nominal rating, and is
+ *     labelled as nominal wherever it appears.
  *  3. The relay contacts are NORMALLY CLOSED. Power passes while the coil is
  *     idle, which means the pin HIGH is the energised channel and the pin LOW
  *     is the cut channel. That is the inverse of the NO relay most people wire
@@ -45,26 +46,26 @@ import { Disclosure } from './Disclosure'
  */
 
 const CHANNELS = [
-  { channel: 'CH1', rail: '220 V AC', gpio: 10, adc: 'AIN0', sensed: true },
-  { channel: 'CH2', rail: '220 V AC', gpio: 11, adc: 'AIN1', sensed: true },
-  { channel: 'CH3', rail: '220 V AC', gpio: 12, adc: 'AIN2', sensed: true },
-  { channel: 'CH4', rail: '220 V AC', gpio: 13, adc: 'AIN3', sensed: true },
+  { channel: 'CH1', rail: '238 V AC', gpio: 10, adc: 'AIN0', sensed: true },
+  { channel: 'CH2', rail: '238 V AC', gpio: 11, adc: 'AIN1', sensed: true },
+  { channel: 'CH3', rail: '238 V AC', gpio: 12, adc: 'AIN2', sensed: true },
+  { channel: 'CH4', rail: '238 V AC', gpio: 13, adc: 'AIN3', sensed: true },
   { channel: 'CH5', rail: '5 V DC USB', gpio: 14, adc: '—', sensed: false },
 ] as const
 
 const perOutletParts = [
-  'Grounded 220 V AC outlet (CH1-CH4) or USB socket (CH5)',
+  'Grounded 238 V AC outlet (CH1-CH4) or USB socket (CH5)',
   'Normally-closed relay contact in the live conductor',
-  'Branch current sensor on its own ADS1015 analogue channel (CH1-CH4 only)',
+  'Branch current sensor on its own ADS1220 analogue channel (CH1-CH4 only)',
   'Per-channel firmware state: priority, allowance, schedule, idle limit',
   'Red rocker/manual switch or switch cap',
-  'Rated-voltage label (220V mains or 5V USB)',
+  'Rated-voltage label (238V mains or 5V USB)',
 ]
 
 const systemParts = [
   'ESP32 DevKit / ESP32-WROOM-32 controller',
-  'ADS1015 four-channel 16-bit ADC — one ZMCT103C branch current sensor per mains outlet',
-  'INA226 used as a voltage reference on the 24 V rail',
+  'ADS1220 four-channel 16-bit ADC over SPI — one branch CT per mains outlet',
+  'INA226 DC block on the 3.3V supply rail (100 mOhm shunt, 2 A range)',
   'I2C bus: SDA = GPIO 8, SCL = GPIO 9',
   'Inverting transistor driver per relay, GPIO 10 to GPIO 14',
   'Isolated 5 V supply such as Mean Well IRM-05-5',
@@ -89,7 +90,7 @@ const PIN_STATES = [
   ['LOW', 'Coil energised', 'Contact OPEN', 'Channel cut', 'bg-error'],
 ] as const
 
-/** Live-conductor chain for one 220 V branch. NC, not NO. */
+/** Live-conductor chain for one 238 V branch. NC, not NO. */
 const LIVE_CHAIN = ['Live bus', 'Branch sensor', 'Relay COM', 'Relay NC', 'Outlet live'] as const
 
 /**
@@ -244,7 +245,7 @@ export function HardwareView() {
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant">
-              CH1–CH4 · 220 V AC outlets
+              CH1–CH4 · 238 V AC outlets
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
               CH5 · 5 V USB socket
@@ -280,16 +281,16 @@ export function HardwareView() {
               <Activity size={18} className="text-on-surface-variant" aria-hidden />
             </div>
             <p className="font-metric-value text-metric-value text-on-surface flex items-baseline gap-1.5">
-              ADS1015
+              ADS1220
               <span className="font-metric-value text-metric-value font-normal text-on-surface-variant">
-                + ZMCT103C
+                + branch CT
               </span>
             </p>
             <p className="font-body-sm text-body-sm text-on-surface-variant">
-              16-bit ADC · one CT per branch
+              16-bit ADC over SPI · one CT per branch
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
-              INA226 · 24 V reference
+              INA226 · 3.3V DC rail
             </p>
           </div>
         </article>
@@ -307,7 +308,7 @@ export function HardwareView() {
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant">
-              INA226 + ADS1015 share the bus
+              INA226 · 3.3V DC rail
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
               Relay GPIOs 10–14
@@ -476,7 +477,7 @@ export function HardwareView() {
           <div>
             <p className="mb-2 font-label-sm text-label-sm uppercase text-on-surface-variant">
               Live conductor, one{' '}
-              <span className="font-metric-value text-metric-value">220 V</span> branch
+              <span className="font-metric-value text-metric-value">238 V</span> branch
             </p>
             <div className="flex flex-wrap items-center gap-1" aria-label="Live conductor wiring sequence">
               {LIVE_CHAIN.map((step, index) => (
@@ -508,12 +509,7 @@ export function HardwareView() {
               I2C bus
             </p>
             <div className="flex flex-wrap items-center gap-1" aria-label="I2C bus connections">
-              {[
-                'ESP32 GPIO 8 · SDA',
-                'ESP32 GPIO 9 · SCL',
-                'INA226',
-                'ADS1015',
-              ].map((step, index, all) => (
+              {['ESP32 GPIO 8 · SDA', 'ESP32 GPIO 9 · SCL', 'INA226 @ 0x40'].map((step, index, all) => (
                 <span key={step} className="flex items-center gap-1">
                   <span className="rounded-md bg-surface-container px-2.5 py-1.5 font-metric-value text-metric-value text-on-surface">
                     {step}
@@ -525,8 +521,10 @@ export function HardwareView() {
               ))}
             </div>
             <p className="mt-2 font-body-sm text-body-sm text-on-surface-variant">
-              Both devices share one bus. Address conflicts and bus capacitance are the usual failure
-              here, not the sensors themselves.
+              The INA226 is the only device on this bus. The branch ADC is an{' '}
+              <strong className="text-on-surface">ADS1220 on SPI</strong> — SCLK 12, MISO 13, MOSI 11,
+              CS 10, DRDY 14 — so a wiring fault here affects the 3.3V DC block only, not the four
+              mains branches.
             </p>
           </div>
 
@@ -587,7 +585,7 @@ export function HardwareView() {
                 <p className="font-body-sm text-body-sm text-on-surface-variant">
                   The PZEM-004T v3.0 is retired and is not fitted to this rig. The roster still
                   carries a &ldquo;PZEM-01 &hellip; mains bus&rdquo; label on its meterChannel field from before
-                  the ADS1015 conversion; it is a stale seed value, not a device, and the console does
+                  the ADS1220 conversion; it is a stale seed value, not a device, and the console does
                   not render it as a sensor name.
                 </p>
               </div>

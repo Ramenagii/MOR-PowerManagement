@@ -27,18 +27,18 @@
   worst print or report one odd sample.
 
   Hardware
-    INA226  0x40   5 V USB RAIL MONITOR (one job, as of 2026-10-16). It is NOT a
+    INA226  0x40   3.3V RAIL MONITOR (one job, as of 2026-10-16). It is NOT a
                    mains power meter and its current / power registers are not a
                    mains total (MUST_READ_ Read section 12). Mains is a FIXED
-                   228 V constant (MAINS_FIXED_VOLTS in config.h), no longer
+                   238 V constant (MAINS_FIXED_VOLTS in config.h), no longer
                    derived from this sensor, so every CH1-4
                    volt and watt is independent of the INA226 entirely. The raw
                    bus volts + shunt current are what outletId 5 (the USB socket)
                    posts as its volts and amps, and the same four figures go out
-                   in doc["ina"]. The bus pin is EXPECTED TO READ ~5 V now: if the
-                   serial line still reads ~24 V the module is physically still
-                   on the 24 V rail and must be rewired to 5 V - do not fudge a
-                   constant to hide it.
+                   in doc["ina"]. The bus pin is EXPECTED TO READ ~3.3 V now: ~5 V
+                   means the module is on the USB rail, and ~24 V means it is
+                   physically still on the 24 V rail and must be rewired - do not
+                   fudge a constant to hide either.
     ADS1220 SPI   24-bit ADC, one ZMCT103C per mains branch (CH1-CH4).
                    CS = GPIO 10, DRDY = GPIO 14, SCLK = 12, MISO = 13,
                    MOSI = 11. Single-ended against AVSS, AVDD as VREF.
@@ -51,7 +51,7 @@
 
   Channels
     CH1-CH4  220 V mains outlets, CT-metered (BRANCH_CT_COUNT = 4). Watts are
-             amps x the single mains voltage from the FIXED 228 V constant,
+             amps x the single mains voltage from the FIXED 238 V constant,
              exactly as before.
     CH5      USB socket, outletId 5. No CT and no relay. Volts = INA226 bus V,
              amps = INA226 shunt A, watts = their product. It is a real
@@ -148,7 +148,7 @@ struct ZmctReading {
 // INA226 is not on the mains feed, so there is no mains total here to subtract
 // from, and a fabricated residual would be a lie in the telemetry. The volts
 // posted are the RAW INA226 bus-pin reading, NOT mainsV and NOT busV x any
-// divider - the INA226 is the 5 V rail monitor now (bus expected ~5 V) and the
+// divider - the INA226 is the 3.3V rail monitor now (bus expected ~3.3 V) and the
 // mains figure it used to be multiplied into is a fixed constant.
 #define USB_OUTLET_ID (BRANCH_CT_COUNT + 1)      // 5
 // The USB socket must be the LAST outlet, because isMonitoredOnly() and every
@@ -227,14 +227,16 @@ float inaBusVoltage_V = 0.0;
 // The ONE mains voltage the whole firmware reports against.
 //
 // PROVENANCE CHANGED 2026-10-16 (operator direction): it is now the FIXED
-// MAINS_FIXED_VOLTS constant (228 V, bench multimeter reading), NOT the INA226
+// MAINS_FIXED_VOLTS constant (238 V, adopted from the operator's reference
+// sketch - see the provenance conflict documented on the constant in config.h;
+// it was 228 V from a multimeter until that same pass), NOT the INA226
 // bus-pin volts x INA226_MAIN_VOLT_DIVIDER. The divider path is gone; the
 // constant that recorded how 228 V was originally derived is kept unused in
 // config.h as history.
 //
 // It is initialised from MAINS_FIXED_VOLTS and is no longer recomputed from any
 // sensor, so no sensor fault and no rewire can move it. FALLBACK_MAINS_VOLTS
-// happens to be the same 228.0 today, which is deliberate: a degraded rig
+// happens to be the same 238.0 today, which is deliberate: a degraded rig
 // reports the same mains as a healthy one. Both the posted branch volts and
 // every branch watt are derived from this single value, so the two can never
 // contradict each other on the dashboard (they used to: 228 V posted next to
@@ -253,7 +255,7 @@ float inaPower_W = 0.0;
 // permanently empty dashboard with nothing on screen to explain why.
 //   INA226 missing  -> outlet 5 reports 0 V / 0 A from that sensor; mains volts
 //                      are unaffected because they are a FIXED constant now, and
-//                      FALLBACK_MAINS_VOLTS is the same 228 V it would report
+//                      FALLBACK_MAINS_VOLTS is the same 238 V it would report
 //   ADS1220 missing -> branch amps stay 0.00 A and the Core-0 sweep is not
 //                      started (an unACKed SPI device would stall the task rather
 //                      than return a clean zero)
@@ -373,18 +375,25 @@ void setup() {
   // halting: outlet 5's USB reading falls back to zero, and every batch is
   // posted with the fault flag raised, so the console labels the readings as
   // degraded instead of presenting them as verified. Mains volts are unaffected
-  // either way - they are a FIXED 228 V constant, not a sensor reading.
+  // either way - they are a FIXED 238 V constant, not a sensor reading.
   ina226Present = ina226.begin();
   if (ina226Present) {
-    // Max current first, then shunt: 8 A full scale on a 10 mOhm shunt. Wrong
-    // values scale every current and watt reading (this pairing once reported
-    // 0 A on a healthy sensor).
+    // Max current first, then shunt: 2 A full scale on a 100 mOhm shunt, which
+    // is the part physically fitted on this board (see INA226_SHUNT_OHM). The
+    // previous 8 A / 10 mOhm pairing assumed a mains-side shunt that is not
+    // here, and because current is derived from shunt volts it reported every
+    // DC reading 10x HIGH. Wrong values scale every current and watt reading
+    // on this sensor, so they are stated at boot rather than left implicit.
     ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
     Serial.print("INA226  OK  (0x");
     Serial.print(INA226_ADDR, HEX);
     Serial.print(") - outletId ");
     Serial.print(USB_OUTLET_ID);
-    Serial.print(" USB rail monitor, bus expected ~5 V (raw busV/shuntA). ");
+    Serial.print(" 3.3V rail monitor, ");
+    Serial.print(INA226_MAX_CURRENT_AMPS, 1);
+    Serial.print("A/");
+    Serial.print(INA226_SHUNT_OHM, 3);
+    Serial.print("Ohm shunt, bus expected ~3.3 V (raw busV/shuntA). ");
     Serial.print("Mains is FIXED at ");
     Serial.print(MAINS_FIXED_VOLTS, 1);
     Serial.println(" V (no divider in the voltage path).");
@@ -570,7 +579,7 @@ unsigned long lastInaPoll = 0;
 // CORE 1: MAIN LOOP (Serial Telemetry & INA226 Polling)
 // =========================================================================
 void loop() {
-  // Read the INA226 (5 V USB rail monitor) on Core 1, on a fixed
+  // Read the INA226 (3.3V rail monitor) on Core 1, on a fixed
   // interval rather than on every pass. loop() executes thousands of times per
   // second; an unguarded poll on each pass contends with the core-0 sweep for
   // the shared I2C bus and starves it. It measures one DC rail, so a 4 Hz
@@ -578,7 +587,7 @@ void loop() {
   // Skipped entirely when the module was not detected in setup(): calling the
   // getters against an absent device would put a guaranteed-NACK transaction on
   // the I2C bus every pass, which is worse than reading nothing. mainsVolts_V
-  // is a FIXED 228 V constant and is NOT affected either way; every batch is
+  // is a FIXED 238 V constant and is NOT affected either way; every batch is
   // posted with the fault raised.
   if (ina226Present && millis() - lastInaPoll >= INA226_POLL_INTERVAL_MS) {
     lastInaPoll = millis();
@@ -588,9 +597,13 @@ void loop() {
     // Bus lock FIRST, then the variable lock: never the reverse, so the bus is
     // never held while waiting on dataMutex.
     if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-      busV   = ina226.getBusVoltage();       // V at the INA226 bus pin (~5 V expected)
-      shuntV = ina226.getShuntVoltage_mV();  // mV across the 10 mOhm shunt
-      inAmps = ina226.getCurrent();          // A through the 10 mOhm shunt
+      busV   = ina226.getBusVoltage();       // V at the INA226 bus pin (~3.3 V expected)
+      // Shunt 0.1 Ohm / 2 A full scale - the part actually fitted, not the
+      // 10 mOhm mains-side shunt these getters used to be annotated with. The
+      // annotation mattered: it is the scale every current and watt figure on
+      // this sensor is multiplied by, and it was 10x the real part.
+      shuntV = ina226.getShuntVoltage_mV();  // mV across the 0.1 Ohm shunt
+      inAmps = ina226.getCurrent();          // A through the 0.1 Ohm shunt
       inWatts = ina226.getPower();           // W at the INA226 bus pin
       readOk = true;
       xSemaphoreGive(i2cMutex);
@@ -600,16 +613,17 @@ void loop() {
       // NO mains derivation here any more. This block used to compute
       // mainsV = busV * INA226_MAIN_VOLT_DIVIDER (x 9.46) and store it into
       // mainsVolts_V. Per operator direction 2026-10-16 mains is a FIXED
-      // 228 V constant (MAINS_FIXED_VOLTS, a bench multimeter reading frozen
-      // into config.h), and the INA226 is only the 5 V USB rail monitor - so
-      // there is nothing to compute from busV, and multiplying a 5 V rail
-      // reading by 9.46 would post 47 V for the USB socket.
+      // 238 V constant (MAINS_FIXED_VOLTS, frozen into config.h - originally a
+      // bench multimeter reading, now the reference sketch's value), and the
+      // INA226 is only the 3.3V rail monitor - so
+      // there is nothing to compute from busV, and multiplying a 3.3 V rail
+      // reading by 9.46 would post 31 V for outlet 5.
       //
       // mainsVolts_V is therefore NOT written from this block at all. It is set
       // once at its declaration and left there, which also means a sensor fault
       // can no longer move the voltage every CH1-4 watt is multiplied by.
       // The guard that used to fall back to FALLBACK_MAINS_VOLTS on a dead
-      // sensor has no counterpart here - FALLBACK_MAINS_VOLTS is the same 228.0
+      // sensor has no counterpart here - FALLBACK_MAINS_VOLTS is the same 238.0
       // as MAINS_FIXED_VOLTS, so there is no longer a failure mode that changes
       // the mains figure.
       //
@@ -828,8 +842,9 @@ void printSerialTelemetry() {
 
   Serial.println("==================================================");
   Serial.print("[INA226] Bus: "); Serial.print(inaV, 3);
-  Serial.print(" V (5 V USB rail expected; ~24 V means the module is still "
-                  "on the 24 V rail and must be rewired)");
+  Serial.print(" V (3.3V rail expected; ~5 V means the module is on the USB "
+                  "rail, ~24 V means it is still on the 24 V rail and must be "
+                  "rewired)");
   Serial.print(" | Shunt: "); Serial.print(inaShunt, 3);
   Serial.print(" mV | Current: "); Serial.print(inaI, 3);
   Serial.print(" A | Power: "); Serial.print(inaP, 3); Serial.println(" W");
@@ -843,7 +858,9 @@ void printSerialTelemetry() {
   Serial.println(" USB is the RAW bus V above");
   Serial.println("--------------------------------------------------");
   // The grid voltage printed here is the one every watt below was multiplied
-  // by. Its VALUE is unchanged at 228 V; its PROVENANCE is: it is now the fixed
+  // by. Its VALUE is the fixed MAINS_FIXED_VOLTS constant, now 238 V (it was 228 V
+// until this pass; the change is adopted from the operator's reference sketch and
+// its provenance conflict is recorded in config.h); its PROVENANCE is: it is now the fixed
   // MAINS_FIXED_VOLTS constant, not something derived from the INA226, and it is
   // read from the same snapshot as the amps so the two still agree.
   Serial.print("[ZMCT103C AC Channels @ "); Serial.print(mainsV, 1); Serial.println("V Mains]");
@@ -1035,13 +1052,13 @@ bool postTelemetry() {
   //
   // UNCHANGED WIRE FORMAT, CHANGED MEANING (2026-10-16): these four fields are
   // still busV / shuntmV / currentA / powerW posted from the same one hold as
-  // everything else, but the sensor is now the 5 V USB RAIL MONITOR rather than
-  // the mains voltage reference. busV is EXPECTED TO READ ~5 V. If it reads
-  // ~24 V, the module is physically still wired to the 24 V rail and must be
-  // moved to 5 V - that number is reported as-is and is not adjusted to look
-  // right.
+  // everything else, but the sensor is now the 3.3V RAIL MONITOR rather than
+  // the mains voltage reference. busV is EXPECTED TO READ ~3.3 V. If it reads
+  // ~5 V the module is on the USB rail, and if it reads ~24 V it is physically
+  // still wired to the 24 V rail and must be moved - that number is reported
+  // as-is and is not adjusted to look right.
   //
-  // mainsVolts_V is the FIXED 228 V constant and stays the basis for every
+  // mainsVolts_V is the FIXED 238 V constant and stays the basis for every
   // CH1-4 watt; nothing in this block feeds it any more (it used to be
   // busV * INA226_MAIN_VOLT_DIVIDER). This block only reports the sensor.
   //
@@ -1050,8 +1067,8 @@ bool postTelemetry() {
   // posted raw: the dashboard can show the USB socket's numbers and the sensor
   // block side by side and they must match exactly.
   JsonObject ina = doc["ina"].to<JsonObject>();
-  ina["busV"]     = inaBusV;      // V at the INA226 bus pin (~5 V USB rail)
-  ina["shuntmV"]  = inaShunt;     // mV across the 10 mOhm shunt
+  ina["busV"]     = inaBusV;      // V at the INA226 bus pin (~3.3 V rail)
+  ina["shuntmV"]  = inaShunt;     // mV across the 0.1 Ohm shunt
   ina["currentA"] = inaAmps;      // A through the shunt
   ina["powerW"]   = inaWatts;     // W at the INA226 bus pin
 
@@ -1069,8 +1086,8 @@ bool postTelemetry() {
   }
   // ---- outletId 5: the USB socket, measured by the INA226 ----
   // volts = the RAW bus-pin reading, NOT mainsV and NOT busV x the divider. The
-  // INA226 IS the 5 V USB rail monitor now, so this IS the socket's voltage and
-  // is expected to read ~5 V; the mains figure is a separate FIXED 228 V constant
+  // INA226 IS the 3.3V rail monitor now, so this IS the socket's voltage and
+  // is expected to read ~3.3 V; the mains figure is a separate FIXED 238 V constant
   // (MAINS_FIXED_VOLTS) and the old INA226_MAIN_VOLT_DIVIDER is unused history.
   // watts = the product of these same two numbers, taken from
   // the one hold they were both read under, so powerWatts == currentAmps *

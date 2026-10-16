@@ -18,7 +18,7 @@ type OutletCardProps = {
  * Colour discipline: this card carries exactly ONE chip — the status. Its rail,
  * its priority tier, its relay id and its sensor provenance are all static
  * metadata, so they are rendered as plain labelled text on on-surface-variant
- * and separated by a hairline rather than by colour. A 220 V rail and a 5 V USB
+ * and separated by a hairline rather than by colour. A 238 V rail and a 5 V USB
  * rail do not need different colours to be told apart, and priority is a shed
  * order rather than a health verdict, so colouring it red would be a lie.
  */
@@ -83,9 +83,13 @@ const RELAY_UNAVAILABLE_SHORT = 'Relays not driven in this build'
  * the Dashboard's disclosure: a tooltip is unreachable by keyboard and
  * disappears the moment the pointer moves, and this sentence is the answer to
  * "where do these numbers come from?" on the page that shows the most numbers.
+ *
+ * ADS1220, not ADS1015. The reference front end is an ADS1220 over SPI with a
+ * CT clamped to each branch, and naming the part that is not fitted tells the
+ * reader to go looking for a board that does not exist on this bench.
  */
 export function branchSensorNote(ratedVolts: number): string {
-  return `Branch current is metered by an ADS1015 front end reading the ZMCT103C clamped on this branch. The ${ratedVolts} V figure shown is the channel's rated rail, not a live sample.`
+  return `Branch current is metered by an ADS1220 SPI front end reading the CT clamped on this branch. The ${ratedVolts} V figure shown is the channel's rated rail, not a live sample.`
 }
 
 export const NOMINAL_RAIL_NOTE =
@@ -114,14 +118,32 @@ function formatAmps(watts: number, volts: number): string | null {
  *   3. The legacy `meter` string is deliberately NOT rendered. It still carries
  *      the retired PZEM-004T label on older snapshots. What is shown instead is
  *      the sensor that is actually fitted: a branch CT on each mains outlet
- *      behind an ADS1015, and a nominal rating on the USB rail, which has no CT
+ *      behind an ADS1220, and a nominal rating on the USB rail, which has no CT
  *      wired to it at all.
  */
 export function OutletCard({ outlet, faulted }: OutletCardProps) {
   const isEnergized = isEnergizedOutlet(outlet.status)
   const status = STATUS_VIEWS[outlet.status]
-  const isMains = outlet.volts >= 220
+  /*
+   * Mains vs DC, from the RATED rail.
+   *
+   * The threshold is 200 V and not 220 V, and that is not a fudge: 220 was a
+   * rating the rig happened to use, so a channel rated 238 V on the current
+   * hardware fell through it and would have been labelled "No sensor — nominal
+   * rating" while carrying a branch CT. Anything at or above 200 V is an AC mains
+   * rail on this rig; the 5 V USB socket is the only DC one. A rating of 0 is
+   * "the server has not rated this channel" and takes the DC branch, which the
+   * views already render as unrated.
+   */
+  const isMains = outlet.volts >= 200
 
+  /*
+   * The allocation denominator, straight off the server with no fallback. The
+   * reference caps each mains branch at 1100 W, but that is a setting the admin
+   * writes and state reads back, so it arrives per row and is never re-asserted
+   * here. A 0 allowance means "no cap configured", which is a state the chip
+   * names rather than a number to divide by.
+   */
   const rawPercent = outlet.allowance > 0 ? (outlet.watts / outlet.allowance) * 100 : 0
   const overAllowance = rawPercent > 100
   const usedPercent = Math.min(100, rawPercent)
@@ -140,7 +162,7 @@ export function OutletCard({ outlet, faulted }: OutletCardProps) {
           ? 'bg-secondary'
           : 'bg-outline-variant'
 
-  const sensor = isMains ? 'ADS1015 + ZMCT103C on this branch' : 'No sensor — nominal rating'
+  const sensor = isMains ? 'ADS1220 + branch CT on this rail' : 'No sensor — nominal rating'
   const sensorNote = isMains ? branchSensorNote(outlet.volts) : NOMINAL_RAIL_NOTE
 
   const loadLabel = faulted ? 'No reading' : `${Math.round(outlet.watts).toLocaleString()}`

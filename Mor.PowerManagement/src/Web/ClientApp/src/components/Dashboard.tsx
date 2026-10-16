@@ -232,7 +232,7 @@ export function Dashboard({
           the shape of the bench legible from across a room.
         */}
         <span className="num" title={DASHBOARD_TIPS.outlet}>
-          4 × 220 V · branch CT + relay · 1 × 5 V USB · monitored only
+          4 × 238 V mains · branch CT + relay · 1 × 5 V USB · monitored only
         </span>
       </h2>
       {/* Not "controlled channels": CH5 is in this list and has no control. */}
@@ -248,9 +248,19 @@ export function Dashboard({
               outlet={outlet}
               history={historyFor(outlet.id)}
               live={live}
-              // Outlet 5 is the USB socket: its volts are the INA226 raw bus
-              // volts, never the divided mains the AC branches use.
-              mainsVolts={outlet.id === 5 ? (ina226.busVolts ?? mainsVolts) : mainsVolts}
+              /*
+                CH5 gets NO volts reference at all, and that is the honest
+                answer rather than a gap.
+
+                It used to be handed `ina226.busVolts` as its own, on the claim
+                that the INA226 sits on the rail the socket is fed from. It does
+                not: the converter is on the 3.3 V DC rail, so a 5 V USB socket
+                was displaying a 3.3 V figure as though the socket had been
+                measured. Passing null makes the row read 0.0 V · 0.00 A with
+                the tooltip saying nothing on the rig measures that rail — which
+                is a weaker claim than a wrong number, and it is a true one.
+              */
+              mainsVolts={outlet.id === 5 ? null : mainsVolts}
               busy={busyId === outlet.id}
               onToggle={toggleOutlet}
             />
@@ -259,9 +269,13 @@ export function Dashboard({
       </div>
 
       {/*
-        The INA226 sits here, between the branches it feeds and the vectors that
-        drive them: the branches consume its bus reading to derive their amps, and
-        the vectors change what it reads. Reading order follows the signal.
+        The INA226 sits here, between the branches and the vectors that drive
+        them. It is NOT the reference those branches derive against — it is a
+        standalone DC block on the 3.3V rail — so this position is about reading
+        order rather than signal flow: it is the one card on the page whose
+        three headline figures are direct conversions rather than arithmetic on
+        somebody else's total, and it belongs where the eye lands after scanning
+        the rows and before reaching for a control.
       */}
       <Ina226Card reading={ina226} live={live} now={now} />
 

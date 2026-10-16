@@ -76,9 +76,10 @@ function App() {
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
   const [events, setEvents] = useState<EventLog[]>(initialEvents)
   // 0 is "the server has not told us". It is not a copy of the rig's configured
-  // ceiling: a guessed limit renders as "0 % of 1200 W limit — full headroom" on
+  // ceiling: a guessed limit renders as "0 % of 4400 W limit — full headroom" on
   // a rig that knows nothing, and the hero shows a dash for every limit-derived
-  // figure instead.
+  // figure instead. The reference device's 4400 W ceiling is a setting the
+  // Framework admin writes; nothing in this client holds a copy of it.
   const [thresholds, setThresholds] = useState({ max: 0, warning: 0, critical: 0 })
   const [session, setSession] = useState<Session>('checking')
   // Shown in the top bar avatar and the footer. checkSession() already returns

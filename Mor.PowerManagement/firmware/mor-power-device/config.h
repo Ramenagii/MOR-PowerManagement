@@ -19,9 +19,9 @@
 //                  amps x the ONE mains voltage below, exactly as before.
 //   outletId 5     USB socket, MONITORED ONLY. No CT is fitted, and there is no
 //                  relay: the socket is never actuated by this firmware. Its
-//                  volts/amps/watts come straight off the INA226, which is now
-//                  the 5 V USB rail monitor and nothing else (see the INA226
-//                  block below).
+//                  volts/amps/watts come straight off the INA226, which is the
+//                  3.3 V rail monitor and nothing else (see the INA226 block
+//                  below).
 //
 // Every outlet on this rig therefore has a real sensor behind it: CH1-4 behind
 // a CT, CH5 behind the INA226. Nothing is posted as a fabricated zero or a
@@ -117,6 +117,32 @@
 // RULES_ENABLED is still 0, so nothing in the firmware currently commands a
 // pin LOW. Enabling relay output is therefore safe on this rig ONLY because of
 // the NC wiring; on a NO-contact build, leave this 0 until FR-01..FR-12 run.
+//
+// *** DELIBERATE DIVERGENCE FROM THE OPERATOR'S REFERENCE SKETCH ***
+// test2aV2.ino drives the relays ITSELF: inside its sensor task it keeps a
+// per-channel `tripped_n` latch and writes each pin LOW the moment that
+// channel's watts reach its limit or the total reaches totalWattageLimit, with
+// no reset path on the device. That logic is DELIBERATELY NOT PORTED here, and
+// must not be ported by anyone reading the sketch as the reference for this
+// firmware.
+//
+// Why: this rig has exactly one authority for shed and trip decisions - the
+// backend framework (FR-01..FR-12), which owns priority order, hysteresis,
+// restoration and the audit trail. Two authorities on the same relays is not
+// redundancy, it is two writers with different state: the device latches a trip
+// it cannot clear, so the dashboard would show an outlet the operator restored
+// still dead, and every command from the server would fight the latch for the
+// pin. The sketch's latch has no clear, so that failure is permanent until a
+// reflash - which is exactly the "nothing happens" class of fault the relay
+// pin order was already corrected for once.
+//
+// The limits that sketch hardcodes (1100 W per outlet, 4400 W total) are NOT
+// lost by not porting its trip logic: they live in the backend seed
+// (PowerSystemConfig.MaxCapacityWatts / WarningThresholdWatts /
+// CriticalThresholdWatts, and each outlet's AllowanceWatts), which is where the
+// framework reads them from and where an operator can change them without a
+// reflash. The firmware observes limits through syncConfig(), which is the
+// correct place for them on a server-authoritative rig.
 // ---------------------------------------------------------------------------
 #define RELAY_OUTPUT_ENABLED 1
 #define RULES_ENABLED 0
@@ -143,13 +169,13 @@
 // pull-ups, verified by an actual bus scan.
 #define I2C_CLOCK_HZ 100000
 
-// ---- INA226: 5 V USB RAIL MONITOR (mains is now a fixed constant) ----
+// ---- INA226: 3.3 V RAIL MONITOR (mains is now a fixed constant) ----
 // ROLES REASSIGNED BY OPERATOR DIRECTION, 2026-10-16. Two changes of role:
 //   BEFORE: the INA226 sat on a 24 V DC rail behind a divider and was BOTH the
 //           mains voltage reference (busV x 9.46) and the outlet-5 USB reading.
-//   AFTER:  mains is a FIXED 228 V constant (MAINS_FIXED_VOLTS, below). The
-//           INA226 is ONLY the 5 V USB rail monitor, and its bus pin is
-//           expected to read ~5 V, not ~24 V.
+//   AFTER:  mains is a FIXED 238 V constant (MAINS_FIXED_VOLTS, below). The
+//           INA226 is ONLY the 3.3 V rail monitor, and its bus pin is
+//           expected to read ~3.3 V, not ~24 V.
 //
 // The INA226 is still NOT a mains power meter (MUST_READ.md section 12). Its
 // bus/current/power registers describe ONE DC rail and must never be used as a
@@ -163,15 +189,20 @@
 //   figures. The divider is no longer part of any calculation.
 //
 // HARDWARE EXPECTATION - READ THE LIVE BUS READING BEFORE TRUSTING CH5:
-//   the module is expected to be wired across the 5 V USB rail and report
-//   ~5 V at its bus pin. If the serial line still reads ~24 V, the module is
-//   PHYSICALLY STILL ON THE 24 V RAIL and must be rewired to 5 V. Do not fudge
-//   a constant to make that number look like 5 V: a wrong bus voltage with the
+//   the module is expected to be wired across the 3.3 V rail and report
+//   ~3.3 V at its bus pin (2026-10-16: the operator's reference sketch labels
+//   this rail "INA226 3.3V Rail", which supersedes the 5 V USB rail label the
+//   previous revision of this file used). If the serial line reads ~5 V the
+//   module is on the USB 5 V rail instead, and if it still reads ~24 V it is
+//   PHYSICALLY STILL ON THE 24 V RAIL and must be rewired. Do not fudge a
+//   constant to make that number look right: a wrong bus voltage with the
 //   right-looking telemetry is worse than an obviously wrong one.
 //
-//   - MUST CHANGE if rewired: INA226_MAX_CURRENT_AMPS / INA226_SHUNT_OHM must be
-//     re-checked against the shunt actually in the USB path; a USB load will sit
-//     far below the 8 A full scale configured for the mains-side shunt.
+//   - MUST CHANGE if a different shunt is fitted: INA226_MAX_CURRENT_AMPS /
+//     INA226_SHUNT_OHM must be re-checked against the shunt actually in the
+//     path. They are 2 A / 0.1 Ohm because that is the part on this board, not
+//     because a particular load needs it - a low-current rail sitting far below
+//     full scale is expected, not a fault.
 //   - DOES NOT CHANGE: the CH1-4 CT chain (ADS1220, ZMCT_CAL_FACTOR, the
 //     piecewise curve, the adaptive EMA). Current is measured by the CTs and is
 //     entirely independent of the INA226 and of MAINS_FIXED_VOLTS.
@@ -179,23 +210,37 @@
 
 // ---- Mains voltage: FIXED CONSTANT ----
 // The single mains voltage every CH1-4 volt and CH1-4 watt is derived from.
-// Operator direction 2026-10-16: mains is a fixed 228 V and is no longer
-// derived from the INA226. PROVENANCE: bench multimeter reading on this rig
-// (228 V, matching the value the old busV x 9.46 derivation produced), frozen
-// as a constant so a sensor fault, a rewire, or an absent module can no longer
-// move the number every watt in the telemetry is multiplied by.
+// Operator direction 2026-10-16: mains is a fixed constant and is no longer
+// derived from the INA226. PROVENANCE: originally a bench multimeter reading on
+// this rig (228 V, matching the value the old busV x 9.46 derivation produced),
+// frozen as a constant so a sensor fault, a rewire, or an absent module can no
+// longer move the number every watt in the telemetry is multiplied by. It now
+// reads 238 V, adopted from the operator's reference sketch - see the change
+// note and the unresolved provenance conflict immediately below.
 //
 // This is an ASSUMPTION held constant, not a measurement - there is no voltage
 // transformer on this rig and the CTs measure current only. Re-measure with a
 // meter if the supply is ever changed.
-#define MAINS_FIXED_VOLTS 228.0f
+//
+// 228.0 -> 238.0 (2026-10-16, adopted from the operator's reference sketch
+// test2aV2.ino, which carries `float acVoltage = 238.0`).
+// *** CONFLICTING PROVENANCE - RESOLVED BY DIRECTION, NOT BY MEASUREMENT ***
+// The 228 V this constant previously held was set from a bench multimeter
+// reading on THIS rig. The reference sketch says 238.0 with no recorded
+// measurement behind it, and it is 4.4% higher, so every CH1-4 watt figure
+// moves by the same 4.4% the moment this change lands. 238 is in force because
+// that is the direction given; it is NOT a claim that the meter was wrong.
+// ACTION REQUIRED BEFORE THE NEXT THRESHOLD DECISION: re-measure mains with a
+// multimeter on this rig and write the reading here. If the meter still says
+// 228, this constant goes back and the reference sketch is what is wrong.
+#define MAINS_FIXED_VOLTS 238.0f
 
 // SUPERSEDED - KEPT AS HISTORY, DO NOT USE.
 // INA226_MAIN_VOLT_DIVIDER was the bus-voltage divider ratio, calibrated on
 // the bench when the INA226 sat on a 24 V DC rail: the sensor reported 24.1 V
 // at its bus pin, mains measured 228 V with a multimeter, so 228 / 24.1 = 9.46.
 // IT IS NOW UNUSED BY DESIGN, because mains is the MAINS_FIXED_VOLTS constant
-// above and the INA226 is only the 5 V USB rail monitor. Nothing in the .ino
+// above and the INA226 is only the 3.3 V rail monitor. Nothing in the .ino
 // multiplies by this number any more.
 // It is deliberately NOT deleted: it is the record of how 228 V was originally
 // established, and it is the number to compare against if the sensor is ever put
@@ -205,23 +250,45 @@
 // in a grep, rather than disappearing and taking its provenance with it.
 #define INA226_MAIN_VOLT_DIVIDER 9.46f
 
-// Shunt calibration, exactly as the validated bench sketch sets it: 8 A full
-// scale on a 10 mOhm shunt. The INA226 derives current from the shunt voltage,
-// so the wrong shunt value scales EVERY current and watt reading - this was
-// reporting 0 A and 0 W while the sensor itself was fine.
-#define INA226_MAX_CURRENT_AMPS 8.0f
-#define INA226_SHUNT_OHM 0.010f
+// Shunt calibration. The INA226 derives current from the shunt voltage, so the
+// shunt value scales EVERY current and watt reading - a wrong shunt value on a
+// healthy sensor is indistinguishable from a dead sensor on the dashboard.
+//
+// WAS 8 A full scale on a 10 mOhm shunt. NOW 2 A full scale on a 100 mOhm
+// shunt, matching the physical part actually in this rig and the reference
+// sketch's `ina226.setResistorRange(0.1, 2.0)` (which is shuntOhms, maxAmps).
+// PROVENANCE: the shunt is a COMPONENT ON THE BOARD, readable off the part
+// marking, not a bench fit. 0.1 Ohm is 10x the 0.01 Ohm the previous values
+// assumed, so every DC current and watt reading on this sensor was reporting
+// 10x HIGH - the 10x is not an estimate, it is the ratio of the two parts.
+//
+// Consequences to keep in mind before trusting a CH5 reading:
+//   - A 2 A full scale is ~400x what a USB rail actually draws, so the reading
+//     will be a small fraction of full scale. That is the correct place for a
+//     low-current rail to sit on a 2 A part; it is not evidence of a fault.
+//   - Past ~2 A the INA226 saturates at the ADC. A fault on the rail that draws
+//     more than 2 A will therefore read as a flat maximum rather than as an
+//     over-range flag. CH5 has no relay (USB_OUTLET_NO_RELAY), so nothing on
+//     the rig will open a breaker for it - watch this rail, do not trust it to
+//     detect its own overload.
+//   - MAINS_FIXED_VOLTS and the CH1-4 CT chain are untouched by any of this:
+//     current on those channels is measured by CTs, not by this sensor.
+#define INA226_MAX_CURRENT_AMPS 2.0f
+#define INA226_SHUNT_OHM 0.1f
 // NOTE (2026-10-16, mains is now fixed): this value is now IDENTICAL to
-// MAINS_FIXED_VOLTS - 228.0 either way. It is kept as a separate name because
-// it still means something different: FALLBACK_MAINS_VOLTS is the value a
-// degraded rig reports when a sensor is missing, MAINS_FIXED_VOLTS is the value
-// a healthy rig reports. Today those two numbers coincide, and that is the
-// POINT: there is no longer a sensor failure that can move the mains figure away
-// from the metered 228 V. If MAINS_FIXED_VOLTS is ever re-measured, change this
-// one too or the fallback path will start reporting a different mains than the
-// normal path, which is exactly the split that used to put 228 V next to
-// 238 V-derived watts on the dashboard.
-#define FALLBACK_MAINS_VOLTS 228.0f
+// MAINS_FIXED_VOLTS - it is 238.0 either way (it was 228.0 until the same pass
+// that moved MAINS_FIXED_VOLTS to the reference sketch's 238.0). It is kept as
+// a separate name because it still means something different:
+// FALLBACK_MAINS_VOLTS is the value a degraded rig reports when a sensor is
+// missing, MAINS_FIXED_VOLTS is the value a healthy rig reports. Today those
+// two numbers coincide, and that is the POINT: there is no longer a sensor
+// failure that can move the mains figure away from the configured mains. If
+// MAINS_FIXED_VOLTS is ever re-measured, change this one too or the fallback
+// path will start reporting a different mains than the normal path, which is
+// exactly the split that used to put 228 V next to 238 V-derived watts on the
+// dashboard. They were left divergent for exactly one revision and are not
+// again.
+#define FALLBACK_MAINS_VOLTS 238.0f
 
 // ---- ADS1220: 24-bit SPI ADC, one ZMCT103C per mains branch ----
 // The ADS1015 is gone: this rig reads branch current from an ADS1220 on its own
@@ -281,7 +348,7 @@
 // to set it is a measured known load. Whenever it changes, write here:
 //   - the date,
 //   - the load (what was clamped on, and its meter-measured watts),
-//   - the mains volts the run saw (now the fixed MAINS_FIXED_VOLTS, 228 V - it
+//   - the mains volts the run saw (now the fixed MAINS_FIXED_VOLTS constant - it
 //     no longer comes from the INA226),
 //   - the resulting counts/mV that run printed.
 // Without those four, this is a magic number, and a magic number in a mains
@@ -413,18 +480,30 @@
 // IDLE0 and rebooted the rig with a task watchdog abort (see sensorTask() in the
 // .ino).
 //
-// So the window is halved to 250 samples (~235 ms/channel, ~14 AC cycles at
-// 60 Hz - still a long enough window for an RMS to mean something) and the sweep
-// period below is doubled, which keeps the pass at ~940 ms against a 2 s
-// period: under the METER_INTERVAL_MS/2 guard, so the watchdog path never
-// engages on a healthy rig.
+// So the window is now 150 samples (~141 ms/channel at the measured ~940 us per
+// conversion, ~9 AC cycles at 60 Hz), which is the operator's reference-sketch
+// value and the shortest window that still spans two full 60 Hz cycles' worth of
+// nominal mains content. The sweep period below is unchanged at 2 s, so the
+// four-channel pass now costs ~564 ms instead of ~940 ms against the same
+// period: comfortably under the METER_INTERVAL_MS/2 guard, and the extra slack
+// is deliberate - the watchdog path must never engage on a healthy rig.
+//
+// WHAT 150 COSTS, stated plainly: the RMS window is shorter than the 250-sample
+// one it replaces, so a genuinely noisy branch is averaged over fewer cycles and
+// its reading is correspondingly noisier. That is a real accuracy trade for a
+// real reduction in core-0 occupancy. The adaptive EMA in front of it smooths
+// the readout but does not recover the lost averaging, so per-sweep scatter on
+// a live branch will be larger than it was at 250 samples. If that scatter turns
+// out to be objectionable on a real load, raising the window is the fix - and
+// the sample cost must be re-checked against METER_INTERVAL_MS at the same
+// time, because that is what the watchdog guard is actually watching.
 //
 // The visible consequence of the 2 s period: branchAmps only refreshes every 2 s
 // while telemetry posts every 1 s, so the dashboard can show one repeated amps
 // frame between updates. That is a stale-but-true number, which is the honest
 // trade - the alternative is a sweep that overruns its own period and stops
 // posting altogether.
-#define ZMCT_DEDICATED_SAMPLES 250
+#define ZMCT_DEDICATED_SAMPLES 150
 // Stack for the sampling task; it is pinned to core 0 so a full four-channel
 // pass cannot delay the serial output on core 1.
 #define SENSOR_TASK_STACK 4096
@@ -446,7 +525,7 @@
 
 // How often the sensor sweep runs. WAS 1000 ms, sized for a 2-channel pass;
 // DOUBLED to 2000 ms with the 4-CT rig because each blocking channel window is
-// now ~235 ms (ZMCT_DEDICATED_SAMPLES), i.e. ~940 ms for all four. The RMS
+// now ~141 ms (ZMCT_DEDICATED_SAMPLES = 150), i.e. ~564 ms for all four. The RMS
 // window is blocking by nature, so the sweep is deliberately NOT run every loop
 // iteration: core 0 would be occupied almost continuously and telemetry would
 // stutter. The main loop keeps spinning at full speed between sweeps and the
@@ -458,7 +537,7 @@
 // come down with it - the pass duration, not the period, is what starves IDLE0.
 #define METER_INTERVAL_MS 2000UL
 
-// How often the INA226 is read. It is the 5 V USB RAIL MONITOR (see above), not
+// How often the INA226 is read. It is the 3.3 V RAIL MONITOR (see above), not
 // a mains meter and not a mains voltage reference any more, so it does not need
 // a fast sample rate: the rail voltage and its load change on the order of
 // seconds, not milliseconds. Polling it on a fixed interval rather than on every

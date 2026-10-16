@@ -1,7 +1,12 @@
 import { useMemo } from 'react'
 import type { Outlet } from '../types/dashboard'
-import { DASHBOARD_TIPS, isMonitoredOnlyChannel, relayGpio } from '../data/dashboard'
-import { isEnergizedOutlet } from '../utils/dashboard'
+import {
+  DASHBOARD_TIPS,
+  UNAVAILABLE,
+  isMonitoredOnlyChannel,
+  relayGpio,
+} from '../data/dashboard'
+import { isEnergizedOutlet, isLatchedOutlet, relayChip, type RelayTone } from '../utils/dashboard'
 import { buildPath } from './DashboardHero'
 
 type DashboardOutletProps = {
@@ -30,9 +35,15 @@ const SPARK_H = 64
  * moves on a dashboard: saying how this branch is doing RIGHT NOW.
  *
  * The band is watts against THIS branch's own allowance, so a 10 W USB socket
- * and a 300 W mains outlet are each read against their own cap rather than one
+ * and a 1100 W mains outlet are each read against their own cap rather than one
  * shared number. Amber and red are the same two the allocation meter and the
  * rail already use, so one meaning holds across the page.
+ *
+ * It is a SECOND chip and not a replacement for the relay-state chip. The band
+ * answers "how much of its cap is this branch using", the relay chip answers
+ * "is the contact closed" — and on this rig those disagree constantly, because
+ * an open branch sits at 0 W and therefore always bands Normal. Collapsing them
+ * would make an isolated outlet the healthiest thing in the grid.
  */
 type BranchBand = 'offline' | 'nocap' | 'normal' | 'near' | 'over'
 
@@ -51,6 +62,34 @@ const BAND_WORD: Record<BranchBand, string> = {
   normal: 'Normal',
   near: 'Near cap',
   over: 'Over cap',
+}
+
+/**
+ * Relay-state chip, mirroring the reference sketch's `Status: %s` line.
+ *
+ * The reference prints TRIPPED / ACTIVE / STANDBY. The server sends four values
+ * with no TRIPPED among them, so this cannot be a transcription — see
+ * `relayChip` in utils/dashboard for the full argument. What survives of the
+ * mapping is the SHAPE: one word per channel, drawn from the same three-tone
+ * vocabulary, so a bench read at a glance looks like the device's own read-out.
+ *
+ * The four tones, and why each one is the tone it is:
+ *   live     neutral fill. The ordinary case must not be the loudest thing.
+ *   idle     hollow with amber ink. Powered, but drawing under the threshold.
+ *   open     hollow, grey. A switch is fitted and an operator can press it, so
+ *            this is a normal outcome and not a fault.
+ *   latched  solid red. The one state no control on this screen can clear.
+ *
+ * `st-none` is the offline case and it is deliberately unlabelled: with no
+ * session there is no relay state to report, and printing OPEN off
+ * `baseOutlets` would be the browser asserting a reading it never received.
+ */
+const STATE_TAG: Record<RelayTone | 'none', string> = {
+  live: 'st st-live',
+  idle: 'st st-idle',
+  open: 'st st-open',
+  latched: 'st st-latched',
+  none: 'st st-none',
 }
 
 /**
@@ -80,21 +119,27 @@ export function branchBand(watts: number, allowance: number, live: boolean): Bra
 
 /**
  * One controlled channel, laid out as the reference's five-column row:
- *   [identity + live band] [watts] [sparkline] [allocation] [switch]
+ *   [identity + live band + relay state] [watts] [sparkline] [allocation] [switch]
  *
- * The badge next to the channel name is the branch's live load band
- * (`branchBand`), not the configured priority. Priority is the operator's shed
- * order and lives in the badge's tooltip instead, next to the percentage the
- * band was computed from — so the row can be read two ways, quickly and
- * completely, without either one being a frozen value wearing a live one's
- * clothes.
+ * Two chips sit under the channel name and they answer two different questions.
+ * `branchBand` is the load against this branch's own allowance; `relayChip` is
+ * the contact position the server reports. Priority — the operator's shed order —
+ * lives in the band's tooltip next to the percentage the band was computed from,
+ * so the row reads two ways, quickly and completely, without either chip being
+ * a frozen setting wearing a live one's clothes.
+ *
+ * They are two chips rather than one because they disagree constantly: an open
+ * branch draws 0 W, so its band is always Normal, and a single chip would have
+ * to choose between "healthy" and "isolated" for a branch that is both.
  *
  * The 4px rail down the left edge (the row's ::before) is the only place the
  * energized state is expressed as colour, and it greys out with the whole row
  * when the branch is open — so "off" dims the card instead of drawing a second
- * badge that would compete with the switch.
+ * badge that would compete with the switch. Latched is the one exception and it
+ * goes to red: a branch the policy engine has isolated is not "off", and dimming
+ * it to look like an operator's own disconnect would understate what happened.
  *
- * Amps is DERIVED. State returns watts and the live INA226 mains volts, so the
+ * Amps is DERIVED. State returns watts and a live mains-volts reference, so the
  * figure is P / V at an assumed power factor of 1. The tooltip says which volts
  * it used; it is never presented as a direct CT reading. With no live volts
  * there is no honest value for either half of the pair, and the row says 0
@@ -110,7 +155,21 @@ export function branchBand(watts: number, allowance: number, live: boolean): Bra
  */
 export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
   const monitorOnly = isMonitoredOnlyChannel(outlet.id)
+  const latched = live && isLatchedOutlet(outlet.status)
   const on = live && (monitorOnly || isEnergizedOutlet(outlet.status))
+
+  /*
+   * The relay-state chip. Gated on `live` for the same reason every other figure
+   * on this page is: `baseOutlets` says Disconnected so the row has a shape, and
+   * a chip that renders that offline is the console reporting a relay position
+   * no relay was ever in. Offline the chip is present and empty rather than
+   * absent, so the row keeps its layout and does not reflow when the session
+   * comes back.
+   */
+  const state = live ? relayChip(outlet.status) : null
+  const stateTag = state ? STATE_TAG[state.tone] : STATE_TAG.none
+  const stateWord = state?.word ?? UNAVAILABLE
+  const stateDetail = state ? state.detail : DASHBOARD_TIPS.offline
 
   const peak = useMemo(() => {
     let max = 0
@@ -120,6 +179,15 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
     return max
   }, [history])
 
+  /*
+   * The allocation denominator, and it is whatever the server says it is. The
+   * reference caps each branch at 1100 W against a 4400 W ceiling, but those
+   * are numbers the Framework admin writes and GET /Dashboard/state reads back,
+   * so they arrive per row and nothing here may re-assert them. 0 is a value the
+   * server can legally send — `allowanceWatts` is not validated above zero — so
+   * it is handled rather than divided by: the meter sits empty and the badge
+   * says No cap, instead of showing Infinity %.
+   */
   const allowance = outlet.allowance
   const effWatts = live ? outlet.watts : 0
   const usedPercent = allowance > 0 ? (effWatts / allowance) * 100 : 0
@@ -141,7 +209,7 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   }`
 
   // Sparkline is scaled against the branch's own allocation, so a 40 W branch
-  // and a 300 W branch each fill their own box proportionally and the operator
+  // and a 1100 W branch each fill their own box proportionally and the operator
   // reads utilisation rather than absolute size.
   const sparkScale = Math.max(allowance, peak, 1)
 
@@ -156,23 +224,30 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   // The allocation rule the reference draws at half scale, positioned properly:
   // the mock passes an absolute y of ALLOC/2 into a 64-unit viewBox, which puts
   // it off-canvas and invisible. This computes the same rule in view space.
-  const limitY = hasSpark
-    ? SPARK_H - Math.min((allowance / 2 / sparkScale), 1) * (SPARK_H - 4) - 2
-    : null
+  //
+  // Gated on a real allowance for the same reason: half of nothing is nothing,
+  // and a rule pinned to the floor of an uncapped branch reads as "this branch
+  // is sitting on its limit" when the truth is that it has no limit to sit on.
+  const limitY =
+    hasSpark && allowance > 0
+      ? SPARK_H - Math.min((allowance / 2 / sparkScale), 1) * (SPARK_H - 4) - 2
+      : null
 
-  // Live INA226 mains when the device is reporting; nothing otherwise.
+  // Live mains reference when the device is reporting; nothing otherwise.
   //
   // This used to fall back to `outlet.volts` — the channel's RATED rail — so a
-  // rig with no fresh converter read "220.0 V · 0.00 A" on every row: a
+  // rig with no fresh reading produced "238.0 V · 0.00 A" on every row: a
   // configuration fact sitting in a column of measurements, indistinguishable
-  // from a real 220.0 V sample, and the reason a dead converter still produced a
-  // plausible-looking dashboard. With no live reference the pair now reads 0 and
-  // the tooltip says why.
+  // from a real 238.0 V sample, and the reason a dead input still produced a
+  // plausible-looking dashboard. With no live reference the pair now reads 0
+  // and the tooltip says why.
   //
-  // CH5 derives from the same INA226 bus sample and no other source, because it
-  // has no converter of its own. The tooltip on that row says the volts are the
-  // bus it is fed from and not a sample taken at the socket, so the 5 V rail is
-  // never mistaken for a 220 V measurement.
+  // CH5 has no converter of its own, and the one converter on the rig sits on
+  // the 3.3 V DC rail — not the 5 V USB socket, and not the 238 V mains feed.
+  // It used to be handed `ina226.busVolts` as its "volts", which put a 3.3 V
+  // figure in the pair on a 5 V socket. `mainsVolts` is already null for that
+  // channel, so the pair reads 0 and the tooltip states the reason: nothing on
+  // this rig measures that rail.
   const voltsLive = live && mainsVolts !== null && mainsVolts > 0
   const shownVolts = voltsLive ? mainsVolts : 0
   const amps = voltsLive && effWatts > 0 ? effWatts / shownVolts : 0
@@ -182,13 +257,15 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   const vaTitle = monitorOnly
     ? DASHBOARD_TIPS.usb
     : voltsLive
-      ? 'Live INA226 mains volts; branch amps derived as P / V at PF 1'
-      : 'No fresh INA226 bus volts, so there is no reference to derive against and the rated rail is deliberately not substituted — both figures read 0'
+      ? 'Live mains volts; branch amps derived as P / V at PF 1'
+      : 'No fresh mains volts, so there is no reference to derive against and the rated rail is deliberately not substituted — both figures read 0'
 
   return (
     <article
-      className={`mp-card row ${on ? '' : 'off'}`}
-      aria-label={`${outlet.name}, ${monitorOnly ? 'monitored only, no relay' : on ? 'energized' : 'open'}, ${BAND_WORD[band].toLowerCase()}, ${wattsText} watts`}
+      className={`mp-card row ${on ? '' : 'off'}${latched ? ' latched' : ''}`}
+      aria-label={`${outlet.name}, ${
+        monitorOnly ? 'monitored only, no relay' : state ? state.word.toLowerCase() : 'relay state not reported'
+      }, ${BAND_WORD[band].toLowerCase()}, ${wattsText} watts`}
     >
       {/* 1 — identity + live load band */}
       <div className="idcol">
@@ -197,13 +274,20 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
           {monitorOnly ? '5 V USB · monitored' : relayGpio(outlet.id)}
         </div>
         {/*
-          One word, and it changes when the load changes. The shed order this
-          used to show is in the tooltip instead — see branchBand for why a
-          value that can never move must not occupy the badge slot.
+          Two chips, two questions. The band moves with the load; the relay state
+          moves with the contact. They share a line because the row is read in one
+          pass, and they are two chips rather than one because on this rig they
+          disagree constantly — an open branch draws 0 W, so it always bands
+          Normal. One chip would have to drop one of those facts.
         */}
-        <span className={BAND_TAG[band]} title={bandTitle}>
-          {BAND_WORD[band]}
-        </span>
+        <div className="chips">
+          <span className={BAND_TAG[band]} title={bandTitle}>
+            {BAND_WORD[band]}
+          </span>
+          <span className={stateTag} title={stateDetail}>
+            {stateWord}
+          </span>
+        </div>
       </div>
 
       {/* 2 — the figure */}
@@ -264,15 +348,21 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
         <div
           className="meter"
           role="meter"
-          aria-valuenow={Math.round(usedPercent)}
+          aria-valuenow={allowance > 0 ? Math.round(usedPercent) : undefined}
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-label={`${outlet.name} load against its allocation`}
+          aria-label={
+            allowance > 0
+              ? `${outlet.name} load against its allocation`
+              : `${outlet.name} has no allocation configured, so there is nothing to measure this against`
+          }
         >
           <i style={{ width: `${Math.min(usedPercent, 100)}%`, background: over ? 'var(--bad)' : undefined }} />
         </div>
         <div className="pk num">
-          {`Peak ${Math.round(live ? peak : 0).toLocaleString()} W · ${Math.round(usedPercent)}% used`}
+          {allowance > 0
+            ? `Peak ${Math.round(live ? peak : 0).toLocaleString()} W · ${Math.round(usedPercent)}% used`
+            : `Peak ${Math.round(live ? peak : 0).toLocaleString()} W · no allocation set`}
         </div>
       </div>
 
@@ -285,24 +375,35 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
         because a control that cannot be pressed has no pressed state to report —
         the row's rail and the label above the switch already say the branch is
         powered and unswitchable.
+
+        Left ENABLED on a latched branch, on purpose. The server ignores relay
+        reports for a restricted outlet, but an activation request is a different
+        path and the engine does re-assess one — so this is not a dead control
+        and greying it out would be a claim the console cannot make. What it must
+        not do is let the button read as the fix, so the tooltip says outright
+        that pressing it re-requests rather than restores.
       */}
       <button
         type="button"
         className="sw"
-        aria-pressed={monitorOnly ? undefined : on}
+        aria-pressed={monitorOnly || latched ? undefined : on}
         aria-label={
           monitorOnly
             ? `${outlet.name} is monitored only and has no relay to switch`
-            : `${on ? 'Disconnect' : 'Activate'} ${outlet.name}`
+            : latched
+              ? `Re-request activation for ${outlet.name}, which the policy engine has latched shut`
+              : `${on ? 'Disconnect' : 'Activate'} ${outlet.name}`
         }
         title={
           monitorOnly
             ? 'Monitored-only channel: no relay is fitted behind the USB socket, so there is nothing to activate or disconnect.'
-            : live
-              ? on
-                ? `POST /api/Dashboard/outlets/${outlet.id}/disconnection`
-                : `POST /api/Dashboard/outlets/${outlet.id}/activation`
-              : 'Backend unreachable — no command can be dispatched'
+            : !live
+              ? 'Backend unreachable — no command can be dispatched'
+              : latched
+                ? `Latched by the policy engine. This posts an activation REQUEST to POST /api/Dashboard/outlets/${outlet.id}/activation — the engine re-assesses it and may refuse or re-latch the branch. It does not restore a latched outlet on its own.`
+                : on
+                  ? `POST /api/Dashboard/outlets/${outlet.id}/disconnection`
+                  : `POST /api/Dashboard/outlets/${outlet.id}/activation`
         }
         disabled={monitorOnly || !live || busy}
         onClick={() => onToggle(outlet.id)}
