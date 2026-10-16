@@ -308,7 +308,56 @@
 //        clipping into the constant. Fix the reference/range question FIRST.
 //   See ZMCT_CALIBRATION_MODE below - it is PRINT ONLY and is the supported way
 //   to re-derive the factor once a known load and a valid input range exist.
-#define ZMCT_CAL_FACTOR 0.52f
+// 2026-10-16 (ADS1220, SAME ADC, meter-verified SINGLE POINT): factor 0.52 -> 2.15.
+//   Load: one laptop on ONE branch (CH1), clamp meter measured 0.33 A true at
+//   228 V mains (MAINS_FIXED_VOLTS). Before this change the rig reported 0.08 A on
+//   that same branch, i.e. 4.125x low, so the new factor is
+//   0.52 x 0.33 / 0.08 = 2.145, rounded to 2.15.
+//   It was derived with ZMCT_CALIBRATION_MODE 1 for one flash to capture the
+//   counts / mV_rms chain, then the mode was put back to 0 (the shipping value).
+//
+//   *** SINGLE-POINT AND LOAD-SPECIFIC - DO NOT TRUST IT OUTSIDE THIS LOAD ***
+//   It is one equation fitted at one current on one load. It is NOT a validated
+//   amps-per-volt transfer function, because the input chain is still nonlinear:
+//   VREF is 2.055 V (see ADS1220_USE_AVDD_AS_VREF) while the ZMCT103C output
+//   sits on a ~2.5 V DC bias, so the top of every AC cycle is CLIPPED at the
+//   ADC. Clipping compresses the waveform before it is RMS'd, and the amount of
+//   compression depends on the signal amplitude, so the mV->amps ratio is
+//   amplitude-dependent by construction. A factor that lines up one point at
+//   0.33 A therefore says very little about 0.05 A or 2 A.
+//   It also inherits that 0.52 was itself fitted on a rig whose own numbers were
+//   in doubt (see the 2026-10-13 entry), so this is 0.52 x a correction, not an
+//   absolute measurement.
+//
+//   REQUIRED NEXT STEP, and it is not optional: after the VREF/range fault is
+//   fixed, RE-DERIVE this constant from scratch with TWO known loads of
+//   different current (e.g. ~0.3 A and ~1.5 A), confirm the implied A/V agrees
+//   at both, and only then overwrite this value. Until that two-load check
+//   passes, treat every CH1-4 amps and watt figure as bench-only, and do NOT
+//   stack a second correction factor on top of this one to make a different load
+//   read right - two fitted constants multiply into a curve that belongs to
+//   neither of them. If a reading disagrees with the meter, report the numbers.
+//
+// POST-CHANGE OBSERVATION, 2026-10-16, SAME SESSION, RESULT: NOT VERIFIED.
+//   The loaded branch turned out to be CH2 (AIN1), NOT CH1 - CH1/CH3/CH4 read
+//   0.000 A (under 3 mV_rms of noise) throughout the capture. With 2.15 in
+//   force CH2 read 0.40-0.50 A (counts 0.79M-0.97M, mV_rms 194-239) against
+//   the clamp meter's 0.33 A, i.e. roughly 25-50% HIGH and swinging that far
+//   between sweeps - OUTSIDE the 0.30-0.35 A this factor was meant to produce.
+//   Note applyPiecewiseCalibration() takes 0.9635 of the raw figure above
+//   ZMCT_MID_RANGE_AMPS; that is part of the gap and is NOT part of the factor.
+//   TWO SEPARATE PROBLEMS, neither of them fixed here:
+//     1. the 0.08 A this factor was scaled from does not follow from the mV
+//        this build now reads - 4.135x on 0.45 A is 0.11 A, not 0.08 A - so
+//        either the pre-change reading was taken at another point in the load's
+//        cycle, or the load is not steady (the swing above says it is not);
+//     2. the VREF clip makes mV->amps amplitude-dependent, which is exactly why
+//        a single point does not transfer to another current.
+//   NO SECOND CORRECTION WAS STACKED ON TOP OF 2.15, deliberately. Chasing this
+//   with another factor hides both causes instead of fixing either. Treat 2.15
+//   as UNVERIFIED until the VREF/range fault is fixed and the two-load
+//   re-derivation below is actually run.
+#define ZMCT_CAL_FACTOR 2.15f
 
 // ---- CT calibration bench mode (print-only, zero behavioural effect) ----
 // 0 = off, normal firmware (this is the shipping setting).
