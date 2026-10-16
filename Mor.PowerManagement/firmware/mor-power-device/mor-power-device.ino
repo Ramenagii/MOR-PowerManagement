@@ -397,6 +397,7 @@ unsigned long missedPosts = 0;
 void sensorTask(void *pvParameters);
 ZmctReading readChannel(uint8_t channel);
 float applyPiecewiseCalibration(float rawAmps);
+float mapFloat(float value, float inputMin, float inputMax, float outputMin, float outputMax);
 float updateFilteredAmps(float rawAmps, float currentStored);
 float branchWatts(float amps, float mainsVolts);
 void applyRelays();
@@ -923,15 +924,25 @@ ZmctReading readChannel(uint8_t channel) {
   return out;
 }
 
-// Piecewise Calibration: Protects low currents while scaling mid/high range
+// Piecewise calibration from the four configured raw/current reference points.
 float applyPiecewiseCalibration(float rawAmps) {
   if (rawAmps < ZMCT_NOISE_FLOOR_AMPS) {
     return 0.0;
   }
-  if (rawAmps <= ZMCT_MID_RANGE_AMPS) {
-    return rawAmps; // Pass 1:1 on low range
+  if (rawAmps <= 0.050f) {
+    return mapFloat(rawAmps, 0.002f, 0.050f, 0.000f, 0.048f);
+  } else if (rawAmps <= 0.200f) {
+    return mapFloat(rawAmps, 0.050f, 0.200f, 0.048f, 0.195f);
+  } else if (rawAmps <= 0.500f) {
+    return mapFloat(rawAmps, 0.200f, 0.500f, 0.195f, 0.490f);
   }
-  return rawAmps * ZMCT_MID_RANGE_FACTOR; // ~0.9635, per config.h
+  return mapFloat(rawAmps, 0.500f, 2.000f, 0.490f, 1.960f);
+}
+
+float mapFloat(float value, float inputMin, float inputMax,
+               float outputMin, float outputMax) {
+  return (value - inputMin) * (outputMax - outputMin) /
+         (inputMax - inputMin) + outputMin;
 }
 
 // Adaptive EMA Filter: Snaps immediately during load changes, smooths steady state
@@ -1037,9 +1048,9 @@ void printSerialTelemetry() {
   // PRINT ONLY. Nothing in this block feeds back into sampling, the piecewise
   // curve, the EMA, the noise floor or the posted telemetry - it exists so the
   // CT channels can be calibrated against a real known load in one pass instead
-  // of by guessing ZMCT_CAL_FACTOR. The factor currently in config.h came off
-  // the previous ADS1015 ADC, so on the ADS1220 this is a REQUIRED step, not an
-  // optional nicety.
+  // of by guessing ZMCT_CAL_FACTOR. The current factor includes a single-point
+  // CH4 field adjustment; use this mode with two known loads before treating the
+  // shared factor as validated for every outlet and current range.
   //
   // It also replaces what the deleted ADS1015 pre-flight used to do: the ADS1X15
   // register decode is gone with the part, so the ADC configuration actually in

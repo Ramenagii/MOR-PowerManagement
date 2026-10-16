@@ -73,7 +73,7 @@ arduino-cli lib install "INA226"
 | `INA226_SHUNT_OHM` / `INA226_MAX_CURRENT_AMPS` | **0.1 Ω / 0.75 A** | The INA226 shunt input is limited to ±81.9 mV, so `Imax × Rshunt` must stay below that. The old 2 A × 0.1 Ω pair requested 200 mV; the library rejected calibration and `getCurrent()` / `getPower()` stayed at 0 while raw shunt mV changed. Firmware now checks and reports calibration failure. |
 | `INA226_MAIN_VOLT_DIVIDER` | **9.46** | Reported volts. 24.1 V at the pin × 9.46 = 228 V. |
 | `I2C_CLOCK_HZ` | **100000** | A 400 kHz build found *neither* I²C device on the current wiring. If sensors vanish, check the bus first, then this. |
-| `ZMCT_CAL_FACTOR` | **0.52** | Every branch amp is this × the measured RMS. **Untrusted — see §12.** Calibrate against a known load. |
+| `ZMCT_CAL_FACTOR` | **1.035** | Shared by CH1–CH4; field-adjusted from the Outlet 4 clamp-meter point (0.15–0.16 A). Provisional single-point calibration; validate with known loads at multiple currents before relying on other ranges. |
 | `FALLBACK_MAINS_VOLTS` | **228.0 V** | Used **only** when the INA226 is not answering at all, so the rig still reports a plausible voltage instead of 0 V. It is not the normal source of reported mains volts. |
 | `AC_VOLTAGE` (raw sketch) | **238 V** — see §12 | Only the standalone raw sketch uses it. The framework firmware **measures** mains volts instead: INA226 bus volts × `INA226_MAIN_VOLT_DIVIDER` (9.46), with `FALLBACK_MAINS_VOLTS` (228.0 V) as a fallback only. |
 
@@ -416,16 +416,18 @@ What the rig actually does right now, as opposed to what the design intends.
    The framework firmware multiplies measured branch current by the measured
    INA226 voltage. The standalone raw sketch instead assumes a constant 238 V
    while the bench meter reads 228 V, so its watt figures are ~4% high.
-3. **The CT channels read roughly 25x low, and `ZMCT_CAL_FACTOR` is not trusted.**
-   Recorded: 0.059 / 0.029 / 0.024 / 0.025 A per channel against an expected
-   ~1.37 A per branch at ~300 W. That is ~25x low, which is far outside anything
-   `ZMCT_CAL_FACTOR 0.52` can explain, so the factor is either badly wrong or the
-   CT chain is not measuring what we think it is. **Do not treat any branch watt
-   figure from this rig as measured until the CTs are calibrated against a real
-   known load.** A calibration mode has been added to the firmware
-   (`ZMCT_CALIBRATION_MODE` / `ZMCT_CAL_REF_WATTS` in `config.h`); connect a
-   known load, set the reference wattage, and the firmware prints the suggested
-   factor. This is an **open item**, not a fix.
+3. **The CT calibration is still provisional.** Historical ADS1015 readings were
+   roughly 25x low. On 2026-10-16, Outlet 4's clamp meter read 0.15–0.16 A while
+   the firmware averaged 0.32043 A across seven distinct readings. A shared
+   `ZMCT_CAL_FACTOR` of 1.035 was calculated, built, and flashed. A post-flash
+   CH4 capture averaged 0.1657 A and ranged 0.134–0.194 A; that still varies
+   above and below the meter range. This single-point trim cannot remove the
+   variation or validate other CTs/current ranges. **Keep branch readings
+   provisional until the VREF issue is corrected and at least two known loads
+   are checked.**
+   The calibration mode (`ZMCT_CALIBRATION_MODE` / `ZMCT_CAL_REF_WATTS` in
+   `config.h`) prints a suggested factor for a known load and remains the path
+   for validating the complete sensor chain.
 
 **Failure modes worth remembering:**
 - The ESP32 enumerates on a **different COM port after every replug** (it has been

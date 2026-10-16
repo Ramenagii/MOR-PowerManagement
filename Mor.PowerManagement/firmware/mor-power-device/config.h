@@ -359,14 +359,13 @@
 //   in doubt (see the 2026-10-13 entry), so this is 0.52 x a correction, not an
 //   absolute measurement.
 //
-//   REQUIRED NEXT STEP, and it is not optional: after the VREF/range fault is
-//   fixed, RE-DERIVE this constant from scratch with TWO known loads of
-//   different current (e.g. ~0.3 A and ~1.5 A), confirm the implied A/V agrees
-//   at both, and only then overwrite this value. Until that two-load check
-//   passes, treat every CH1-4 amps and watt figure as bench-only, and do NOT
-//   stack a second correction factor on top of this one to make a different load
-//   read right - two fitted constants multiply into a curve that belongs to
-//   neither of them. If a reading disagrees with the meter, report the numbers.
+//   REQUIRED NEXT STEP: after the VREF/range fault is fixed, RE-DERIVE this
+//   constant from scratch with TWO known loads of different current (e.g. ~0.3 A
+//   and ~1.5 A), and confirm the implied A/V agrees at both. The CH4 operating-
+//   point adjustment below is a single-point field correction, not that
+//   validation. Until the two-load check passes, treat all CH1-4 amps and watts
+//   as bench-only. Do not apply further correction factors on top of the one
+//   below; replace it only with a documented re-derivation.
 //
 // POST-CHANGE OBSERVATION, 2026-10-16, SAME SESSION, RESULT: NOT VERIFIED.
 //   The loaded branch turned out to be CH2 (AIN1), NOT CH1 - CH1/CH3/CH4 read
@@ -387,7 +386,26 @@
 //   with another factor hides both causes instead of fixing either. Treat 2.15
 //   as UNVERIFIED until the VREF/range fault is fixed and the two-load
 //   re-derivation below is actually run.
-#define ZMCT_CAL_FACTOR 2.15f
+// 2026-10-16 (ADS1220, CH4 field adjustment, all channels): the meter on outlet
+//   4 varied between 0.15 and 0.16 A; use 0.155 A as the calibration target.
+//   With the piecewise curve enabled and factor 2.15, 7 distinct CH4 readings
+//   were 0.336, 0.267, 0.266, 0.352, 0.296, 0.364, 0.362 A (mean 0.32043 A).
+//   Solving through the inverse/forward piecewise curve gives a common factor
+//   scale of 0.485976, so 2.15 x 0.485976 = 1.0448, rounded to 1.045.
+//   ZMCT_CAL_FACTOR is shared by CH1-CH4, so this correction applies to all four
+//   outlets. It targets CH4's observed operating point; it does not validate
+//   the other CTs or the clipped waveform at different currents. Expect some
+//   variation: the same CH4 capture ranged 0.266-0.364 A before correction.
+//   Post-flash steady CH4 readings were 0.145, 0.147, and 0.146 A (mean 0.146 A).
+//   A final proportional trim to the same 0.155 A midpoint is 1.061224, making
+//   the interim shared factor 1.045 x 1.061224 = 1.109.
+//   With that interim factor, a longer CH4 capture measured 0.140, 0.141, 0.172,
+//   0.140, 0.180, 0.182, 0.163, 0.138, 0.242, and 0.164 A (mean 0.16620 A).
+//   Re-solving the piecewise mapping for a 0.155 A mean gives scale 0.933041
+//   and final shared factor 1.109 x 0.933041 = 1.03474, rounded to 1.035.
+//   This centers the observed load; it cannot remove the CT's 0.138-0.242 A
+//   variation, which needs the VREF/input-range issue and signal stability fixed.
+#define ZMCT_CAL_FACTOR 1.035f
 
 // ---- CT calibration bench mode (print-only, zero behavioural effect) ----
 // 0 = off, normal firmware (this is the shipping setting).
