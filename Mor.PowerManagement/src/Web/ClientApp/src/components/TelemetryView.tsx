@@ -51,24 +51,6 @@ const CHART_TABS: Array<{ id: ChartTabId; label: string }> = [
 /** Matches POLL_INTERVAL_MS in data/telemetry so both views agree on "now". */
 const STALE_AFTER_ATTEMPTS = 3
 
-/** Rig thresholds from GET /Dashboard/state (FR-05 warns, FR-06 sheds). Null until
- * the backend answers — rules hide instead of falling back to a constant. */
-const [limits, setLimits] = useState<{ warning: number; critical: number } | null>(null)
-
-useEffect(() => {
-  let cancelled = false
-  fetchDashboardState()
-    .then((snapshot) => {
-      if (!cancelled) setLimits({ warning: snapshot.thresholds.warning, critical: snapshot.thresholds.critical })
-    })
-    .catch(() => {
-      if (!cancelled) setLimits(null)
-    })
-  return () => {
-    cancelled = true
-  }
-}, [])
-
 const CHART_W = 1000
 const CHART_H = 280
 const CHART_PAD = { top: 24, right: 20, bottom: 34, left: 52 }
@@ -98,6 +80,23 @@ export function TelemetryView() {
   const [activeTab, setActiveTab] = useState<ChartTabId>('watts')
   /** Round-trip timed in this browser; shown in the provenance footer. */
   const [queryMs, setQueryMs] = useState<number | null>(null)
+  /** Rig thresholds from GET /Dashboard/state (FR-05 warns, FR-06 sheds). Null
+   * until the backend answers — rules hide instead of falling back to a constant. */
+  const [limits, setLimits] = useState<{ warning: number; critical: number } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchDashboardState()
+      .then((snapshot) => {
+        if (!cancelled) setLimits({ warning: snapshot.thresholds.warning, critical: snapshot.thresholds.critical })
+      })
+      .catch(() => {
+        if (!cancelled) setLimits(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const abortRef = useRef<AbortController | null>(null)
   const requestSeqRef = useRef(0)

@@ -149,12 +149,15 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         var framework = _framework.Current;
         var shedByFramework = framework.ShedLedger.Select(r => r.OutletId).ToHashSet();
 
-        // Live INA226 mains volts: average of fresh device samples. Stale or
-        // absent readings yield null so the UI falls back to rated volts
-        // instead of presenting a dead number as live.
+        // Live INA226 mains volts: average of fresh device samples from MAINS-
+        // class outlets only. The USB socket posts the INA226 RAW bus volts
+        // (~24 V, not divided), so including outlet 5 would drag a 227 V mean
+        // down to ~187 V. Stale or absent readings yield null so the UI falls
+        // back to rated volts instead of presenting a dead number as live.
+        var mainsIds = outlets.Where(o => o.RatedVoltageVolts >= 100).Select(o => o.Id).ToList();
         var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
         var mainsVolts = await _context.TelemetryReadings
-            .Where(r => r.Timestamp >= cutoff && r.Voltage > 0)
+            .Where(r => r.Timestamp >= cutoff && r.Voltage > 0 && mainsIds.Contains(r.OutletId))
             .Select(r => (double?)r.Voltage)
             .DefaultIfEmpty()
             .AverageAsync(cancellationToken);

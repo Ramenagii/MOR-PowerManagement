@@ -42,7 +42,8 @@
     I2C     SDA = GPIO 8, SCL = GPIO 9  (I2C_SDA_PIN / I2C_SCL_PIN), INA226
             only. The CT channels are on SPI, so the two sensors no longer
             share a bus.
-    RELAY   CH1 = GPIO 2, CH2 = GPIO 1, CH3 = GPIO 4, CH4 = GPIO 5 (RELAY_PINS).
+    RELAY   CH1 = GPIO 1, CH2 = GPIO 2, CH3 = GPIO 4, CH4 = GPIO 5 (RELAY_PINS).
+             Operator wiring, corrected 2026-10-16 (was CH1 = GPIO 2, CH2 = GPIO 1).
             CH5 = the USB socket: NO RELAY, monitored only - nothing drives it.
 
   Channels
@@ -399,13 +400,13 @@ void setup() {
   applyRelays();
 
   // ---- Relay GPIO table, printed once at boot ----
-  // The single place the wiring is visible on the bench. It exists because
-  // GPIO 4/5/6 were chosen from the ESP32-S3 exclusion banks (not strapping,
-  // not USB-JTAG 19/20, not I2C 8/9, not SPI 10-14, not in the octal-PSRAM
-  // pin set), which is a correct-by-construction argument and NOT an
-  // observation of the physical board. If a relay does not click on CH3/CH4,
-  // this line is what gets corrected - change RELAY_PINS here in config.h and
-  // the RELAY_PIN_n aliases with it, then reflash.
+  // The single place the wiring is visible on the bench. The pin numbers come
+  // from the ESP32-S3 exclusion banks (not strapping, not USB-JTAG 19/20, not
+  // I2C 8/9, not SPI 10-14, not in the octal-PSRAM pin set) AND from the
+  // operator's measured wiring. The CH1/CH2 order was wrong until 2026-10-16
+  // ({2,1} -> {1,2}); if an outlet's CT does not drop to zero on its own
+  // disconnect, THIS line is what gets corrected - change RELAY_PINS here in
+  // config.h and the RELAY_PIN_n aliases with it, then reflash.
   Serial.print("[RELAY] pins:");
   for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
     Serial.print(" CH"); Serial.print(i + 1); Serial.print("=GPIO");
@@ -416,12 +417,8 @@ void setup() {
   Serial.print("[RELAY] tiers: CH1 Critical | CH2 Important | CH3 Deferrable | "
                "CH4 Nonessential | CH5 USB Low/priority-only");
   Serial.println();
-  Serial.print("[RELAY] CH3 (GPIO");
-  Serial.print(RELAY_PIN_3);
-  Serial.print(") and CH4 (GPIO");
-  Serial.print(RELAY_PIN_4);
-  Serial.println(") are UNVERIFIED against the physical wiring until a relay is");
-  Serial.println("[RELAY]   heard clicking / the CT current drops on a disconnect.");
+  Serial.println("[RELAY] an outlet is only PROVEN when its OWN CT current goes to");
+  Serial.println("[RELAY]   0.000 A on its disconnect and returns on reconnect.");
 
   // ---- ADS1220: 24-bit SPI ADC for the ZMCT103C CT sensors ----
   // init() brings up SPI on the remapped pins, resets the ADC and verifies it

@@ -423,29 +423,34 @@
 //   SPI   10-14         (ADS1220 CS/DRDY/SCLK/MISO/MOSI)
 //   strapping 0, 3, 45, 46
 //   USB-JTAG 19, 20
-//   GPIO 4, 5, 6 clear ALL of the above. They are ordinary GPIOs on the
+//   GPIO 1, 2, 4, 5 clear ALL of the above. They are ordinary GPIOs on the
 //   ESP32-S3 (not strapping, not ADC-only, not in the octal-PSRAM pin set,
 //   which the N16R8 module uses at 26-32 and 35-37), so nothing else on this
 //   board claims them.
 //
-// GPIO 1 CHECKED, NOT ASSUMED (2026-10-15): on the ESP32-S3 the strapping pins
-// are 0, 3, 45 and 46 only. GPIO 1 is an ordinary GPIO (ADC1_CH0), is not in
-// the USB-JTAG pair (19/20), is not a PSRAM pin on the N16R8 module, and is not
-// touched by the boot loader on this board. There is NO conflict, so the wiring
-// stays {2, 1} - do not remap it on suspicion. It is still worth knowing that
-// it is an ADC1 pin, so it cannot be sampled by ADC2 while ADC1 is busy; that
-// does not affect a digital output.
+// GPIO 1 CHECKED, NOT ASSUMED (2026-10-15, re-confirmed 2026-10-16): on the
+// ESP32-S3 the strapping pins are 0, 3, 45 and 46 only. GPIO 1 is an ordinary
+// GPIO (ADC1_CH0), is not in the USB-JTAG pair (19/20), is not a PSRAM pin on
+// the N16R8 module, and is not touched by the boot loader on this board. There
+// is NO conflict, so CH1 = GPIO 1 is fine - do not remap it on suspicion. It is
+// still worth knowing that it is an ADC1 pin, so it cannot be sampled by ADC2
+// while ADC1 is busy; that does not affect a digital output.
 //
-// VERIFY BEFORE POWERING: GPIO 4/5/6 were chosen from the exclusion banks above,
-// which is a correct-by-construction argument but NOT an observation of the
-// physical board. Until a relay is heard clicking on CH3 and CH4, actuation on
-// those two channels is UNVERIFIED: the firmware will drive the pins and report
-// pin=HIGH/LOW honestly either way, but only a meter across the contact (or the
-// CH3/CH4 CT current going to zero on a disconnect) proves a relay is really
-// attached to that pin. If the board headers are wired differently, change this
-// table and the RELAY_PIN_n aliases together - the static_asserts below exist
-// precisely because those two descriptions of the same wiring are the easiest
-// pair in this file to edit and forget the other one of.
+// RELAY ORDER CORRECTED 2026-10-16 from the operator's own wiring, measured on
+// the rig: outlet 1 = GPIO 1, outlet 2 = GPIO 2, outlet 3 = GPIO 4, outlet 4 =
+// GPIO 5, USB (outlet 5) = no relay. The table previously read {2, 1, 4, 5, 6},
+// i.e. CH1 and CH2 were SWAPPED - a command for outlet 1 cut outlet 2 instead,
+// which is what made disconnect commands look unresponsive. The {4, 5} tail was
+// already right.
+//
+// VERIFY BEFORE POWERING: the exclusion-bank argument above is
+// correct-by-construction but NOT an observation of the physical board, and the
+// per-outlet proof now required is stricter than "it clicks": a relay is only
+// proven for an outlet when that outlet's OWN CT current drops to zero on its
+// disconnect and returns on reconnect. Change this table and the RELAY_PIN_n
+// aliases together - the static_asserts below exist precisely because those two
+// descriptions of the same wiring are the easiest pair in this file to edit and
+// forget the other one of.
 //
 // VOLTAGE: the ESP32-S3 drives 3.3 V. A 5 V relay module with a 4N35/PC817
 // input still pulls its coil in at 3.3 V (the opto LED threshold is ~1.2-1.4 V),
@@ -454,14 +459,19 @@
 // click, put a transistor or level shifter in front of it - or power the opto
 // from VCC with the ESP32 side pulled low - rather than raising the ESP32 pin,
 // which is not possible at 3.3 V anyway.
-static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 2, 1, 4, 5, 6 };
+// Operator wiring, corrected 2026-10-16 (was {2, 1, 4, 5, 6} - CH1/CH2 swapped).
+// Index 4 is the USB socket placeholder and is NEVER driven (USB_OUTLET_NO_RELAY).
+static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 6 };
 // Named single-outlet aliases, because the wiring order (board header) and the
 // channel order (dashboard CH1 first) are not the same thing and a bare
 // RELAY_PINS[i] index hides that. RELAY_PIN_1 -> CH1, ..., RELAY_PIN_5 -> CH5.
-#define RELAY_PIN_1 2
-#define RELAY_PIN_2 1
+#define RELAY_PIN_1 1
+#define RELAY_PIN_2 2
 #define RELAY_PIN_3 4
 #define RELAY_PIN_4 5
+// Placeholder only - the USB socket has no relay, so this value is never
+// pinMode'd or driven. Kept as 6 purely so the index exists; see
+// USB_OUTLET_NO_RELAY.
 #define RELAY_PIN_5 6
 
 // ---- USB outlet (outletId 5) is MONITORED ONLY ----
@@ -501,9 +511,13 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 2, 1, 4, 5, 6 };
 // without trusting this comment: drive a disconnect, look at the pin, and only
 // then set the flag if the relay did not respond.
 // VERIFIED ON THE BENCH 2026-10-15, not assumed: with RELAY_ACTIVE_LEVEL_INVERTED
-// = 0 the device drove GPIO2 LOW on a Disconnect and the CH1 CT reading went to
-// 0.000 A / 0.0 W (the load really was cut), and back to ~0.22 A / 51 W when
-// GPIO2 went HIGH again. So this board IS high-true, and the flag above stays 0.
+// = 0 the device drove the CH1 pin LOW on a Disconnect and the CT on that branch
+// went to 0.000 A / 0.0 W (the load really was cut), and back to ~0.22 A / 51 W
+// when the pin went HIGH again. (That observation was made before the CH1/CH2
+// swap was corrected, so it was recorded against the wrong pin number - GPIO2 -
+// but the polarity finding is what it was: this board IS high-true, and the flag
+// above stays 0. The corrected per-outlet pin mapping is re-proven by CT on
+// every outlet, not by the pin number.)
 // If someone swaps the relay module for an active-LOW board, this is the number
 // to change - and the serial "pin GPIOx=LOW/HIGH" readback is how to notice.
 #define RELAY_ACTIVE_LEVEL_INVERTED 0

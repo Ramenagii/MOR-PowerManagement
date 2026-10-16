@@ -248,7 +248,9 @@ export function Dashboard({
               outlet={outlet}
               history={historyFor(outlet.id)}
               live={live}
-              mainsVolts={mainsVolts}
+              // Outlet 5 is the USB socket: its volts are the INA226 raw bus
+              // volts, never the divided mains the AC branches use.
+              mainsVolts={outlet.id === 5 ? (ina226.busVolts ?? mainsVolts) : mainsVolts}
               busy={busyId === outlet.id}
               onToggle={toggleOutlet}
             />
