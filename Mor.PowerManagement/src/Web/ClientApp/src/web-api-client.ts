@@ -2264,6 +2264,10 @@ export class DeviceConfigVm implements IDeviceConfigVm {
     standbyIdleMinutes!: number;
     stabilizationDelayMs!: number;
     outlets!: DeviceOutletPolicyDto[];
+    zmctCtRatio!: number;
+    zmctBurdenOhms!: number;
+    zmctPowerFactor!: number;
+    zmctGain!: number;
 
     [key: string]: any;
 
@@ -2296,6 +2300,10 @@ export class DeviceConfigVm implements IDeviceConfigVm {
                 for (let item of _data["outlets"])
                     this.outlets!.push(DeviceOutletPolicyDto.fromJS(item));
             }
+            this.zmctCtRatio = _data["zmctCtRatio"];
+            this.zmctBurdenOhms = _data["zmctBurdenOhms"];
+            this.zmctPowerFactor = _data["zmctPowerFactor"];
+            this.zmctGain = _data["zmctGain"];
         }
     }
 
@@ -2323,6 +2331,10 @@ export class DeviceConfigVm implements IDeviceConfigVm {
             for (let item of this.outlets)
                 data["outlets"].push(item ? item.toJSON() : undefined as any);
         }
+        data["zmctCtRatio"] = this.zmctCtRatio;
+        data["zmctBurdenOhms"] = this.zmctBurdenOhms;
+        data["zmctPowerFactor"] = this.zmctPowerFactor;
+        data["zmctGain"] = this.zmctGain;
         return data;
     }
 }
@@ -2335,6 +2347,10 @@ export interface IDeviceConfigVm {
     standbyIdleMinutes: number;
     stabilizationDelayMs: number;
     outlets: DeviceOutletPolicyDto[];
+    zmctCtRatio: number;
+    zmctBurdenOhms: number;
+    zmctPowerFactor: number;
+    zmctGain: number;
 
     [key: string]: any;
 }

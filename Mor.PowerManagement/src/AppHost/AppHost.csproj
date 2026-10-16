@@ -10,6 +10,11 @@
     <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="Aspire.Hosting.Azure.AppContainers" />
     <PackageReference Include="Aspire.Hosting.JavaScript" />
+    <!-- Transitive pin: raises MessagePack to 2.5.307 to clear 11 advisories
+         (GHSA-hv8m-jj95-wg3x, GHSA-vh6j-jc39-fggf High; 9 Moderate) that
+         StreamJsonRpc 2.22.23, pulled in via Aspire.Hosting.AppHost, resolves to
+         10 vulnerable versions behind. See Directory.Packages.props. -->
+    <PackageReference Include="MessagePack" />
   </ItemGroup>
 
   <ItemGroup>

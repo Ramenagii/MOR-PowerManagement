@@ -9,6 +9,7 @@ import {
   TriangleAlert,
   Zap,
 } from 'lucide-react'
+import { Disclosure } from './Disclosure'
 
 /**
  * Hardware -- the bill of materials and the wiring basis for the testing rig.
@@ -19,11 +20,12 @@ import {
  *  1. The rig is FIVE channels: CH1-CH4 are 220 V AC outlets and CH5 is a 5 V
  *     USB socket. The earlier "thirteen control channels" card described the
  *     full build, not what is on the bench.
- *  2. The PZEM-004T v3.0 is RETIRED. Mains volts/amps/watts now come from an
- *     INA226 behind a divider; the four per-branch current sensors land on the
- *     ADS1015's four analogue channels. CH5 has no sensor at all — its figure
- *     is the residual of the mains total, and is labelled as derived wherever
- *     it appears.
+ *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1015
+ *     four-channel 16-bit ADC with a ZMCT103C current transformer on EACH
+ *     mains branch (CH1-CH4), which is why per-branch current is MEASURED
+ *     rather than apportioned from a mains total. An INA226 sits on the 24 V
+ *     rail as a voltage reference. CH5 has no sensor at all — its figure is the
+ *     rail's nominal rating, and is labelled as nominal wherever it appears.
  *  3. The relay contacts are NORMALLY CLOSED. Power passes while the coil is
  *     idle, which means the pin HIGH is the energised channel and the pin LOW
  *     is the cut channel. That is the inverse of the NO relay most people wire
@@ -61,8 +63,8 @@ const perOutletParts = [
 
 const systemParts = [
   'ESP32 DevKit / ESP32-WROOM-32 controller',
-  'INA226 high-side current/voltage/power sensor on the common mains feed',
-  'ADS1015 4-channel ADC shared with the INA226 on one I2C bus',
+  'ADS1015 four-channel 16-bit ADC — one ZMCT103C branch current sensor per mains outlet',
+  'INA226 used as a voltage reference on the 24 V rail',
   'I2C bus: SDA = GPIO 8, SCL = GPIO 9',
   'Inverting transistor driver per relay, GPIO 10 to GPIO 14',
   'Isolated 5 V supply such as Mean Well IRM-05-5',
@@ -146,7 +148,7 @@ export function HardwareView() {
             >
               These relays are normally closed — pin HIGH powers the channel, pin LOW cuts it
             </h2>
-            <span className="font-body-sm text-body-sm uppercase tracking-wide text-error">
+            <span className="font-label-sm text-label-sm uppercase text-error">
               Inverted logic
             </span>
           </div>
@@ -278,11 +280,16 @@ export function HardwareView() {
               <Activity size={18} className="text-on-surface-variant" aria-hidden />
             </div>
             <p className="font-metric-value text-metric-value text-on-surface flex items-baseline gap-1.5">
-              INA226
+              ADS1015
+              <span className="font-metric-value text-metric-value font-normal text-on-surface-variant">
+                + ZMCT103C
+              </span>
             </p>
-            <p className="font-body-sm text-body-sm text-on-surface-variant">V / A / W via a divider</p>
+            <p className="font-body-sm text-body-sm text-on-surface-variant">
+              16-bit ADC · one CT per branch
+            </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
-              ADS1015 4-ch · per-branch current
+              INA226 · 24 V reference
             </p>
           </div>
         </article>
@@ -385,7 +392,7 @@ export function HardwareView() {
                       <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                         <span className="ant-dot ant-dot-warning" aria-hidden />
                         <span className="font-body-md text-body-md text-on-surface-variant">
-                          Derived — residual of the mains total
+                          Nominal — no sensor on this branch
                         </span>
                       </span>
                     )}
@@ -460,14 +467,14 @@ export function HardwareView() {
               Wiring basis
             </h2>
           </div>
-          <span className="font-body-sm text-body-sm uppercase tracking-wide text-error">
+          <span className="font-label-sm text-label-sm uppercase text-error">
             NC, not NO
           </span>
         </div>
 
         <div className="ant-card-body flex flex-col gap-space-lg">
           <div>
-            <p className="mb-2 font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">
+            <p className="mb-2 font-label-sm text-label-sm uppercase text-on-surface-variant">
               Live conductor, one{' '}
               <span className="font-metric-value text-metric-value">220 V</span> branch
             </p>
@@ -497,7 +504,7 @@ export function HardwareView() {
           </div>
 
           <div>
-            <p className="mb-2 font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">
+            <p className="mb-2 font-label-sm text-label-sm uppercase text-on-surface-variant">
               I2C bus
             </p>
             <div className="flex flex-wrap items-center gap-1" aria-label="I2C bus connections">
@@ -541,36 +548,51 @@ export function HardwareView() {
             <article className="rounded-md border border-outline-variant p-space-md">
               <div className="flex items-center gap-2">
                 <h3 className="font-title-md text-title-md text-on-surface">USB rail</h3>
-                <span className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">
-                  Load is derived
+                <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
+                  No sensor fitted
                 </span>
               </div>
               <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
-                CH5 has no current sensor. Its load is reported as the residual of the INA226 mains
-                total minus the measured branch sum, so it absorbs every metering error on the other
-                four channels.
+                CH5 has no current sensor. Its reading is the 5 V rail’s nominal
+                rating repeated across the window, so it must never be read as a measured zero or
+                as a measured load.
               </p>
             </article>
           </div>
 
-          <div className="grid grid-cols-1 gap-space-md md:grid-cols-2">
-            <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
-              <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
-                Branch sensors must sit on their assigned outlet live branch only. Clamping live and
-                neutral together cancels the magnetic field and produces near-zero readings — the
-                classic reason a channel reads zero while the load is plainly on.
-              </p>
+          {/*
+            Two caveats that used to sit permanently at the foot of this card,
+            each in its own wash. They are true and they matter, but they are
+            notes about the build rather than steps in the wiring, and printed
+            open they compete with the parts list above them for the same
+            attention. A disclosure keeps them one click away on a page someone
+            reads top to bottom, and off the critical path when they are not
+            looking for them.
+          */}
+          <Disclosure
+            label="Wiring caveats"
+            summary="Two caveats about the sensing chain: CT placement, and the retired PZEM-004T"
+          >
+            <div className="grid grid-cols-1 gap-space-md md:grid-cols-2">
+              <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
+                <TriangleAlert size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  Branch sensors must sit on their assigned outlet live branch only. Clamping live and
+                  neutral together cancels the magnetic field and produces near-zero readings — the
+                  classic reason a channel reads zero while the load is plainly on.
+                </p>
+              </div>
+              <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
+                <Activity size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
+                <p className="font-body-sm text-body-sm text-on-surface-variant">
+                  The PZEM-004T v3.0 is retired and is not fitted to this rig. The roster still
+                  carries a &ldquo;PZEM-01 &hellip; mains bus&rdquo; label on its meterChannel field from before
+                  the ADS1015 conversion; it is a stale seed value, not a device, and the console does
+                  not render it as a sensor name.
+                </p>
+              </div>
             </div>
-            <div className="flex items-start gap-space-sm rounded-md bg-surface-container-low p-space-sm">
-              <Activity size={16} aria-hidden className="mt-0.5 shrink-0 text-on-surface-variant" />
-              <p className="font-body-sm text-body-sm text-on-surface-variant">
-                The PZEM-004T v3.0 is retired and is not fitted to this rig. If a PZEM still appears
-                in a branch description, that copy predates the INA226 and ADS1015 conversion and
-                should be corrected before it is quoted in the write-up.
-              </p>
-            </div>
-          </div>
+          </Disclosure>
         </div>
       </section>
 

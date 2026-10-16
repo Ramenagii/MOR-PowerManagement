@@ -1,1 +1,7 @@
 .slim/deepwork/
+
+# Stitch design exports and scratch extraction dirs (local only, never committed).
+.artifacts/
+
+# orchestrator working notes
+.slim/

@@ -19,6 +19,13 @@
          provider and EFCore.Design, so this adds no new package download. -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <!-- Transitive pin: Microsoft.Build.Tasks.Core/Utilities.Core 18.4.0 pull
+         System.Security.Cryptography.Xml 10.0.1, which is inside the affected ranges
+         of 8 High advisories (see Directory.Packages.props). The only Microsoft.Build.*
+         version that raises the floor to a patched 10.0.10 targets net11.0 only, so the
+         transitive pin is the fix that works on net10.0. No code in this project
+         references System.Security.Cryptography.Xml directly. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" />
   </ItemGroup>
 
   <ItemGroup>

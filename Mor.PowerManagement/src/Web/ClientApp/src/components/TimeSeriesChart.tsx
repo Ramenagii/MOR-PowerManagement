@@ -23,6 +23,26 @@ export type ChartSeries = {
   title?: string
 }
 
+/**
+ * A calibrated horizontal rule on the plot.
+ *
+ * Threshold lines are the reason the y-axis has a domain at all, so they carry
+ * the same treatment as the trace itself: a named rule, a tone, and the value
+ * printed on the axis. An unlabelled line across a chart is a gridline, and an
+ * operator who cannot tell a gridline from the trip point will read one as the
+ * other at exactly the moment it matters.
+ */
+export type ThresholdLine = {
+  value: number
+  label: string
+  tone: 'warn' | 'trip'
+}
+
+const THRESHOLD_STROKE: Record<ThresholdLine['tone'], string> = {
+  warn: 'var(--tertiary)',
+  trip: 'var(--error)',
+}
+
 type TimeSeriesChartProps = {
   series: ChartSeries[]
   timestamps: string[]
@@ -34,6 +54,18 @@ type TimeSeriesChartProps = {
   showArea?: boolean
   formatValue?: (value: number, unit: Unit) => string
   emptyMessage?: string
+  /** Calibrated horizontal rules. Empty (the default) draws no rules. */
+  thresholds?: ThresholdLine[]
+  /**
+   * When false the threshold values are left OUT of the y-domain, so the trace
+   * fills the frame instead of being squashed into the bottom of it.
+   *
+   * Default is true, and it should stay true. A 180 W trace plotted against a
+   * 1,200 W trip line sits at the bottom sixth of the frame — which is the
+   * honest picture of how much headroom the rig has, and the reason the trip
+   * line is on the chart at all. Turning it off is for reading the waveform.
+   */
+  scaleToThresholds?: boolean
 }
 
 /**
@@ -66,6 +98,8 @@ export function TimeSeriesChart({
   showArea = false,
   formatValue: formatValueProp,
   emptyMessage = 'No telemetry in this window.',
+  thresholds = [],
+  scaleToThresholds = true,
 }: TimeSeriesChartProps) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -115,6 +149,8 @@ export function TimeSeriesChart({
   const count = timestamps.length
 
   // Domain spans every visible series so the four charts share a vertical frame.
+  // Thresholds join it only when asked: leaving them in is the honest default,
+  // because a trip line you cannot see is not a trip line.
   const domain = useMemo(() => {
     let min = Number.POSITIVE_INFINITY
     let max = Number.NEGATIVE_INFINITY
@@ -127,9 +163,17 @@ export function TimeSeriesChart({
       }
     }
 
+    if (scaleToThresholds) {
+      for (const line of thresholds) {
+        if (!Number.isFinite(line.value)) continue
+        if (line.value < min) min = line.value
+        if (line.value > max) max = line.value
+      }
+    }
+
     if (!Number.isFinite(min) || !Number.isFinite(max)) return null
     return niceDomain(min, max)
-  }, [series])
+  }, [series, thresholds, scaleToThresholds])
 
   const hasData = count > 0 && domain !== null
 
@@ -233,6 +277,40 @@ export function TimeSeriesChart({
                   {formatBucketLabel(timestamps[i], windowSpanMs(timestamps))}
                 </text>
               ))}
+
+              {/* Calibrated rules, drawn UNDER the trace so a crossing line never
+                  hides the reading it is about. Each is labelled at the right
+                  edge, where the eye arrives after following the rule across. */}
+              {thresholds.map((line) => {
+                if (!domain || !Number.isFinite(line.value)) return null
+                if (line.value < domain.min || line.value > domain.max) return null
+                const y = yScale(line.value)
+                const stroke = THRESHOLD_STROKE[line.tone]
+                return (
+                  <g key={`th-${line.label}`}>
+                    <line
+                      x1={MARGIN.left}
+                      x2={MARGIN.left + plotWidth}
+                      y1={y}
+                      y2={y}
+                      stroke={stroke}
+                      strokeWidth={1.25}
+                      strokeDasharray={line.tone === 'trip' ? '6 3' : '3 3'}
+                      opacity={0.85}
+                    />
+                    <text
+                      x={MARGIN.left + plotWidth - 4}
+                      y={y - 5}
+                      textAnchor="end"
+                      fontSize={10}
+                      fill={stroke}
+                      fontFamily="var(--mono)"
+                    >
+                      {`${line.label} ${roundToStep(line.value, domain.step)} ${unit}`}
+                    </text>
+                  </g>
+                )
+              })}
 
               {/* Area fill, single-series total chart only. */}
               {showArea &&

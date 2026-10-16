@@ -184,6 +184,21 @@ float inaShuntVoltage_mV = 0.0;
 float inaCurrent_A = 0.0;
 float inaPower_W = 0.0;
 
+// Sensor presence, resolved once in setup() and then read-only. setup() runs on
+// Core 1 before the Core-0 sampling task exists, so no lock is needed to read
+// these from either core.
+// Ported from master 2a8f022 ("Make a missing sensor non-fatal"): detection
+// DEGRADES instead of halting. The old code spun in while(1) on a detection
+// failure, so one unplugged module meant no Wi-Fi, no telemetry and a
+// permanently empty dashboard with nothing on screen to explain why.
+//   INA226 missing  -> mains volts fall back to FALLBACK_MAINS_VOLTS
+//   ADS1220 missing -> branch amps stay 0.00 A and the Core-0 sweep is not
+//                      started (an unACKed SPI device would stall the task rather
+//                      than return a clean zero)
+// Either way the device still connects, still posts, and reports the fault.
+bool ina226Present = false;
+bool ads1220Present = false;
+
 // Per-branch CT current, index 0 = CH1 (ADS1220 AIN0/AVSS) .. index 1 = CH2
 // (ADS1220 AIN1/AVSS).
 // Watts are deliberately NOT stored per branch: storing them beside the amps
@@ -281,21 +296,35 @@ void setup() {
   // because a 400 kHz build found NEITHER I2C device on this wiring while
   // 100 kHz found both - overriding it here would make both sensors vanish.
   // Only the INA226 is on this bus now; the CT ADC is on SPI.
+  //
+  // NOT PORTED from master 2a8f022, which forced 400 kHz on a different rig and
+  // wiring (INA226 + ADS1015 sharing the bus). That bus scan does not describe
+  // this one, where the CT ADC left I2C entirely for SPI, so config.h's validated
+  // 100 kHz stands.
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   Wire.setClock(I2C_CLOCK_HZ);
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
-  // Initialize INA226 Voltage Reference (Rob Tillaart Library)
-  if (!ina226.begin()) {
+  // A missing sensor must NEVER hang the device. Detection degrades instead of
+  // halting: the INA226's mains voltage falls back to FALLBACK_MAINS_VOLTS and
+  // every batch is posted with the fault flag raised, so the console labels the
+  // readings as degraded instead of presenting them as verified.
+  ina226Present = ina226.begin();
+  if (ina226Present) {
+    // Max current first, then shunt: 8 A full scale on a 10 mOhm shunt. Wrong
+    // values scale every current and watt reading (this pairing once reported
+    // 0 A on a healthy sensor).
+    ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
+    Serial.print("INA226  OK  (0x");
+    Serial.print(INA226_ADDR, HEX);
+    Serial.println(") - mains voltage reference active");
+  } else {
     Serial.print("Error: INA226 module not detected at 0x");
     Serial.println(INA226_ADDR, HEX);
-    while (1) { delay(10); }
+    Serial.println("INA226  MISSING - falling back to FALLBACK_MAINS_VOLTS; "
+                   "readings will be flagged. Continuing: telemetry must not go dark.");
   }
-  // Max current first, then shunt: 8 A full scale on a 10 mOhm shunt. Wrong
-  // values scale every current and watt reading (this pairing once reported
-  // 0 A on a healthy sensor).
-  ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
 
   // ---- Relay outputs ----
   // Park every relay pin in its SAFE state BEFORE the sensor task exists and
@@ -315,86 +344,95 @@ void setup() {
   // ---- ADS1220: 24-bit SPI ADC for the ZMCT103C CT sensors ----
   // init() brings up SPI on the remapped pins, resets the ADC and verifies it
   // answers by reading a configuration register back; false means the ADC is
-  // not there. Halt on that, exactly as the INA226 path halts above: continuing
-  // would post a confident 0.0 A on every channel.
-  if (!ads1220.init()) {
+  // not there. Non-fatal (master 2a8f022, ported): the Core-0 sweep is simply
+  // never started, branchAmps[] keeps its zero initialisers, and every batch is
+  // posted with the fault flag raised. Hanging instead would post NOTHING, which
+  // is indistinguishable on the dashboard from a dead device.
+  ads1220Present = ads1220.init();
+  if (!ads1220Present) {
     Serial.println("Error: ADS1220 not detected (SPI CS=");
     Serial.print(ADS1220_CS_PIN);
     Serial.println(")");
-    while (1) { delay(100); }
-  }
-  ads1220.setSPIClockSpeed(ADS1220_SPI_CLOCK_HZ);
-  // AVDD as VREF, calibrated by the ADC's own internal measurement. The CT
-  // modules are biased at 2.5 V, which the internal 2.048 V reference would
-  // clip - see the ADS1220 block in config.h.
-  if (ADS1220_USE_AVDD_AS_VREF) {
-    ads1220.setAvddAvssAsVrefAndCalibrate();
+    Serial.println("ADS1220 MISSING - branch current will read 0.00 A and readings "
+                   "will be flagged. Continuing: telemetry must not go dark.");
   } else {
-    ads1220.setIntVRef();
+    ads1220.setSPIClockSpeed(ADS1220_SPI_CLOCK_HZ);
+    // AVDD as VREF, calibrated by the ADC's own internal measurement. The CT
+    // modules are biased at 2.5 V, which the internal 2.048 V reference would
+    // clip - see the ADS1220 block in config.h.
+    if (ADS1220_USE_AVDD_AS_VREF) {
+      ads1220.setAvddAvssAsVrefAndCalibrate();
+    } else {
+      ads1220.setIntVRef();
+    }
+    ads1220.setGain(ADS_PGA_GAIN);
+    ads1220.setOperatingMode(ADS_OP_MODE);
+    ads1220.setDataRate(ADS_DATA_RATE);
+    ads1220.setConversionMode(ADS1220_SINGLE_SHOT);
+    // Configured BEFORE the sensor task is created, so no conversion can be in
+    // flight while the MUX is being set. readChannel() also switches MUX per
+    // channel; this first switch both primes the gain bookkeeping and gives the
+    // task a known starting point.
+    ads1220.setCompareChannels(CT_MUX[0]);
+
+    // ---- ADC self-test: is it ACTUALLY converting, and how fast? ----
+    // This is the ADS1220's replacement for the deleted ADS1015 register
+    // pre-flight, and it checks the thing a register decode could not: whether a
+    // conversion ever completes. One blocking single-shot read, timed, plus the
+    // DRDY level before and after. It runs here, on core 1, BEFORE the sensor task
+    // exists, so a slow or stuck ADC is reported instead of silently turning the
+    // sweep into a multi-second CPU hog that starves IDLE0 and trips the task
+    // watchdog (a live rig reboot loop caused exactly that - see below).
+    Serial.print("[ADC] self-test: DRDY(GPIO"); Serial.print(ADS1220_DRDY_PIN);
+    Serial.print(") before="); Serial.print(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
+    uint32_t t0 = micros();
+    const int32_t probeCode = ads1220.getRawData();
+    const uint32_t t1 = micros();
+    Serial.print(" | 1 conversion="); Serial.print((uint32_t)(t1 - t0));
+    Serial.print(" us | code="); Serial.print(probeCode);
+    Serial.print(" | DRDY after="); Serial.println(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
+    if (t1 - t0 > 5000) {
+      Serial.println("[ADC] WARNING: one conversion took > 5 ms, so ADS_DATA_RATE is not");
+      Serial.println("[ADC]   in force (2000 SPS = ~500 us) OR DRDY is not wired/asserted.");
+      Serial.println("[ADC]   A 600-sample sweep would overrun METER_INTERVAL_MS and trip the");
+      Serial.println("[ADC]   task watchdog. Fix the ADC config or the DRDY wiring first.");
+    }
+    // Per-sample cost at the configured rate, used to bound the sweep budget below.
+    const uint32_t probeUs = (t1 > t0) ? (uint32_t)(t1 - t0) : 500;
+
+    Serial.print("[ADC] ADS1220 ready: CS="); Serial.print(ADS1220_CS_PIN);
+    Serial.print(" DRDY="); Serial.print(ADS1220_DRDY_PIN);
+    Serial.print(" SCLK="); Serial.print(ADS1220_SCLK_PIN);
+    Serial.print(" MISO="); Serial.print(ADS1220_MISO_PIN);
+    Serial.print(" MOSI="); Serial.print(ADS1220_MOSI_PIN);
+    Serial.println();
+    Serial.print("[ADC] VREF="); Serial.print(ads1220.getVRef_V(), 3);
+    Serial.print(" V (AVDD-calibrated) | single-shot | window=");
+    Serial.print(ZMCT_DEDICATED_SAMPLES);
+    Serial.print(" samples/channel | opmode+DR=ADS_OP_MODE/ADS_DATA_RATE (turbo, 2000 SPS)");
+    Serial.print(" | channels="); Serial.print(BRANCH_CT_COUNT);
+    Serial.print(" | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
+    Serial.println(" s");
+
+    // Hand the measured per-conversion cost to the sweep so it can bound itself
+    // instead of running flat out into the watchdog. See sensorTask().
+    gSampleCostUs = probeUs;
   }
-  ads1220.setGain(ADS_PGA_GAIN);
-  ads1220.setOperatingMode(ADS_OP_MODE);
-  ads1220.setDataRate(ADS_DATA_RATE);
-  ads1220.setConversionMode(ADS1220_SINGLE_SHOT);
-  // Configured BEFORE the sensor task is created, so no conversion can be in
-  // flight while the MUX is being set. readChannel() also switches MUX per
-  // channel; this first switch both primes the gain bookkeeping and gives the
-  // task a known starting point.
-  ads1220.setCompareChannels(CT_MUX[0]);
 
-  // ---- ADC self-test: is it ACTUALLY converting, and how fast? ----
-  // This is the ADS1220's replacement for the deleted ADS1015 register
-  // pre-flight, and it checks the thing a register decode could not: whether a
-  // conversion ever completes. One blocking single-shot read, timed, plus the
-  // DRDY level before and after. It runs here, on core 1, BEFORE the sensor task
-  // exists, so a slow or stuck ADC is reported instead of silently turning the
-  // sweep into a multi-second CPU hog that starves IDLE0 and trips the task
-  // watchdog (a live rig reboot loop caused exactly that - see below).
-  Serial.print("[ADC] self-test: DRDY(GPIO"); Serial.print(ADS1220_DRDY_PIN);
-  Serial.print(") before="); Serial.print(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
-  uint32_t t0 = micros();
-  const int32_t probeCode = ads1220.getRawData();
-  const uint32_t t1 = micros();
-  Serial.print(" | 1 conversion="); Serial.print((uint32_t)(t1 - t0));
-  Serial.print(" us | code="); Serial.print(probeCode);
-  Serial.print(" | DRDY after="); Serial.println(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
-  if (t1 - t0 > 5000) {
-    Serial.println("[ADC] WARNING: one conversion took > 5 ms, so ADS_DATA_RATE is not");
-    Serial.println("[ADC]   in force (2000 SPS = ~500 us) OR DRDY is not wired/asserted.");
-    Serial.println("[ADC]   A 600-sample sweep would overrun METER_INTERVAL_MS and trip the");
-    Serial.println("[ADC]   task watchdog. Fix the ADC config or the DRDY wiring first.");
+  // Pin High-Speed Sampling Engine to Core 0. Only when the ADC is actually
+  // present: with nothing on SPI to ACK, the sweep would burn a core spinning
+  // on reads that can never complete, starving IDLE0 and the task watchdog.
+  if (ads1220Present) {
+    xTaskCreatePinnedToCore(
+      sensorTask,                 /* Task function */
+      "SensorEngine",             /* Task name */
+      SENSOR_TASK_STACK,          /* Stack size (config.h) */
+      NULL,                       /* Parameters */
+      SENSOR_TASK_PRIORITY,       /* Priority (config.h) */
+      &sensorTaskHandle,          /* Task handle */
+      0                           /* Core ID: 0 */
+    );
   }
-  // Per-sample cost at the configured rate, used to bound the sweep budget below.
-  const uint32_t probeUs = (t1 > t0) ? (uint32_t)(t1 - t0) : 500;
-
-  Serial.print("[ADC] ADS1220 ready: CS="); Serial.print(ADS1220_CS_PIN);
-  Serial.print(" DRDY="); Serial.print(ADS1220_DRDY_PIN);
-  Serial.print(" SCLK="); Serial.print(ADS1220_SCLK_PIN);
-  Serial.print(" MISO="); Serial.print(ADS1220_MISO_PIN);
-  Serial.print(" MOSI="); Serial.print(ADS1220_MOSI_PIN);
-  Serial.println();
-  Serial.print("[ADC] VREF="); Serial.print(ads1220.getVRef_V(), 3);
-  Serial.print(" V (AVDD-calibrated) | single-shot | window=");
-  Serial.print(ZMCT_DEDICATED_SAMPLES);
-  Serial.print(" samples/channel | opmode+DR=ADS_OP_MODE/ADS_DATA_RATE (turbo, 2000 SPS)");
-  Serial.print(" | channels="); Serial.print(BRANCH_CT_COUNT);
-  Serial.print(" | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
-  Serial.println(" s");
-
-  // Hand the measured per-conversion cost to the sweep so it can bound itself
-  // instead of running flat out into the watchdog. See sensorTask().
-  gSampleCostUs = probeUs;
-
-  // Pin High-Speed Sampling Engine to Core 0
-  xTaskCreatePinnedToCore(
-    sensorTask,                 /* Task function */
-    "SensorEngine",             /* Task name */
-    SENSOR_TASK_STACK,          /* Stack size (config.h) */
-    NULL,                       /* Parameters */
-    SENSOR_TASK_PRIORITY,       /* Priority (config.h) */
-    &sensorTaskHandle,          /* Task handle */
-    0                           /* Core ID: 0 */
-  );
 
   Serial.println("Initialization Complete. Dual-Core Monitoring Active.\n");
 
@@ -438,7 +476,11 @@ void loop() {
   // second; an unguarded poll on each pass contends with the core-0 sweep for
   // the shared I2C bus and starves it. The INA226 is a voltage reference, so a
   // 4 Hz sample is far more than the mains supply needs.
-  if (millis() - lastInaPoll >= INA226_POLL_INTERVAL_MS) {
+  // Skipped entirely when the module was not detected in setup(): calling the
+  // getters against an absent device would put a guaranteed-NACK transaction on
+  // the I2C bus every pass, which is worse than reading nothing. mainsVolts_V
+  // keeps FALLBACK_MAINS_VOLTS and every batch is posted with the fault raised.
+  if (ina226Present && millis() - lastInaPoll >= INA226_POLL_INTERVAL_MS) {
     lastInaPoll = millis();
 
     float busV = 0.0, shuntV = 0.0, inAmps = 0.0, inWatts = 0.0;
@@ -815,12 +857,18 @@ bool postTelemetry() {
 
   JsonDocument doc;
   doc["deviceId"] = DEVICE_ID;
-  // Hardcoded, and that is deliberate: no protective rule evaluates in this
-  // phase (RULES_ENABLED 0), so the firmware has evaluated no fault condition
-  // at all. Claiming sFault = true would assert a fault-isolated state it never
-  // checked; claiming it because nothing tripped would also be a claim. Until
-  // FR-01/02/03 run on the board, false is the only honest answer.
-  doc["sFault"] = false;
+  // Field NAME is FaultFlag, not sFault: that is what
+  // IngestTelemetryCommand exposes (IngestTelemetry.cs:35) and JSON binding is
+  // by property name, so "sFault" never bound at all and the fault branch at
+  // IngestTelemetry.cs:179 was unreachable - the device could not report a fault
+  // it had actually detected. Ported from master 57e3c00 defect 3.
+  //
+  // The VALUE is false while both sensors are present: no protective rule
+  // evaluates in this phase (RULES_ENABLED 0), so the firmware has checked no
+  // rule condition at all, and claiming a fault it never evaluated would be as
+  // dishonest as claiming none. It is raised exactly when a sensor is missing,
+  // which is a condition setup() DID evaluate and can therefore speak to.
+  doc["faultFlag"] = !(ina226Present && ads1220Present);
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   JsonArray readings = doc["readings"].to<JsonArray>();

@@ -623,7 +623,7 @@ export function PoliciesView() {
                               the system, so it reads as a qualifier beside the
                               action code rather than a filled chip. */}
                           {rule.action.includes('latch') && (
-                            <span className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">
+                            <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
                               latches
                             </span>
                           )}
@@ -721,12 +721,12 @@ export function PoliciesView() {
                     {action.code}
                   </code>
                   {action.opens ? (
-                    <span className="inline-flex items-center gap-1.5 font-body-sm text-body-sm uppercase tracking-wide text-error">
+                    <span className="inline-flex items-center gap-1.5 font-label-sm text-label-sm uppercase text-error">
                       <span className="ant-dot ant-dot-critical" aria-hidden />
                       Opens contact
                     </span>
                   ) : (
-                    <span className="font-body-sm text-body-sm uppercase tracking-wide text-on-surface-variant">
+                    <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
                       No relay motion
                     </span>
                   )}

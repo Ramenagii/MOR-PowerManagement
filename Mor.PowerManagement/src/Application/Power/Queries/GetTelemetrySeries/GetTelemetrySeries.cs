@@ -388,6 +388,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     {
         MeteringMode.Simulated => "Simulated",
         MeteringMode.Metered => Math.Abs(ratedVolts - 220) < 1 ? "Measured" : "DerivedNominal",
+        MeteringMode.EstimatedFromCurrent => "EstimatedFromCurrent",
         _ => "Unknown",
     };
 
@@ -418,7 +419,12 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         MeteringMode.Metered when Math.Abs(ratedVolts - 220) < 1 =>
             "Volts read from the INA226 on the mains feed. Current is measured on this channel's own ADS1220 SPI input via its ZMCT103C branch sensor - it is read directly, not distributed from a mains total. Power is volts x current on this channel.",
         MeteringMode.Metered =>
-            $"Volt is this channel's {ratedVolts} V nominal rating, not a measurement - this rail has no current sensor wired to it. Current and power are derived from the INA226 mains feed, not from a CT on this branch.",
+$"Volt is this channel's {ratedVolts} V nominal rating, not a measurement - this rail has no current sensor wired to it. Current and power are derived from the INA226 mains feed, not from a CT on this branch.",
+        // Ported from master: the arm was unreachable while the ZMCT current-only
+        // mode existed, so the UI showed the fallback text for a channel whose
+        // volts are explicitly an estimate.
+        MeteringMode.EstimatedFromCurrent =>
+            $"Measured CURRENT only, from a ZMCT103C CT on the common feed. A current transformer has no voltage output, so the {ratedVolts} V shown is this channel's nominal rating and watts are ESTIMATED as V_nominal x I x an assumed power factor. Neither V nor W is individually measured - real power needs a PZEM-004T.",
         _ => "The device has not reported a metering mode yet, so this channel's provenance is unknown.",
     };
 

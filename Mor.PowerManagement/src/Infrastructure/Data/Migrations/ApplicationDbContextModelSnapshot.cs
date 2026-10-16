@@ -376,6 +376,18 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.Property<double>("WarningThresholdWatts")
                         .HasColumnType("double precision");
 
+                    b.Property<double>("ZmctBurdenOhms")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("ZmctCtRatio")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("ZmctGain")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("ZmctPowerFactor")
+                        .HasColumnType("double precision");
+
                     b.HasKey("Id");
 
                     b.ToTable("PowerSystemConfigs");

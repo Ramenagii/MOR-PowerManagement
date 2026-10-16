@@ -163,6 +163,10 @@ function mapEvent(event: BackendEvent): EventLog {
   return {
     id: event.id,
     time: formatEventTime(event.timestamp),
+    // Carried through unlocalised so anything that needs the event's AGE — the
+    // sensor-fault rail, for one — can compute it. `time` is a display string
+    // and cannot be parsed back into a moment.
+    at: event.timestamp,
     title: event.title,
     detail: event.detail,
     severity: toSeverity(event.severity),
@@ -178,9 +182,11 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
       max: state.thresholds.maxCapacityWatts || MAX_CAPACITY,
       warning: state.thresholds.warningThresholdWatts || WARNING_THRESHOLD,
       critical: state.thresholds.criticalThresholdWatts || CRITICAL_THRESHOLD,
-      // Standby has no client-side fallback constant, so read it directly; the
-      // other three keep their offline defaults for the pre-login render.
-      standby: state.thresholds.standbyThresholdWatts || 80,
+      // `||` is wrong for standby: the server validates it as >= 0, so 0 is a
+      // legal stored value, and `|| 80` would silently rewrite it to 80 on the
+      // next load. The other three are GreaterThan(0) server-side, so their
+      // fallbacks can only ever apply when the field is genuinely absent.
+      standby: state.thresholds.standbyThresholdWatts ?? 80,
       standbyIdleMinutes: state.thresholds.standbyIdleMinutes ?? 30,
       stabilizationDelayMs: state.thresholds.stabilizationDelayMs ?? 500,
     },
@@ -259,6 +265,11 @@ export async function updateOutletPolicy(
     method: 'PUT',
     body: JSON.stringify({
       ...input,
+      // outletId MUST be in the body as well as the URL. The endpoint rejects
+      // the request with 400 when the two disagree
+      // (Dashboard.cs: `if (id != command.OutletId)`), and OutletId is a
+      // non-nullable int, so an absent field binds to 0 and EVERY save fails.
+      outletId: id,
       // Numeric, not the display string. See priorityValues above.
       ...(input.priority !== undefined ? { priority: priorityValues[input.priority] } : {}),
     }),

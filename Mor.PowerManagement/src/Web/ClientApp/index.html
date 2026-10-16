@@ -3,15 +3,29 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
-    <meta name="theme-color" content="#000000" />
+    <!-- Canvas Base, DESIGN.md "Precision Instrumentation System". -->
+    <meta name="theme-color" content="#FBFBFA" />
     <base href="/" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/favicon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Outfit:wght@600;700&display=swap" rel="stylesheet" />
-    <title>MOR Power Management Console</title>
+    <!--
+      DESIGN.md "Typography": Geist is the structural face for every label,
+      header and piece of UI copy. JetBrains Mono is loaded for low-level
+      machine telemetry only — figures, hex logs, bus addresses, register
+      allocations — and is never used for prose. Weights stop at 600; the
+      standard permits nothing heavier.
+    -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <title>Loadwise Power Operations Console</title>
     <script>
+      // Kept so an operator who set a preference before the redesign still gets
+      // it. The console has one theme; this only decides whether the attribute
+      // is present, and nothing in the token layer reads it.
       (function () {
         var theme = localStorage.getItem('picoColorScheme');
         if (theme && theme !== 'auto') {

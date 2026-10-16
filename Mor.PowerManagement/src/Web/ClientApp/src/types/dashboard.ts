@@ -23,7 +23,17 @@ export type Outlet = {
 
 export type EventLog = {
   id: number
+  /** Display clock, already localised for reading. */
   time: string
+  /**
+   * The event's own ISO stamp, kept alongside the display clock.
+   *
+   * `time` alone cannot answer "how old is this?", and the sensor-fault rail
+   * has to: a latched fault and a fault from four hours ago are the same
+   * record and two different sentences. Optional because locally raised events
+   * (the offline fallback path) have no server timestamp to carry.
+   */
+  at?: string
   title: string
   detail: string
   severity: Severity

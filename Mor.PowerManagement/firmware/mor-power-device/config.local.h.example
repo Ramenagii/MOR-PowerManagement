@@ -1,0 +1,14 @@
+// Copy this file to config.local.h and fill in your network details.
+// config.local.h is git-ignored; this example IS tracked.
+//
+//   copy config.local.h.example config.local.h
+//
+// Leaving these empty is fine once the firmware has stored a network in NVS.
+
+#ifndef WIFI_SSID
+#define WIFI_SSID ""
+#endif
+
+#ifndef WIFI_PASS
+#define WIFI_PASS ""
+#endif
