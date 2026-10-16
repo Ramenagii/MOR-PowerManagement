@@ -3521,17 +3521,33 @@ body {
   display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
   border-radius: 99px; margin-top: 8px;
 }
-.mp .tag.crit { background: #FDE7E5; color: #B1251F; }
-.mp .tag.high { background: #FFF0D6; color: #8F5700; }
-.mp .tag.mid { background: var(--line); color: var(--mute); }
-@media not all {
-  :root:not([data-theme='light']) .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
-  :root:not([data-theme='light']) .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
+/*
+ * Row badge — the branch's LIVE load band, not its configured priority.
+ * Amber and red reuse the hexes the allocation meter and the row rail already
+ * wear, so a band reads the same wherever it appears. `normal` is deliberately
+ * the quiet outline and never green: below 80% of a branch's own allowance is
+ * a measurement, not a health verdict, and green is not a state colour in this
+ * rig. The two hollow chips are the states where nothing was measured at all —
+ * `band-offline` because there is no session, `band-nocap` because there is no
+ * allowance to measure against. An absence of reading must not be painted like
+ * a level, and the two are not the same absence, so they are told apart by the
+ * tooltip rather than by another colour.
+ */
+.mp .tag.band-normal { background: var(--line); color: var(--mute); }
+.mp .tag.band-near { background: #FFF0D6; color: #8F5700; }
+.mp .tag.band-over { background: #FDE7E5; color: #B1251F; }
+.mp .tag.band-offline, .mp .tag.band-nocap {
+  background: transparent; color: var(--mute);
+  box-shadow: inset 0 0 0 1px var(--line);
 }
-:root[data-theme='none'] .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
-:root[data-theme='none'] .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
-:root[data-theme='dark'] .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
-:root[data-theme='dark'] .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
+@media not all {
+  :root:not([data-theme='light']) .mp .tag.band-near { background: #3A2B10; color: #F2BE6B; }
+  :root:not([data-theme='light']) .mp .tag.band-over { background: #3B1A19; color: #FF9A94; }
+}
+:root[data-theme='none'] .mp .tag.band-near { background: #3A2B10; color: #F2BE6B; }
+:root[data-theme='none'] .mp .tag.band-over { background: #3B1A19; color: #FF9A94; }
+:root[data-theme='dark'] .mp .tag.band-near { background: #3A2B10; color: #F2BE6B; }
+:root[data-theme='dark'] .mp .tag.band-over { background: #3B1A19; color: #FF9A94; }
 
 /* --- INA226 mains card ---------------------------------------------------- */
 /*

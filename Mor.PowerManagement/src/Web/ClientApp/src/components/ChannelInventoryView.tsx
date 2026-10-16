@@ -20,6 +20,7 @@ import {
   type ThresholdSet,
 } from '../api'
 import { POLL_INTERVAL_MS } from '../data/telemetry'
+import { relayGpio } from '../data/dashboard'
 import type { Outlet, OutletStatus, Priority } from '../types/dashboard'
 import { describeSeries } from '../utils/telemetry'
 
@@ -77,11 +78,9 @@ const UNWIRED_BRANCHES: Array<{ id: number; rail: '220V AC' | '110V AC' | '5V US
   { id: 5, rail: '5V USB', eyebrow: 'USB-C DC Rail' },
 ]
 
-/**
- * Relay GPIO per wired channel. CH1 is on GPIO2 and CH2 on GPIO1 — not
- * sequential, because GPIO1 was claimed by the debug UART first.
- */
-const RELAY_GPIO: Record<number, string> = { 1: 'GPIO2', 2: 'GPIO1' }
+/** Relay GPIO per channel. Single source of truth lives in data/dashboard.ts
+ * (RELAY_GPIO, matching firmware RELAY_PINS {1,2,4,5}); do not duplicate it
+ * here — the copy drifted once already and named the wrong physical relays. */
 
 /** Branch current transformer + ADC front end fitted to each mains branch. */
 const BRANCH_SENSOR = 'ADS1220'
@@ -232,7 +231,7 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
       name: outlet.name,
       priority: outlet.priority,
       status: outlet.status,
-      gpio: RELAY_GPIO[outlet.id] ?? '—',
+      gpio: relayGpio(outlet.id) ?? '—',
       ratedVolts: outlet.volts,
       allowance: outlet.allowance,
       volts: sampledVolts,

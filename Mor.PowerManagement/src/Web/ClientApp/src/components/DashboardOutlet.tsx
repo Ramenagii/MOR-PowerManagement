@@ -18,19 +18,76 @@ type DashboardOutletProps = {
 const SPARK_W = 400
 const SPARK_H = 64
 
-/** Priority -> the reference's tag classes. Critical and High are the two the
- *  mock colours; everything below that stays neutral so the grid does not fill
- *  up with chips that mean nothing operationally. */
-const TAG_CLASS: Record<Outlet['priority'], string> = {
-  Critical: 'tag crit',
-  High: 'tag high',
-  Medium: 'tag mid',
-  Low: 'tag mid',
+/**
+ * The row badge is the branch's LIVE load band, not its configured priority.
+ *
+ * This used to read Critical / High / Medium / Low. Those are shed order, an
+ * operator setting edited in the Framework admin, so they never change: a chip
+ * that never changes is indistinguishable from a stuck sensor, and an operator
+ * scanning a grid of rows learns the badge is furniture and stops reading it.
+ * The priority is not lost — it moves into the tooltip, where a setting belongs
+ * and where prose is asked for — and the badge takes over the one job that
+ * moves on a dashboard: saying how this branch is doing RIGHT NOW.
+ *
+ * The band is watts against THIS branch's own allowance, so a 10 W USB socket
+ * and a 300 W mains outlet are each read against their own cap rather than one
+ * shared number. Amber and red are the same two the allocation meter and the
+ * rail already use, so one meaning holds across the page.
+ */
+type BranchBand = 'offline' | 'nocap' | 'normal' | 'near' | 'over'
+
+const BAND_TAG: Record<BranchBand, string> = {
+  offline: 'tag band-offline',
+  nocap: 'tag band-nocap',
+  normal: 'tag band-normal',
+  near: 'tag band-near',
+  over: 'tag band-over',
+}
+
+/** One word. A row is read from across a room; the rest is a tooltip. */
+const BAND_WORD: Record<BranchBand, string> = {
+  offline: 'Offline',
+  nocap: 'No cap',
+  normal: 'Normal',
+  near: 'Near cap',
+  over: 'Over cap',
+}
+
+/**
+ * Band a branch by its own share of its own allowance.
+ *
+ * 80% is where a branch stops being routine: it is close enough that one more
+ * device turns the row red, which is the moment an operator wants to know
+ * about. 100% is the cap itself.
+ *
+ * Two states exist that are not bands, and both exist because a measurement
+ * that was never taken must not be rendered as a healthy one:
+ *   - offline, when there is no session. `live` gates this, so a cached last
+ *     good reading can never sit in the badge as if it were current.
+ *   - nocap, when the branch has no allowance configured at all. Without a cap
+ *     there is nothing to compare against, and calling that "Normal" or "Over
+ *     cap" would both be invented. `allowance` comes straight off the admin
+ *     field with no fallback in api.ts, so 0 is a value the server can send.
+ */
+export function branchBand(watts: number, allowance: number, live: boolean): BranchBand {
+  if (!live) return 'offline'
+  if (!(allowance > 0)) return 'nocap'
+  const pct = (watts / allowance) * 100
+  if (pct > 100) return 'over'
+  if (pct >= 80) return 'near'
+  return 'normal'
 }
 
 /**
  * One controlled channel, laid out as the reference's five-column row:
- *   [identity + tag] [watts] [sparkline] [allocation] [switch]
+ *   [identity + live band] [watts] [sparkline] [allocation] [switch]
+ *
+ * The badge next to the channel name is the branch's live load band
+ * (`branchBand`), not the configured priority. Priority is the operator's shed
+ * order and lives in the badge's tooltip instead, next to the percentage the
+ * band was computed from — so the row can be read two ways, quickly and
+ * completely, without either one being a frozen value wearing a live one's
+ * clothes.
  *
  * The 4px rail down the left edge (the row's ::before) is the only place the
  * energized state is expressed as colour, and it greys out with the whole row
@@ -67,6 +124,21 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   const effWatts = live ? outlet.watts : 0
   const usedPercent = allowance > 0 ? (effWatts / allowance) * 100 : 0
   const over = live && allowance > 0 && outlet.watts > allowance
+
+  // The badge's band and the tooltip sentence that explains it are derived from
+  // the same three numbers as the meter below, so the chip can never disagree
+  // with the bar it sits beside. Band text is one word; the tooltip carries the
+  // arithmetic — both facts about this branch, neither of them invented.
+  const band = branchBand(effWatts, allowance, live)
+  const bandTitle = `${!live
+    ? 'GET /api/Dashboard/state did not answer, so this row carries no load reading and no band.'
+    : band === 'nocap'
+      ? 'No allowance is configured for this branch, so there is no cap to read the load against.'
+      : `${Math.round(effWatts).toLocaleString()} W is ${Math.round(usedPercent)}% of its allowance.`} ${
+    monitorOnly
+      ? `Shed order: ${outlet.priority} priority, but there is no relay to shed — the framework ranks it first and can do nothing with it.`
+      : `Shed order: ${outlet.priority} priority, assigned in the Framework tab.`
+  }`
 
   // Sparkline is scaled against the branch's own allocation, so a 40 W branch
   // and a 300 W branch each fill their own box proportionally and the operator
@@ -116,23 +188,21 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   return (
     <article
       className={`mp-card row ${on ? '' : 'off'}`}
-      aria-label={`${outlet.name}, ${monitorOnly ? 'monitored only, no relay' : on ? 'energized' : 'open'}, ${wattsText} watts`}
+      aria-label={`${outlet.name}, ${monitorOnly ? 'monitored only, no relay' : on ? 'energized' : 'open'}, ${BAND_WORD[band].toLowerCase()}, ${wattsText} watts`}
     >
-      {/* 1 — identity + priority tag */}
+      {/* 1 — identity + live load band */}
       <div className="idcol">
         <b>{`${`CH${String(outlet.id).padStart(2, '0')}`} · ${outlet.name}`}</b>
         <div className="meta num" title={monitorOnly ? DASHBOARD_TIPS.usb : `Relay ${outlet.relay} on ${relayGpio(outlet.id)}`}>
           {monitorOnly ? '5 V USB · monitored' : relayGpio(outlet.id)}
         </div>
-        <span
-          className={`tag ${TAG_CLASS[outlet.priority]}`}
-          title={
-            monitorOnly
-              ? `${outlet.priority} priority on the rail, but there is no relay to shed: the framework ranks it first and can do nothing with it`
-              : `Shed order: ${outlet.priority} priority`
-          }
-        >
-          {outlet.priority}
+        {/*
+          One word, and it changes when the load changes. The shed order this
+          used to show is in the tooltip instead — see branchBand for why a
+          value that can never move must not occupy the badge slot.
+        */}
+        <span className={BAND_TAG[band]} title={bandTitle}>
+          {BAND_WORD[band]}
         </span>
       </div>
 

@@ -146,15 +146,27 @@ export const priorityRank: Record<Priority, number> = {
 /**
  * The ESP32 pin each relay driver sits on.
  *
- * This is a table and NOT arithmetic on the channel id, because the bench is
- * not wired in order: CH1 lands on GPIO2 and CH2 on GPIO1. GPIO1 was claimed
- * by the debug UART first, so the numbering runs backwards from the ids, and
- * an id-derived rule would swap the two and misreport which branch is live.
- * CH3 and CH4 continue on GPIO4 and GPIO5 for the same reason — GPIO3 is a
- * strapping pin on the ESP32-S3 and was left alone, so the pin column runs
- * 2, 1, 4, 5 rather than 1, 2, 3, 4. `RELAY_PINS` in
- * firmware/mor-power-device/config.h is the same list and the reason it looks
- * like this; change the two together.
+ *   CH1 -> GPIO1, CH2 -> GPIO2, CH3 -> GPIO4, CH4 -> GPIO5
+ *
+ * This is a table and NOT arithmetic on the channel id, and the reason is still
+ * GPIO3: it is a strapping pin on the ESP32-S3 and was left alone, so the pin
+ * column runs 1, 2, 4, 5 while the id column runs 1, 2, 3, 4. A rule of the form
+ * "id + 1" gets CH3 and CH4 wrong.
+ *
+ * CH1 and CH2 are NOT swapped, and the table used to say they were. It carried
+ * 1 -> GPIO2, 2 -> GPIO1 and explained it with a claim that GPIO1 had been
+ * claimed by the debug UART. That claim was checked against the ESP32-S3 on
+ * 2026-10-16 and is false — the strapping pins are 0, 3, 45 and 46 only, and
+ * GPIO1 is an ordinary ADC1 pin (see config.h, "GPIO 1 CHECKED, NOT ASSUMED").
+ * Firmware `RELAY_PINS` was corrected on the bench from {2, 1, 4, 5, 6} to
+ * {1, 2, 4, 5, 6}; while the client table kept the old order, a disconnect on
+ * CH1 cut CH2 on the real bench and the console named the other relay — the
+ * exact lie this table is not allowed to tell. `{4, 5}` was always correct.
+ *
+ * Source of truth: `RELAY_PIN_1..RELAY_PIN_5` in
+ * firmware/mor-power-device/config.h, which static_asserts against
+ * `RELAY_PINS[]`. Change all three together — firmware table, firmware aliases,
+ * and this one — and never derive a pin from a channel id.
  *
  * "Closed" means the relay is passing current to the branch; "open" means the
  * branch is isolated. The API carries that as an OutletStatus, not as a pin
@@ -165,8 +177,8 @@ export const priorityRank: Record<Priority, number> = {
  * = 1): no pinMode, no coil, nothing to switch. See MONITORED_ONLY_CHANNEL_IDS.
  */
 export const RELAY_GPIO: Record<number, string> = {
-  1: 'GPIO2',
-  2: 'GPIO1',
+  1: 'GPIO1',
+  2: 'GPIO2',
   3: 'GPIO4',
   4: 'GPIO5',
 }
