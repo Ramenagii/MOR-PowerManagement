@@ -45,6 +45,13 @@ export type Outlet = {
   status: OutletStatus
   schedule: string
   idleLimit: string
+  isProtected: boolean
+  manualHold: boolean
+  faultHold: boolean
+  recoveryLockout: boolean
+  automaticRecoveryAttempts: number
+  nextRecoveryAtUtc: string | null
+  commandNeedsReview: boolean
 }
 
 export type EventLog = {

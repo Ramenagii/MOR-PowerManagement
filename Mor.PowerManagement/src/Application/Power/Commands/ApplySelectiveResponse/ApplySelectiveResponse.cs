@@ -89,7 +89,7 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
         }
 
         var snapshots = outlets
-            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))
+            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name, o.IsProtected, o.ManualHold, o.RecoveryLockout, o.AutomaticRecoveryAttempts))
             .ToList();
 
         // Selection now goes through the framework's tier ladder (most
@@ -97,7 +97,9 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
         // legacy OrderBy(priority).ThenBy(watts) that shed the smallest load
         // first. Count is applied to the ladder, not to the request, so a manual
         // shed obeys the same ordering the automatic one would.
-        var candidates = LoadSheddingEngine.SelectNextShed(snapshots, request.Count);
+        // A switching cycle permits only one relay command in flight. Count is
+        // retained for wire compatibility; this invocation chooses one output.
+        var candidates = LoadSheddingEngine.SelectNextShed(snapshots, 1);
 
         var shed = new List<ShedDecisionDto>();
 
@@ -108,8 +110,15 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
             shed.Add(new ShedDecisionDto(outlet.Id, outlet.Name, tier.ToString(), outlet.Priority, outlet.CurrentWatts));
 
             outlet.Status = OutletStatus.Disconnected;
-            outlet.CurrentWatts = 0;
+            outlet.ManualHold = true;
+            outlet.NextRecoveryAtUtc = null;
+            outlet.RecoveryTrialPending = false;
             outlet.CommandedAtUtc = now;
+            outlet.PendingCommandId = Guid.NewGuid();
+            outlet.PendingRelayClosed = false;
+            outlet.PendingCommandOrigin = "manual-off";
+            outlet.PendingCommandIssuedAtUtc = now;
+            outlet.PendingCommandAcknowledgedAtUtc = null;
 
             _framework.Update(state => state with
             {

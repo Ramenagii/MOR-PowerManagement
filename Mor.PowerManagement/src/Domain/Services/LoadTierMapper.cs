@@ -70,10 +70,9 @@ public static class LoadTierMapper
     /// <summary>
     /// Whether the framework may open this outlet's relay on its own.
     /// <para>
-    /// Tier 1 (Critical) is never auto-shed, whatever P_total is: that is FR-09
-    /// priority preservation, and it is a SEPARATE decision from the per-outlet
-    /// allowance accounting; shed eligibility is about what the framework is
-    /// willing to disconnect. They remain separate decisions.
+    /// Staff protection is independent from priority. A Critical priority can
+    /// still be shed when it is not explicitly protected; a protected outlet
+    /// is never a routine automatic-shedding candidate.
     /// </para>
     /// <para>
     /// Manual shed (the operator's own button) is unaffected - an operator can
@@ -83,7 +82,7 @@ public static class LoadTierMapper
     /// </summary>
     public static bool IsAutoSheddable(OutletLoadSnapshot outlet)
         => LoadResponseEvaluator.IsEnergized(outlet.Status)
-            && ToTier(outlet.Priority) != LoadTier.Critical;
+            && !outlet.IsProtected;
 
     /// <summary>
     /// Whether the outage's restoration ladder may reclose this outlet. The
@@ -92,5 +91,8 @@ public static class LoadTierMapper
     /// </summary>
     public static bool IsAutoRestorable(OutletLoadSnapshot outlet)
         => outlet.Status == OutletStatus.Disconnected
-            && ToTier(outlet.Priority) != LoadTier.Critical;
+            && !outlet.IsProtected
+            && !outlet.ManualHold
+            && !outlet.RecoveryLockout
+            && outlet.AutomaticRecoveryAttempts < 5;
 }

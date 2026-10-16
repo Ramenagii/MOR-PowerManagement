@@ -20,6 +20,14 @@ public class PowerSystemConfig : BaseAuditableEntity
     // Post-activation stabilization delay before verification (POL-04).
     public int StabilizationDelayMs { get; set; } = 500;
 
+    public bool AutomaticPrioritisationEnabled { get; set; } = true;
+
+    // Acquisition identity prevents a retransmitted old batch from satisfying
+    // confirmation or post-switch verification.
+    public Guid? LastAcquisitionSessionId { get; set; }
+
+    public long LastAcquisitionSequence { get; set; }
+
     // Whether the reported readings are measured or synthesised. Written by
     // IngestTelemetry from the device's own meteringMode field; Unknown means the
     // device has not reported yet, which the UI states as "unknown" rather than

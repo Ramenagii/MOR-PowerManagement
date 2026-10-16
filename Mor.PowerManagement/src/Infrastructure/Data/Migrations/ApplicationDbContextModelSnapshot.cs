@@ -256,6 +256,12 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.Property<double>("AllowanceWatts")
                         .HasColumnType("double precision");
 
+                    b.Property<int>("AutomaticRecoveryAttempts")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("CommandNeedsReview")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset?>("CommandedAtUtc")
                         .HasColumnType("timestamp with time zone");
 
@@ -268,8 +274,14 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.Property<double>("CurrentWatts")
                         .HasColumnType("double precision");
 
+                    b.Property<bool>("FaultHold")
+                        .HasColumnType("boolean");
+
                     b.Property<int?>("IdleLimitMinutes")
                         .HasColumnType("integer");
+
+                    b.Property<bool>("IsProtected")
+                        .HasColumnType("boolean");
 
                     b.Property<DateTimeOffset>("LastModified")
                         .HasColumnType("timestamp with time zone");
@@ -279,6 +291,9 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
 
                     b.Property<DateTimeOffset?>("LastSeen")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("ManualHold")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("MeterChannel")
                         .IsRequired()
@@ -290,11 +305,41 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<DateTimeOffset?>("NextRecoveryAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("PendingCommandAcknowledgedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("PendingCommandId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("PendingCommandIssuedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PendingCommandOrigin")
+                        .HasColumnType("text");
+
+                    b.Property<bool?>("PendingRelayClosed")
+                        .HasColumnType("boolean");
+
                     b.Property<int>("Priority")
                         .HasColumnType("integer");
 
                     b.Property<int>("RatedVoltageVolts")
                         .HasColumnType("integer");
+
+                    b.Property<Guid?>("RecoveryEpisodeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("RecoveryLockout")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("RecoveryTrialOverLimitBatches")
+                        .HasColumnType("integer");
+
+                    b.Property<bool>("RecoveryTrialPending")
+                        .HasColumnType("boolean");
 
                     b.Property<string>("RelayChannel")
                         .IsRequired()
@@ -370,6 +415,9 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("AutomaticPrioritisationEnabled")
+                        .HasColumnType("boolean");
+
                     b.Property<DateTimeOffset>("Created")
                         .HasColumnType("timestamp with time zone");
 
@@ -378,6 +426,12 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
 
                     b.Property<double>("CriticalThresholdWatts")
                         .HasColumnType("double precision");
+
+                    b.Property<long>("LastAcquisitionSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("LastAcquisitionSessionId")
+                        .HasColumnType("uuid");
 
                     b.Property<DateTimeOffset>("LastModified")
                         .HasColumnType("timestamp with time zone");

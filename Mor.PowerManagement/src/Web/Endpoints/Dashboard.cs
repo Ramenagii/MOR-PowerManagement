@@ -1,5 +1,7 @@
 using Mor.PowerManagement.Application.Power.Commands.ApplySelectiveResponse;
 using Mor.PowerManagement.Application.Power.Commands.DisconnectOutlet;
+using Mor.PowerManagement.Application.Power.Commands.ClearOutletRecoveryState;
+using Mor.PowerManagement.Application.Power.Commands.AcknowledgeOutletFault;
 using Mor.PowerManagement.Application.Power.Commands.IngestTelemetry;
 using Mor.PowerManagement.Application.Power.Commands.RequestOutletActivation;
 using Mor.PowerManagement.Application.Power.Commands.RunStagedRestoration;
@@ -39,6 +41,8 @@ public class Dashboard : IEndpointGroup
         groupBuilder.MapGet(GetPolicies, "policies");
         groupBuilder.MapPost(RequestActivation, "outlets/{id}/activation");
         groupBuilder.MapPost(DisconnectOutlet, "outlets/{id}/disconnection");
+        groupBuilder.MapPost(ClearRecoveryState, "outlets/{id}/clear-recovery").RequireAuthorization(policy => policy.RequireRole("Administrator"));
+        groupBuilder.MapPost(AcknowledgeFaultHold, "outlets/{id}/acknowledge-fault").RequireAuthorization(policy => policy.RequireRole("Administrator"));
         groupBuilder.MapPost(ApplySelectiveResponse, "shedding/selective");
         groupBuilder.MapPost(RunStagedRestoration, "shedding/restore");
         groupBuilder.MapPost(SetManualOverride, "shedding/override");
@@ -191,6 +195,20 @@ public class Dashboard : IEndpointGroup
         cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.Ok(outletId);
+    }
+
+    public static async Task<Ok<int>> ClearRecoveryState(ISender sender, IMemoryCache cache, int id)
+    {
+        var result = await sender.Send(new ClearOutletRecoveryStateCommand(id));
+        cache.Remove(DashboardCacheKeys.State);
+        return TypedResults.Ok(result);
+    }
+
+    public static async Task<Ok<int>> AcknowledgeFaultHold(ISender sender, IMemoryCache cache, int id)
+    {
+        var result = await sender.Send(new AcknowledgeOutletFaultCommand(id));
+        cache.Remove(DashboardCacheKeys.State);
+        return TypedResults.Ok(result);
     }
 
     [EndpointSummary("Apply selective load response")]

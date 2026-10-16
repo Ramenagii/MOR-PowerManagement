@@ -31,7 +31,14 @@ public record OutletStateDto(
     bool PerOutletCapExempt,
     // True when the framework (not the operator) shed this branch, i.e. it is
     // on the staged-restoration ladder.
-    bool ShedByFramework);
+    bool ShedByFramework,
+    bool IsProtected,
+    bool ManualHold,
+    bool FaultHold,
+    bool RecoveryLockout,
+    int AutomaticRecoveryAttempts,
+    DateTimeOffset? NextRecoveryAtUtc,
+    bool CommandNeedsReview);
 
 public record ThresholdsDto(
     double MaxCapacityWatts,
@@ -123,7 +130,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             ?? new PowerSystemConfig();
 
         var snapshots = outlets
-            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))
+            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name, o.IsProtected, o.ManualHold, o.RecoveryLockout, o.AutomaticRecoveryAttempts))
             .ToList();
 
         var total = LoadResponseEvaluator.TotalLoad(snapshots);
@@ -189,7 +196,9 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 o.Schedule, o.IdleLimitMinutes, o.LastSeen,
                 LoadTierMapper.ToTier(o.Priority),
                 capExempt.Contains(o.Id),
-                shedByFramework.Contains(o.Id))).ToList(),
+                shedByFramework.Contains(o.Id), o.IsProtected, o.ManualHold, o.FaultHold,
+                o.RecoveryLockout, o.AutomaticRecoveryAttempts, o.NextRecoveryAtUtc,
+                o.CommandNeedsReview)).ToList(),
             total,
             Math.Max(config.MaxCapacityWatts - total, 0),
             config.MaxCapacityWatts <= 0 ? 0 : Math.Min(total / config.MaxCapacityWatts * 100, 100),

@@ -1,6 +1,8 @@
 import { useRef, useState } from 'react'
 import { LogOut, Power } from 'lucide-react'
 import { PowerShieldMark } from './PowerShieldMark'
+import { NotificationCentre } from './NotificationCentre'
+import type { EventLog } from '../types/dashboard'
 import type { AppView } from '../types/dashboard'
 
 /**
@@ -36,6 +38,7 @@ type AppTopBarProps = {
   deviceOnline: boolean
   userEmail: string | null
   onLogout: () => void
+  events: EventLog[]
 }
 
 /**
@@ -65,6 +68,7 @@ export function AppTopBar({
   deviceOnline,
   userEmail,
   onLogout,
+  events,
 }: AppTopBarProps) {
   const [profileOpen, setProfileOpen] = useState(false)
   const profileButton = useRef<HTMLButtonElement>(null)
@@ -74,6 +78,7 @@ export function AppTopBar({
       <div className="mx-auto flex h-full w-full max-w-[1440px] items-center gap-space-md px-margin">
         {/* ---- Identity ---------------------------------------------------- */}
         <div className="flex shrink-0 items-center gap-space-sm">
+          <NotificationCentre events={events} userKey={userEmail} />
           <PowerShieldMark className="h-8 w-[29px] shrink-0" title="MOR Power" />
           <span className="hidden whitespace-nowrap font-title-lg text-title-lg font-semibold text-on-surface sm:inline">
             MOR Power

@@ -476,6 +476,7 @@ function App() {
           deviceOnline={deviceOnline}
           userEmail={userEmail}
           onLogout={handleLogout}
+          events={events}
         />
 
         {/*

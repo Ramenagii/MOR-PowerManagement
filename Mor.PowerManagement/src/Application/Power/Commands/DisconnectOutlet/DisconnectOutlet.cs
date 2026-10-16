@@ -27,8 +27,17 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
         Guard.Against.NotFound(request.OutletId, outlet);
 
         outlet.Status = OutletStatus.Disconnected;
-        outlet.CurrentWatts = 0;
+        // Preserve the last measurement until a new sample arrives; relay OFF
+        // does not make the meter read zero synchronously.
+        outlet.ManualHold = true;
+        outlet.NextRecoveryAtUtc = null;
+        outlet.RecoveryTrialPending = false;
         outlet.CommandedAtUtc = DateTimeOffset.UtcNow;
+        outlet.PendingCommandId = Guid.NewGuid();
+        outlet.PendingRelayClosed = false;
+        outlet.PendingCommandOrigin = "manual-off";
+        outlet.PendingCommandIssuedAtUtc = outlet.CommandedAtUtc;
+        outlet.PendingCommandAcknowledgedAtUtc = null;
 
         _context.PowerEvents.Add(new PowerEvent
         {

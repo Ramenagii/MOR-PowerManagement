@@ -16,6 +16,10 @@ public class Outlet : BaseAuditableEntity
 
     public OutletPriority Priority { get; set; } = OutletPriority.Low;
 
+    // Staff-assigned protection is independent of priority. Protected outlets
+    // are never selected for routine automatic shedding.
+    public bool IsProtected { get; set; }
+
     // Expected branch draw used by the pre-activation assessment (POL-02 / POL-03).
     public double AllowanceWatts { get; set; }
 
@@ -35,6 +39,38 @@ public class Outlet : BaseAuditableEntity
     public double CurrentWatts { get; set; }
 
     public DateTimeOffset? LastSeen { get; set; }
+
+    // Durable F4 episode and hold state. A normal reading or process restart
+    // must not reset an unsuccessful recovery attempt.
+    public bool ManualHold { get; set; }
+
+    public bool FaultHold { get; set; }
+
+    public bool RecoveryLockout { get; set; }
+
+    public int AutomaticRecoveryAttempts { get; set; }
+
+    public Guid? RecoveryEpisodeId { get; set; }
+
+    public DateTimeOffset? NextRecoveryAtUtc { get; set; }
+
+    public bool RecoveryTrialPending { get; set; }
+
+    public int RecoveryTrialOverLimitBatches { get; set; }
+
+    // One command per outlet may be pending; the coordinator enforces one
+    // pending command across the whole device.
+    public Guid? PendingCommandId { get; set; }
+
+    public bool? PendingRelayClosed { get; set; }
+
+    public string? PendingCommandOrigin { get; set; }
+
+    public DateTimeOffset? PendingCommandIssuedAtUtc { get; set; }
+
+    public DateTimeOffset? PendingCommandAcknowledgedAtUtc { get; set; }
+
+    public bool CommandNeedsReview { get; set; }
 
     public IList<TelemetryReading> Readings { get; private set; } = new List<TelemetryReading>();
 }

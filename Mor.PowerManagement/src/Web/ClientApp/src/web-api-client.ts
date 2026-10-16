@@ -112,7 +112,7 @@ export class DashboardClient {
             let result400: any = null;
             let resultData400 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
                 result400 = resultData400 !== undefined ? resultData400 : null as any;
-    
+
             return throwException("Bad Request", status, _responseText, _headers, result400);
             });
         } else if (status === 401) {
@@ -265,6 +265,112 @@ export class DashboardClient {
     }
 
     protected processDisconnectOutlet(response: Response): Promise<number> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+                result200 = resultData200 !== undefined ? resultData200 : null as any;
+
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<number>(null as any);
+    }
+
+    /**
+     * @return OK
+     */
+    clearRecoveryState(id: number): Promise<number> {
+        let url_ = this.baseUrl + "/api/Dashboard/outlets/{id}/clear-recovery";
+        if (id === undefined || id === null)
+            throw new globalThis.Error("The parameter 'id' must be defined.");
+        url_ = url_.replace("{id}", encodeURIComponent("" + id));
+        url_ = url_.replace(/[?&]$/, "");
+
+        let options_: RequestInit = {
+            method: "POST",
+            headers: {
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processClearRecoveryState(_response);
+        });
+    }
+
+    protected processClearRecoveryState(response: Response): Promise<number> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+                result200 = resultData200 !== undefined ? resultData200 : null as any;
+
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<number>(null as any);
+    }
+
+    /**
+     * @return OK
+     */
+    acknowledgeFaultHold(id: number): Promise<number> {
+        let url_ = this.baseUrl + "/api/Dashboard/outlets/{id}/acknowledge-fault";
+        if (id === undefined || id === null)
+            throw new globalThis.Error("The parameter 'id' must be defined.");
+        url_ = url_.replace("{id}", encodeURIComponent("" + id));
+        url_ = url_.replace(/[?&]$/, "");
+
+        let options_: RequestInit = {
+            method: "POST",
+            headers: {
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processAcknowledgeFaultHold(_response);
+        });
+    }
+
+    protected processAcknowledgeFaultHold(response: Response): Promise<number> {
         const status = response.status;
         let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
         if (status === 200) {
@@ -2367,6 +2473,7 @@ export class DeviceOutletPolicyDto implements IDeviceOutletPolicyDto {
     schedule!: string;
     idleLimitMinutes!: number | undefined;
     desiredStatus!: number;
+    pendingCommandId!: string | undefined;
 
     [key: string]: any;
 
@@ -2392,6 +2499,7 @@ export class DeviceOutletPolicyDto implements IDeviceOutletPolicyDto {
             this.schedule = _data["schedule"];
             this.idleLimitMinutes = _data["idleLimitMinutes"];
             this.desiredStatus = _data["desiredStatus"];
+            this.pendingCommandId = _data["pendingCommandId"];
         }
     }
 
@@ -2415,6 +2523,7 @@ export class DeviceOutletPolicyDto implements IDeviceOutletPolicyDto {
         data["schedule"] = this.schedule;
         data["idleLimitMinutes"] = this.idleLimitMinutes;
         data["desiredStatus"] = this.desiredStatus;
+        data["pendingCommandId"] = this.pendingCommandId;
         return data;
     }
 }
@@ -2427,6 +2536,7 @@ export interface IDeviceOutletPolicyDto {
     schedule: string;
     idleLimitMinutes: number | undefined;
     desiredStatus: number;
+    pendingCommandId: string | undefined;
 
     [key: string]: any;
 }
@@ -2888,6 +2998,8 @@ export interface IInfoResponse {
 
 export class IngestTelemetryCommand implements IIngestTelemetryCommand {
     deviceId?: string | undefined;
+    acquisitionSessionId?: string | undefined;
+    acquisitionSequence?: number | undefined;
     faultFlag?: boolean;
     meteringMode?: number | undefined;
     readings?: TelemetrySample[];
@@ -2912,6 +3024,8 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
                     this[property] = _data[property];
             }
             this.deviceId = _data["deviceId"];
+            this.acquisitionSessionId = _data["acquisitionSessionId"];
+            this.acquisitionSequence = _data["acquisitionSequence"];
             this.faultFlag = _data["faultFlag"];
             this.meteringMode = _data["meteringMode"];
             if (Array.isArray(_data["readings"])) {
@@ -2942,6 +3056,8 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
                 data[property] = this[property];
         }
         data["deviceId"] = this.deviceId;
+        data["acquisitionSessionId"] = this.acquisitionSessionId;
+        data["acquisitionSequence"] = this.acquisitionSequence;
         data["faultFlag"] = this.faultFlag;
         data["meteringMode"] = this.meteringMode;
         if (Array.isArray(this.readings)) {
@@ -2961,6 +3077,8 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
 
 export interface IIngestTelemetryCommand {
     deviceId?: string | undefined;
+    acquisitionSessionId?: string | undefined;
+    acquisitionSequence?: number | undefined;
     faultFlag?: boolean;
     meteringMode?: number | undefined;
     readings?: TelemetrySample[];
@@ -3424,6 +3542,13 @@ export class OutletStateDto implements IOutletStateDto {
     tier!: number;
     perOutletCapExempt!: boolean;
     shedByFramework!: boolean;
+    isProtected!: boolean;
+    manualHold!: boolean;
+    faultHold!: boolean;
+    recoveryLockout!: boolean;
+    automaticRecoveryAttempts!: number;
+    nextRecoveryAtUtc!: Date | undefined;
+    commandNeedsReview!: boolean;
 
     [key: string]: any;
 
@@ -3458,6 +3583,13 @@ export class OutletStateDto implements IOutletStateDto {
             this.tier = _data["tier"];
             this.perOutletCapExempt = _data["perOutletCapExempt"];
             this.shedByFramework = _data["shedByFramework"];
+            this.isProtected = _data["isProtected"];
+            this.manualHold = _data["manualHold"];
+            this.faultHold = _data["faultHold"];
+            this.recoveryLockout = _data["recoveryLockout"];
+            this.automaticRecoveryAttempts = _data["automaticRecoveryAttempts"];
+            this.nextRecoveryAtUtc = _data["nextRecoveryAtUtc"] ? new Date(_data["nextRecoveryAtUtc"].toString()) : undefined as any;
+            this.commandNeedsReview = _data["commandNeedsReview"];
         }
     }
 
@@ -3490,6 +3622,13 @@ export class OutletStateDto implements IOutletStateDto {
         data["tier"] = this.tier;
         data["perOutletCapExempt"] = this.perOutletCapExempt;
         data["shedByFramework"] = this.shedByFramework;
+        data["isProtected"] = this.isProtected;
+        data["manualHold"] = this.manualHold;
+        data["faultHold"] = this.faultHold;
+        data["recoveryLockout"] = this.recoveryLockout;
+        data["automaticRecoveryAttempts"] = this.automaticRecoveryAttempts;
+        data["nextRecoveryAtUtc"] = this.nextRecoveryAtUtc ? this.nextRecoveryAtUtc.toISOString() : undefined as any;
+        data["commandNeedsReview"] = this.commandNeedsReview;
         return data;
     }
 }
@@ -3511,6 +3650,13 @@ export interface IOutletStateDto {
     tier: number;
     perOutletCapExempt: boolean;
     shedByFramework: boolean;
+    isProtected: boolean;
+    manualHold: boolean;
+    faultHold: boolean;
+    recoveryLockout: boolean;
+    automaticRecoveryAttempts: number;
+    nextRecoveryAtUtc: Date | undefined;
+    commandNeedsReview: boolean;
 
     [key: string]: any;
 }
@@ -3682,6 +3828,7 @@ export interface IRegisterRequest {
 export class RelayStateReport implements IRelayStateReport {
     outletId?: number;
     relayClosed?: boolean;
+    commandId?: string | undefined;
 
     [key: string]: any;
 
@@ -3702,6 +3849,7 @@ export class RelayStateReport implements IRelayStateReport {
             }
             this.outletId = _data["outletId"];
             this.relayClosed = _data["relayClosed"];
+            this.commandId = _data["commandId"];
         }
     }
 
@@ -3720,6 +3868,7 @@ export class RelayStateReport implements IRelayStateReport {
         }
         data["outletId"] = this.outletId;
         data["relayClosed"] = this.relayClosed;
+        data["commandId"] = this.commandId;
         return data;
     }
 }
@@ -3727,6 +3876,7 @@ export class RelayStateReport implements IRelayStateReport {
 export interface IRelayStateReport {
     outletId?: number;
     relayClosed?: boolean;
+    commandId?: string | undefined;
 
     [key: string]: any;
 }
@@ -5000,6 +5150,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
     outletId?: number;
     priority?: number | undefined;
     allowanceWatts?: number | undefined;
+    isProtected?: boolean | undefined;
     schedule?: string | undefined;
     idleLimitMinutes?: number | undefined;
     clearIdleLimit?: boolean;
@@ -5024,6 +5175,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
             this.outletId = _data["outletId"];
             this.priority = _data["priority"];
             this.allowanceWatts = _data["allowanceWatts"];
+            this.isProtected = _data["isProtected"];
             this.schedule = _data["schedule"];
             this.idleLimitMinutes = _data["idleLimitMinutes"];
             this.clearIdleLimit = _data["clearIdleLimit"];
@@ -5046,6 +5198,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
         data["outletId"] = this.outletId;
         data["priority"] = this.priority;
         data["allowanceWatts"] = this.allowanceWatts;
+        data["isProtected"] = this.isProtected;
         data["schedule"] = this.schedule;
         data["idleLimitMinutes"] = this.idleLimitMinutes;
         data["clearIdleLimit"] = this.clearIdleLimit;
@@ -5057,6 +5210,7 @@ export interface IUpdateOutletPolicyCommand {
     outletId?: number;
     priority?: number | undefined;
     allowanceWatts?: number | undefined;
+    isProtected?: boolean | undefined;
     schedule?: string | undefined;
     idleLimitMinutes?: number | undefined;
     clearIdleLimit?: boolean;

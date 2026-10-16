@@ -15,7 +15,8 @@ public record DeviceOutletPolicyDto(
     int RatedVoltageVolts,
     string Schedule,
     int? IdleLimitMinutes,
-    OutletStatus DesiredStatus);
+    OutletStatus DesiredStatus,
+    Guid? PendingCommandId);
 
 public record DeviceConfigVm(
     double MaxCapacityWatts,
@@ -51,7 +52,7 @@ public class GetDeviceConfigQueryHandler : IRequestHandler<GetDeviceConfigQuery,
         var outlets = await _context.Outlets
             .OrderBy(o => o.Id)
             .Select(o => new DeviceOutletPolicyDto(
-                o.Id, o.Priority, o.AllowanceWatts, o.RatedVoltageVolts, o.Schedule, o.IdleLimitMinutes, o.Status))
+                o.Id, o.Priority, o.AllowanceWatts, o.RatedVoltageVolts, o.Schedule, o.IdleLimitMinutes, o.Status, o.PendingCommandId))
             .ToListAsync(cancellationToken);
 
         return new DeviceConfigVm(

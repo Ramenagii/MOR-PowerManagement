@@ -25,6 +25,8 @@ public record RelayStateReport
     public int OutletId { get; init; }
 
     public bool RelayClosed { get; init; }
+
+    public Guid? CommandId { get; init; }
 }
 
 /// <summary>
@@ -54,6 +56,10 @@ public record Ina226Report
 public record IngestTelemetryCommand : IRequest<IngestTelemetryResult>
 {
     public string? DeviceId { get; init; }
+
+    public Guid? AcquisitionSessionId { get; init; }
+
+    public long? AcquisitionSequence { get; init; }
 
     // S_fault: sensor or communication health flag from the ESP32.
     public bool FaultFlag { get; init; }
@@ -158,6 +164,19 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             .FirstOrDefaultAsync(cancellationToken)
             ?? new PowerSystemConfig();
 
+        if (request.AcquisitionSessionId.HasValue && request.AcquisitionSequence.HasValue)
+        {
+            if (config.LastAcquisitionSessionId == request.AcquisitionSessionId
+                && request.AcquisitionSequence.Value <= config.LastAcquisitionSequence)
+            {
+                // Duplicate/out-of-order acquisition: do not let retransmitted
+                // telemetry count as another overload or recovery confirmation.
+                return new IngestTelemetryResult(0, SystemState.Normal, 0, Array.Empty<string>());
+            }
+            config.LastAcquisitionSessionId = request.AcquisitionSessionId;
+            config.LastAcquisitionSequence = request.AcquisitionSequence.Value;
+        }
+
         // Provenance is device-sourced (D8): it is only ever written from the
         // device's own report, never assumed here.
         if (request.MeteringMode is { } meteringMode)
@@ -225,6 +244,17 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             }
 
             // Backend restriction sticks until cleared by policy action.
+            if (outlet.PendingCommandId is { } pendingId && report.CommandId == pendingId
+                && outlet.PendingRelayClosed == report.RelayClosed)
+            {
+                outlet.PendingCommandAcknowledgedAtUtc = now;
+                if (outlet.PendingCommandOrigin is "automatic-shed" or "recovery-retry-off")
+                {
+                    outlet.NextRecoveryAtUtc = now.AddSeconds(LoadSheddingSettings.RecoveryPeriodSeconds);
+                    outlet.RecoveryTrialPending = false;
+                }
+            }
+
             if (outlet.Status == OutletStatus.Restricted)
             {
                 continue;
@@ -258,13 +288,14 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             foreach (var outlet in outlets)
             {
                 outlet.Status = OutletStatus.Restricted;
+                outlet.FaultHold = true;
             }
 
             AddEvent("Hardware fault isolation", "S_fault is TRUE: all relays restricted and the prototype isolated (POL-01).", EventSeverity.Critical, now, eventsRaised);
         }
 
         var snapshots = outlets
-            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))
+            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name, o.IsProtected, o.ManualHold, o.RecoveryLockout, o.AutomaticRecoveryAttempts))
             .ToList();
 
         double total = LoadResponseEvaluator.TotalLoad(snapshots);
@@ -283,6 +314,31 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 
         if (!request.FaultFlag)
         {
+            // F3: no further automatic operation until this command has been
+            // acknowledged by ID and at least one post-settle fresh batch exists.
+            var pending = outlets.FirstOrDefault(o => o.PendingCommandId.HasValue);
+            if (pending is not null && pending.PendingCommandIssuedAtUtc is { } issuedAt)
+            {
+                if (!pending.PendingCommandAcknowledgedAtUtc.HasValue
+                    && now - issuedAt > TimeSpan.FromSeconds(LoadSheddingSettings.SwitchingResponseTimeoutSeconds))
+                {
+                    if (!pending.CommandNeedsReview)
+                    {
+                        pending.CommandNeedsReview = true;
+                        AddEvent("Relay response needs review", $"{pending.Name} did not acknowledge command {pending.PendingCommandId} within {LoadSheddingSettings.SwitchingResponseTimeoutSeconds} seconds. Automatic switching is paused.", EventSeverity.Critical, now, eventsRaised);
+                    }
+                }
+                else if (pending.PendingCommandAcknowledgedAtUtc is { } acknowledged
+                    && outlets.Where(o => o.LastSeen.HasValue).All(o => o.LastSeen!.Value > acknowledged.AddMilliseconds(config.StabilizationDelayMs)))
+                {
+                    pending.PendingCommandId = null;
+                    pending.PendingRelayClosed = null;
+                    pending.PendingCommandOrigin = null;
+                    pending.PendingCommandIssuedAtUtc = null;
+                    pending.PendingCommandAcknowledgedAtUtc = null;
+                }
+            }
+
             shedding = RunFramework(outlets, config, now, eventsRaised);
 
             // The framework may have opened a relay, which changes P_total.
@@ -290,7 +346,9 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             // the framework just left it, not as it arrived.
             if (shedding is { Action: nameof(LoadSheddingAction.Shed) })
             {
-                total = outlets.Sum(outlet => outlet.CurrentWatts);
+                total = LoadResponseEvaluator.TotalLoad(outlets.Select(outlet => new OutletLoadSnapshot(
+                    outlet.Id, outlet.Priority, outlet.Status, outlet.CurrentWatts, outlet.AllowanceWatts,
+                    outlet.LastSeen, outlet.Name, outlet.IsProtected)));
                 state = LoadResponseEvaluator.GetSystemState(total, config.WarningThresholdWatts, config.CriticalThresholdWatts);
             }
         }
@@ -332,8 +390,80 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         // operating limit POL-02..POL-07 already run on. No new config column.
         var pLimit = config.CriticalThresholdWatts;
 
+        if (outlets.Any(o => o.CommandNeedsReview))
+        {
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Relay command response needs Admin review; automatic switching is paused.", pLimit, _framework.Current, outlets);
+        }
+        if (outlets.Any(o => o.PendingCommandId.HasValue))
+        {
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Waiting for the matching relay acknowledgement and a fresh post-switch sample.", pLimit, _framework.Current, outlets);
+        }
+        if (outlets.Any(o => !o.LastSeen.HasValue || o.LastSeen < now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds)))
+        {
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Fresh readings are required before automatic switching; missing or stale inputs are unknown, not zero.", pLimit, _framework.Current, outlets);
+        }
+
+        // F3/F4: judge a recovery against the fresh demand after the settling
+        // interval. If it failed, disconnect that same returning outlet.
+        var recoveryTrial = outlets.FirstOrDefault(o => o.RecoveryTrialPending);
+        if (recoveryTrial is not null)
+        {
+            var measuredTotal = outlets.Where(o => LoadResponseEvaluator.IsEnergized(o.Status)).Sum(o => o.CurrentWatts);
+            if (measuredTotal > pLimit)
+            {
+                recoveryTrial.RecoveryTrialOverLimitBatches++;
+                if (recoveryTrial.RecoveryTrialOverLimitBatches >= LoadSheddingSettings.OverLimitConfirmationBatches)
+                {
+                    recoveryTrial.Status = OutletStatus.Disconnected;
+                    recoveryTrial.CommandedAtUtc = now;
+                    recoveryTrial.PendingCommandId = Guid.NewGuid();
+                    recoveryTrial.PendingRelayClosed = false;
+                    recoveryTrial.PendingCommandOrigin = "recovery-retry-off";
+                    recoveryTrial.PendingCommandIssuedAtUtc = now;
+                    recoveryTrial.PendingCommandAcknowledgedAtUtc = null;
+                    recoveryTrial.RecoveryTrialPending = false;
+                    recoveryTrial.RecoveryTrialOverLimitBatches = 0;
+                    recoveryTrial.NextRecoveryAtUtc = now.AddSeconds(LoadSheddingSettings.RecoveryPeriodSeconds);
+                    if (recoveryTrial.AutomaticRecoveryAttempts >= 5) recoveryTrial.RecoveryLockout = true;
+                    AddEvent(recoveryTrial.RecoveryLockout ? "Recovery locked out" : "Recovery trial reversed",
+                        recoveryTrial.RecoveryLockout
+                            ? $"{recoveryTrial.Name} remained over the operating limit after its fifth automatic reconnection. It is OFF and requires Admin review."
+                            : $"The return of {recoveryTrial.Name} kept total demand above {pLimit:F0} W. That same outlet was disconnected; another trial is delayed {LoadSheddingSettings.RecoveryPeriodSeconds} seconds.",
+                        recoveryTrial.RecoveryLockout ? EventSeverity.Critical : EventSeverity.Warning, now, eventsRaised);
+                    return MakeFrameworkResult(LoadSheddingAction.Shed, recoveryTrial.Id, "Recovery attempt exceeded the threshold; disconnecting the same outlet.", pLimit, _framework.Current, outlets);
+                }
+                return MakeFrameworkResult(LoadSheddingAction.None, recoveryTrial.Id, $"Checking recovery attempt ({recoveryTrial.RecoveryTrialOverLimitBatches}/{LoadSheddingSettings.OverLimitConfirmationBatches} over-limit batches).", pLimit, _framework.Current, outlets);
+            }
+
+            recoveryTrial.RecoveryTrialPending = false;
+            recoveryTrial.RecoveryTrialOverLimitBatches = 0;
+            recoveryTrial.NextRecoveryAtUtc = null;
+            AddEvent("Recovery successful", $"{recoveryTrial.Name} remained connected after its fresh post-switch measurement.", EventSeverity.Success, now, eventsRaised);
+        }
+
+        var dueRecovery = outlets.Where(o => o.Status == OutletStatus.Disconnected && o.NextRecoveryAtUtc <= now
+                && !o.ManualHold && !o.FaultHold && !o.RecoveryLockout && !o.IsProtected
+                && !o.CommandNeedsReview && o.AutomaticRecoveryAttempts < 5
+                && o.LastSeen >= now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds))
+            .OrderBy(o => o.Priority).ThenBy(o => o.Id).FirstOrDefault();
+        if (dueRecovery is not null)
+        {
+            dueRecovery.Status = OutletStatus.Active;
+            dueRecovery.CommandedAtUtc = now;
+            dueRecovery.PendingCommandId = Guid.NewGuid();
+            dueRecovery.PendingRelayClosed = true;
+            dueRecovery.PendingCommandOrigin = "automatic-recovery";
+            dueRecovery.PendingCommandIssuedAtUtc = now;
+            dueRecovery.PendingCommandAcknowledgedAtUtc = null;
+            dueRecovery.AutomaticRecoveryAttempts++;
+            dueRecovery.RecoveryTrialPending = true;
+            dueRecovery.RecoveryTrialOverLimitBatches = 0;
+            AddEvent("Automatic recovery trial", $"Trial reconnection {dueRecovery.AutomaticRecoveryAttempts}/5 for {dueRecovery.Name}.", EventSeverity.Info, now, eventsRaised);
+            return MakeFrameworkResult(LoadSheddingAction.Restore, dueRecovery.Id, $"Timed recovery elapsed; issuing trial {dueRecovery.AutomaticRecoveryAttempts}/5.", pLimit, _framework.Current, outlets);
+        }
+
         var decision = LoadSheddingEngine.Evaluate(
-            outlets.Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name)).ToList(),
+            outlets.Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name, o.IsProtected, o.ManualHold, o.RecoveryLockout, o.AutomaticRecoveryAttempts)).ToList(),
             pLimit,
             _framework.Current,
             now);
@@ -346,8 +476,14 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             {
                 var shed = outlets.First(o => o.Id == shedId);
                 shed.Status = OutletStatus.Disconnected;
-                shed.CurrentWatts = 0;
                 shed.CommandedAtUtc = now;
+                shed.PendingCommandId = Guid.NewGuid();
+                shed.PendingRelayClosed = false;
+                shed.PendingCommandOrigin = "automatic-shed";
+                shed.PendingCommandIssuedAtUtc = now;
+                shed.PendingCommandAcknowledgedAtUtc = null;
+                shed.NextRecoveryAtUtc = now.AddSeconds(LoadSheddingSettings.RecoveryPeriodSeconds);
+                shed.RecoveryEpisodeId ??= Guid.NewGuid();
 
                 AddEvent(
                     "Priority-based load shed",
@@ -362,12 +498,15 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             {
                 var restore = outlets.First(o => o.Id == restoreId);
                 restore.Status = OutletStatus.Active;
-                // Restoration puts real power back on the branch. Until the rig
-                // reports it, CurrentWatts stays 0 so P_total is understated and
-                // the next batch over-reads briefly - which errs toward shedding
-                // again rather than toward declaring the rig healthy.
-                restore.CurrentWatts = 0;
                 restore.CommandedAtUtc = now;
+                restore.PendingCommandId = Guid.NewGuid();
+                restore.PendingRelayClosed = true;
+                restore.PendingCommandOrigin = "automatic-recovery";
+                restore.PendingCommandIssuedAtUtc = now;
+                restore.PendingCommandAcknowledgedAtUtc = null;
+                restore.AutomaticRecoveryAttempts++;
+                restore.RecoveryTrialPending = true;
+                restore.RecoveryTrialOverLimitBatches = 0;
 
                 AddEvent(
                     "Staged restoration",
@@ -411,6 +550,12 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             decision.NextState.ShedLedger.Select(r => r.OutletId).ToList(),
             decision.NextState.ManualOverride,
             decision.NextState.FaultLatched);
+    }
+
+    private LoadSheddingResult MakeFrameworkResult(LoadSheddingAction action, int? outletId, string detail, double limit, LoadSheddingState state, IList<Outlet> outlets)
+    {
+        var outlet = outlets.FirstOrDefault(o => o.Id == outletId);
+        return new LoadSheddingResult(action.ToString(), outletId, outlet?.Name, outlet is null ? null : LoadTierMapper.ToTier(outlet.Priority).ToString(), detail, limit, LoadSheddingEngine.ComputeRecoveryLimit(limit), state.ConsecutiveOverLimitBatches, LoadSheddingSettings.OverLimitConfirmationBatches, LoadSheddingSettings.RecoveryPeriodSeconds, state.ShedLedger.Select(r => r.OutletId).ToList(), state.ManualOverride, state.FaultLatched);
     }
 
     private void AddEvent(string title, string detail, EventSeverity severity, DateTimeOffset now, List<string> raised)

@@ -57,7 +57,8 @@ public abstract class LoadSheddingSettings
     // Waiting out the window is what makes restoration staged rather than
     // immediately undoing the shed. Site-test: a lab with intermittent
     // large motor loads needs a longer window than a quiet one.
-    public const int RecoveryPeriodSeconds = 30;
+    // User-selected automatic recovery window: remain OFF for under one minute.
+    public const int RecoveryPeriodSeconds = 55;
 
     // ---- Staged restoration ----------------------------------------------
     // Pause between reclosing one outlet and remeasuring the rig.
@@ -70,6 +71,10 @@ public abstract class LoadSheddingSettings
     // meaningfully be: below one scan period the remeasurement it waits for
     // has not happened yet.
     public const int InterReconnectDelaySeconds = 5;
+
+    // F3 command feedback deadline. Device relay-state telemetry is logical
+    // feedback; it does not prove contact voltage or isolation.
+    public const int SwitchingResponseTimeoutSeconds = 5;
 
     // ---- Per-outlet allowance --------------------------------------------
     // Every outlet, including Critical, has an independently editable allowance.

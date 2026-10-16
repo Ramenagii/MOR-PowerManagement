@@ -68,15 +68,26 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
 
         var now = DateTimeOffset.UtcNow;
 
+        if (outlet.FaultHold || outlet.RecoveryLockout || outlet.CommandNeedsReview)
+        {
+            var holdReason = outlet.FaultHold ? "fault hold" : outlet.RecoveryLockout ? "recovery lockout" : "unresolved relay response";
+            _context.PowerEvents.Add(new PowerEvent { Timestamp = now, Title = "Manual restoration blocked", Detail = $"{outlet.Name} remains OFF because of {holdReason}; Admin clearance and response review are required.", Severity = EventSeverity.Critical });
+            await _context.SaveChangesAsync(cancellationToken);
+            return new OutletActivationResult(outlet.Id, false, "HOLD", $"Cannot restore while {holdReason} is active.", outlet.Status, LoadTierMapper.ToTier(outlet.Priority), capExempt.Contains(outlet.Id));
+        }
+
         if (assessment.Verdict == ActivationVerdict.Allowed)
         {
             outlet.Status = OutletStatus.Active;
-            // Relay state is a control result, not a meter reading. Keep the
-            // measured load at zero until the ESP32 posts a fresh CT sample;
-            // an allowance-based estimate here showed 792 W / 3.33 A as if it
-            // were measured current immediately after relay activation.
-            outlet.CurrentWatts = 0;
+            // Preserve the measured value until a fresh CT report arrives.
+            outlet.ManualHold = false;
+            outlet.NextRecoveryAtUtc = null;
             outlet.CommandedAtUtc = now;
+            outlet.PendingCommandId = Guid.NewGuid();
+            outlet.PendingRelayClosed = true;
+            outlet.PendingCommandOrigin = "manual-on";
+            outlet.PendingCommandIssuedAtUtc = now;
+            outlet.PendingCommandAcknowledgedAtUtc = null;
 
             _context.PowerEvents.Add(new PowerEvent
             {

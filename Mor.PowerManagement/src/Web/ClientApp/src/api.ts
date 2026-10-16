@@ -82,6 +82,13 @@ type BackendOutlet = {
   schedule: string
   idleLimitMinutes: number | null
   lastSeen: string | null
+  isProtected: boolean
+  manualHold: boolean
+  faultHold: boolean
+  recoveryLockout: boolean
+  automaticRecoveryAttempts: number
+  nextRecoveryAtUtc: string | null
+  commandNeedsReview: boolean
 }
 
 type BackendEvent = {
@@ -219,6 +226,13 @@ function mapOutlet(outlet: BackendOutlet): Outlet {
     status: toStatus(outlet.status),
     schedule: outlet.schedule,
     idleLimit: outlet.idleLimitMinutes === null ? 'Exempt' : `${outlet.idleLimitMinutes} min`,
+    isProtected: outlet.isProtected,
+    manualHold: outlet.manualHold,
+    faultHold: outlet.faultHold,
+    recoveryLockout: outlet.recoveryLockout,
+    automaticRecoveryAttempts: outlet.automaticRecoveryAttempts,
+    nextRecoveryAtUtc: outlet.nextRecoveryAtUtc,
+    commandNeedsReview: outlet.commandNeedsReview,
   }
 }
 
@@ -324,6 +338,7 @@ export async function updateOutletPolicy(
   input: {
     priority?: Priority
     allowanceWatts?: number
+    isProtected?: boolean
     schedule?: string
     idleLimitMinutes?: number
     clearIdleLimit?: boolean
@@ -346,6 +361,14 @@ export async function updateOutletPolicy(
 
 export async function activateOutlet(id: number): Promise<void> {
   await request(`/Dashboard/outlets/${id}/activation`, { method: 'POST' })
+}
+
+export async function clearOutletRecovery(id: number): Promise<void> {
+  await request(`/Dashboard/outlets/${id}/clear-recovery`, { method: 'POST' })
+}
+
+export async function acknowledgeOutletFault(id: number): Promise<void> {
+  await request(`/Dashboard/outlets/${id}/acknowledge-fault`, { method: 'POST' })
 }
 
 export async function disconnectOutlet(id: number): Promise<void> {

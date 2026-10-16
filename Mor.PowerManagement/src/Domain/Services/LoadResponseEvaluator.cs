@@ -15,7 +15,11 @@ public record OutletLoadSnapshot(
 
     // Optional, default empty so existing construction sites keep compiling.
     // Used only for operator-facing messages; identity is always Id.
-    string Name = "");
+    string Name = "",
+    bool IsProtected = false,
+    bool ManualHold = false,
+    bool RecoveryLockout = false,
+    int AutomaticRecoveryAttempts = 0);
 
 public enum ActivationVerdict
 {
@@ -37,7 +41,7 @@ public static class LoadResponseEvaluator
         => status is OutletStatus.Active or OutletStatus.Standby;
 
     public static double TotalLoad(IEnumerable<OutletLoadSnapshot> outlets)
-        => outlets.Sum(o => o.Watts);
+        => outlets.Where(o => IsEnergized(o.Status)).Sum(o => o.Watts);
 
     public static SystemState GetSystemState(double totalWatts, double warningThreshold, double criticalThreshold)
     {

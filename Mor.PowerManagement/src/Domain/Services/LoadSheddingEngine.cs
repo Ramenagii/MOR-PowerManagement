@@ -138,8 +138,7 @@ public static class LoadSheddingEngine
 
         return ledger
             .Where(record => byId.ContainsKey(record.OutletId)
-                && (record.OutletAllowanceTrip
-                    || LoadTierMapper.ToTier(byId[record.OutletId].Priority) != LoadTier.Critical))
+                && LoadTierMapper.IsAutoRestorable(byId[record.OutletId]))
             .OrderBy(record => (int)LoadTierMapper.ToTier(byId[record.OutletId].Priority))
             .ThenByDescending(record => record.WattsAtShed)
             .ThenBy(record => record.OutletId)
@@ -292,6 +291,7 @@ public static class LoadSheddingEngine
         if (!state.ManualOverride)
         {
             var overAllowance = outlets
+                .Where(o => !o.IsProtected)
                 .Where(o => outletCounters[o.Id] >= LoadSheddingSettings.OutletAllowanceConfirmationBatches)
                 .OrderByDescending(o => o.Watts - o.AllowanceWatts)
                 .ThenBy(o => o.Id)
@@ -409,31 +409,12 @@ public static class LoadSheddingEngine
                 LoadSheddingSettings.OverLimitConfirmationBatches);
         }
 
-        // ---- 3. Under the limit: the recovery ladder, with hysteresis.
+        // ---- 3. Timed recovery ladder.
+        // Recovery is time-based by design: after an automatic OFF, allow a
+        // measured trial even when total demand remains high, then evaluate the
+        // fresh post-switch telemetry and return the same outlet OFF if needed.
         var recoveryStarted = state.BelowRecoveryLimitSinceUtc ?? now;
         var sinceRecovery = now - recoveryStarted;
-
-        if (total > recoveryLimit)
-        {
-            // Back inside P_limit but NOT clear of the hysteresis band. Wait out
-            // the band rather than reconnecting into it.
-            var cleared = state with
-            {
-                ConsecutiveOverLimitBatches = 0,
-                BelowRecoveryLimitSinceUtc = null,
-                FaultLatched = false,
-            };
-
-            return new LoadSheddingDecision(
-                LoadSheddingAction.None,
-                null,
-                null,
-                $"P_total {total:F0} W is below P_limit {pLimitWatts:F0} W but not yet below the recovery limit {recoveryLimit:F0} W; holding.",
-                cleared,
-                recoveryLimit,
-                cleared.ConsecutiveOverLimitBatches,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
-        }
 
         if (sinceRecovery < TimeSpan.FromSeconds(LoadSheddingSettings.RecoveryPeriodSeconds))
         {
@@ -448,8 +429,7 @@ public static class LoadSheddingEngine
                 LoadSheddingAction.None,
                 null,
                 null,
-                $"P_total {total:F0} W is below the recovery limit {recoveryLimit:F0} W for " +
-                $"{sinceRecovery.TotalSeconds:F0}/{LoadSheddingSettings.RecoveryPeriodSeconds} s; holding shed branches.",
+                $"Timed recovery wait: {sinceRecovery.TotalSeconds:F0}/{LoadSheddingSettings.RecoveryPeriodSeconds} s; holding shed branches.",
                 waiting,
                 recoveryLimit,
                 waiting.ConsecutiveOverLimitBatches,
@@ -541,8 +521,7 @@ public static class LoadSheddingEngine
             LoadSheddingAction.Restore,
             nextRestore.Id,
             restoreTier,
-            $"P_total {total:F0} W stayed below the recovery limit {recoveryLimit:F0} W for " +
-            $"{sinceRecovery.TotalSeconds:F0} s. Restoring Outlet {nextRestore.Id} ({restoreTier}) as the highest-priority shed branch.",
+            $"Timed recovery wait of {sinceRecovery.TotalSeconds:F0} s elapsed. Trial-restoring Outlet {nextRestore.Id} ({restoreTier}); fresh readings determine whether it stays on.",
             restored,
             recoveryLimit,
             restored.ConsecutiveOverLimitBatches,

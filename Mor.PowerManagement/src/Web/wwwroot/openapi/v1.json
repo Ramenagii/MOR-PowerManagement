@@ -221,6 +221,104 @@
         }
       }
     },
+    "/api/Dashboard/outlets/{id}/clear-recovery": {
+      "post": {
+        "tags": [
+          "Dashboard"
+        ],
+        "operationId": "ClearRecoveryState",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "pattern": "^-?(?:0|[1-9]\\d*)$",
+                  "type": [
+                    "integer",
+                    "string"
+                  ],
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/Dashboard/outlets/{id}/acknowledge-fault": {
+      "post": {
+        "tags": [
+          "Dashboard"
+        ],
+        "operationId": "AcknowledgeFaultHold",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "pattern": "^-?(?:0|[1-9]\\d*)$",
+                  "type": [
+                    "integer",
+                    "string"
+                  ],
+                  "format": "int32"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
     "/api/Dashboard/shedding/selective": {
       "post": {
         "tags": [
@@ -1714,7 +1812,8 @@
           "ratedVoltageVolts",
           "schedule",
           "idleLimitMinutes",
-          "desiredStatus"
+          "desiredStatus",
+          "pendingCommandId"
         ],
         "type": "object",
         "properties": {
@@ -1759,6 +1858,13 @@
           },
           "desiredStatus": {
             "$ref": "#/components/schemas/OutletStatus"
+          },
+          "pendingCommandId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -2054,6 +2160,22 @@
               "null",
               "string"
             ]
+          },
+          "acquisitionSessionId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "acquisitionSequence": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int64"
           },
           "faultFlag": {
             "type": "boolean"
@@ -2390,7 +2512,14 @@
           "lastSeen",
           "tier",
           "perOutletCapExempt",
-          "shedByFramework"
+          "shedByFramework",
+          "isProtected",
+          "manualHold",
+          "faultHold",
+          "recoveryLockout",
+          "automaticRecoveryAttempts",
+          "nextRecoveryAtUtc",
+          "commandNeedsReview"
         ],
         "type": "object",
         "properties": {
@@ -2470,6 +2599,36 @@
             "type": "boolean"
           },
           "shedByFramework": {
+            "type": "boolean"
+          },
+          "isProtected": {
+            "type": "boolean"
+          },
+          "manualHold": {
+            "type": "boolean"
+          },
+          "faultHold": {
+            "type": "boolean"
+          },
+          "recoveryLockout": {
+            "type": "boolean"
+          },
+          "automaticRecoveryAttempts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "nextRecoveryAtUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "commandNeedsReview": {
             "type": "boolean"
           }
         }
@@ -2552,6 +2711,13 @@
           },
           "relayClosed": {
             "type": "boolean"
+          },
+          "commandId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -3336,6 +3502,12 @@
               "string"
             ],
             "format": "double"
+          },
+          "isProtected": {
+            "type": [
+              "null",
+              "boolean"
+            ]
           },
           "schedule": {
             "type": [

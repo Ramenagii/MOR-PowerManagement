@@ -11,6 +11,8 @@ public record UpdateOutletPolicyCommand : IRequest<int>
 
     public double? AllowanceWatts { get; init; }
 
+    public bool? IsProtected { get; init; }
+
     public string? Schedule { get; init; }
 
     // Set to change the idle limit; ignored when null.
@@ -64,6 +66,11 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
         if (request.AllowanceWatts.HasValue)
         {
             outlet.AllowanceWatts = request.AllowanceWatts.Value;
+        }
+
+        if (request.IsProtected.HasValue)
+        {
+            outlet.IsProtected = request.IsProtected.Value;
         }
 
         if (request.Schedule is not null)

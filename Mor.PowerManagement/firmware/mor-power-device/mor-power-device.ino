@@ -156,6 +156,9 @@ struct ZmctReading {
 // The USB entry is forced true and is NOT driven to a pin (USB_OUTLET_NO_RELAY):
 // there is no relay behind the socket, so it can only ever report CLOSED.
 bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true };
+String pendingCommandId[OUTLET_COUNT];
+String acquisitionSessionId;
+uint32_t acquisitionSequence = 0;
 
 // The outlet status ORDINAL the backend last sent for each channel, and a
 // counter used to throttle the "config synced" line (config sync runs at
@@ -414,6 +417,15 @@ bool syncConfig();
 // =========================================================================
 void setup() {
   Serial.begin(115200);
+  char sessionId[37];
+  const uint32_t a = esp_random();
+  const uint32_t b = esp_random();
+  const uint32_t c = esp_random();
+  const uint32_t d = esp_random();
+  snprintf(sessionId, sizeof(sessionId), "%08lx-%04x-%04x-%04x-%012llx",
+           (unsigned long)a, (unsigned)((b >> 16) & 0xffff), (unsigned)(b & 0xffff),
+           (unsigned)((c >> 16) & 0xffff), ((unsigned long long)(c & 0xffff) << 32) | d);
+  acquisitionSessionId = sessionId;
   while (!Serial) { delay(10); }
 
   // Create Mutex for cross-core memory protection
@@ -1151,6 +1163,8 @@ bool postTelemetry() {
   }
 
   JsonDocument doc;
+  doc["acquisitionSessionId"] = acquisitionSessionId;
+  doc["acquisitionSequence"] = ++acquisitionSequence;
   doc["deviceId"] = DEVICE_ID;
   // Field NAME is FaultFlag, not sFault: that is what
   // IngestTelemetryCommand exposes (IngestTelemetry.cs:35) and JSON binding is
@@ -1226,6 +1240,7 @@ bool postTelemetry() {
     // it has no relay, so "closed" is not a claim about a switch state, it is a
     // truthful "this outlet is not switched by this device".
     s["relayClosed"] = relayClosedDesired[i];
+    if (pendingCommandId[i].length() > 0) s["commandId"] = pendingCommandId[i];
   }
 
   String payload;
@@ -1338,6 +1353,8 @@ bool syncConfig() {
       continue;
     }
     const uint8_t idx = (uint8_t)(channelId - 1);
+    if (o["pendingCommandId"].isNull()) pendingCommandId[idx] = "";
+    else pendingCommandId[idx] = o["pendingCommandId"].as<String>();
     // The USB socket (outletId 5) is monitored-only: it has no relay, so a
     // desiredStatus for it cannot be honoured by this device. It is recorded
     // and reported, then IGNORED - acting on it would either drive a
@@ -1370,7 +1387,11 @@ bool syncConfig() {
     }
     const int status = o["desiredStatus"].as<int>();
     lastDesiredStatus[idx] = (int8_t)status;
-    const bool shouldClose = (status != OUTLET_STATUS_DISCONNECTED);
+    // Restricted is a fail-closed state just like Disconnected. Treating it
+    // as ON silently defeated backend denial/fault isolation by closing the
+    // relay on the next config poll.
+    const bool shouldClose = status == OUTLET_STATUS_ACTIVE
+        || status == OUTLET_STATUS_STANDBY;
     const bool wasClosed = relayClosedDesired[idx];
     if (shouldClose != wasClosed) {
       Serial.print("[RELAY] CH"); Serial.print(channelId);

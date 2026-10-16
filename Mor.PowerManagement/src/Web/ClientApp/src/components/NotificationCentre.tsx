@@ -7,6 +7,7 @@ import type { EventLog } from '../types/dashboard'
 
 type NotificationCentreProps = {
   events: EventLog[]
+  userKey?: string | null
 }
 
 /**
@@ -53,11 +54,42 @@ type NotificationCentreProps = {
  */
 const PANEL_ID = 'notification-centre-panel'
 
-export function NotificationCentre({ events }: NotificationCentreProps) {
+export function NotificationCentre({ events, userKey }: NotificationCentreProps) {
   const [open, setOpen] = useState(false)
+  const [unread, setUnread] = useState(0)
+  const storageKey = `mor.notifications.readThrough.${userKey || 'local'}`
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const reduceMotion = useReducedMotion()
+
+  useEffect(() => {
+    if (!events.length) return
+    const latestId = Math.max(...events.map((event) => event.id))
+    const saved = window.localStorage.getItem(storageKey)
+    // Establish a baseline on first use; old event history should not appear
+    // as a flood of newly received notifications on first login.
+    if (saved === null) {
+      window.localStorage.setItem(storageKey, String(latestId))
+      setUnread(0)
+      return
+    }
+    const readThrough = Number(saved) || 0
+    if (open) {
+      window.localStorage.setItem(storageKey, String(latestId))
+      setUnread(0)
+      return
+    }
+    setUnread(events.filter((event) => event.id > readThrough).length)
+  }, [events, storageKey, open])
+
+  function toggle() {
+    const nextOpen = !open
+    setOpen(nextOpen)
+    if (nextOpen && events.length) {
+      window.localStorage.setItem(storageKey, String(Math.max(...events.map((event) => event.id))))
+      setUnread(0)
+    }
+  }
 
   useEffect(() => {
     if (!open) return
@@ -88,11 +120,11 @@ export function NotificationCentre({ events }: NotificationCentreProps) {
     }
   }, [open])
 
-  const count = events.length
+  const count = unread
   const label =
     count === 0
       ? 'Event log and notifications — nothing recorded yet'
-      : `Event log and notifications — ${count} ${count === 1 ? 'event' : 'events'} recorded`
+      : `Notifications — ${count} unread ${count === 1 ? 'event' : 'events'}`
 
   const sheet = (
     <AnimatePresence>
@@ -130,7 +162,7 @@ export function NotificationCentre({ events }: NotificationCentreProps) {
         aria-controls={PANEL_ID}
         aria-label={label}
         title={label}
-        onClick={() => setOpen((current) => !current)}
+        onClick={toggle}
         className="relative grid h-10 w-10 shrink-0 place-items-center rounded border border-outline-variant bg-surface-container-low text-on-surface-variant transition-colors hover:border-outline-strong hover:text-on-surface"
       >
         <Bell size={18} aria-hidden="true" />

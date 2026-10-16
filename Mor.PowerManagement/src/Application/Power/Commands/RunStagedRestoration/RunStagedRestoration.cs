@@ -100,11 +100,20 @@ public class RunStagedRestorationCommandHandler
         }
 
         var outlet = outlets.First(o => o.Id == restoreId);
+        if (outlet.FaultHold || outlet.RecoveryLockout || outlet.CommandNeedsReview)
+        {
+            throw new InvalidOperationException($"{outlet.Name} has an active hold that requires Admin review.");
+        }
         var tier = LoadTierMapper.ToTier(outlet.Priority);
 
         outlet.Status = OutletStatus.Active;
-        outlet.CurrentWatts = 0;
         outlet.CommandedAtUtc = now;
+        outlet.ManualHold = false;
+        outlet.PendingCommandId = Guid.NewGuid();
+        outlet.PendingRelayClosed = true;
+        outlet.PendingCommandOrigin = "manual-on";
+        outlet.PendingCommandIssuedAtUtc = now;
+        outlet.PendingCommandAcknowledgedAtUtc = null;
 
         // Only persist the state when a relay actually moved. A refused step
         // must not reset the recovery clock, or repeatedly polling this command
