@@ -17,6 +17,7 @@ import {
   type TelemetryChannel,
   type TelemetrySeries,
   type TelemetryWindow,
+  type ThresholdSet,
 } from '../api'
 import { POLL_INTERVAL_MS } from '../data/telemetry'
 import type { Outlet, OutletStatus, Priority } from '../types/dashboard'
@@ -85,15 +86,24 @@ const RELAY_GPIO: Record<number, string> = { 1: 'GPIO2', 2: 'GPIO1' }
 /** Branch current transformer + ADC front end fitted to each mains branch. */
 const BRANCH_SENSOR = 'ADS1220'
 
-type Rail = '220V AC' | '110V AC' | '5V USB'
+type Rail = '220V AC' | '110V AC' | '5V USB' | 'Unrated'
 
+/**
+ * Rail from the channel's RATED voltage.
+ *
+ * A rating of 0 is "the server did not rate this channel", which used to fall
+ * through to the 5 V branch and label an unrated mains outlet as USB. Unrated is
+ * its own answer because it is a fact about the record, not about the bench.
+ */
 function railOf(volts: number): Rail {
+  if (volts <= 0) return 'Unrated'
   if (volts >= 200) return '220V AC'
   if (volts >= 100) return '110V AC'
   return '5V USB'
 }
 
 function railOfLabel(rail: Rail): string {
+  if (rail === 'Unrated') return 'unrated'
   return rail === '5V USB' ? 'USB' : rail === '110V AC' ? '110' : '220'
 }
 
@@ -107,6 +117,7 @@ const RAIL_TABS: Array<{ label: string; key: string }> = [
   { label: '220V AC', key: '220' },
   { label: '110V AC', key: '110' },
   { label: '5V USB', key: 'USB' },
+  { label: 'Unrated', key: 'unrated' },
 ]
 
 /**
@@ -270,6 +281,14 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
 export function ChannelInventoryView() {
   const [outlets, setOutlets] = useState<Outlet[]>([])
   const [series, setSeries] = useState<TelemetrySeries | null>(null)
+  const [thresholds, setThresholds] = useState<ThresholdSet>({
+    max: 0,
+    warning: 0,
+    critical: 0,
+    standby: 0,
+    standbyIdleMinutes: 0,
+    stabilizationDelayMs: 0,
+  })
   const [status, setStatus] = useState<Status>('loading')
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<number | null>(null)
@@ -301,6 +320,7 @@ export function ChannelInventoryView() {
 
       setOutlets(state.outlets)
       setSeries(telemetry)
+      setThresholds(state.thresholds)
       failuresRef.current = 0
       setError(null)
       setStatus('ready')
@@ -408,7 +428,9 @@ export function ChannelInventoryView() {
   // Summary figures. `live` gates every measurement: with no backend answer the
   // baseline roster is never presented as a reading.
   const totalWatts = rows.filter((r) => r.wired).reduce((sum, r) => sum + (r.watts ?? 0), 0)
-  const ratedVolts = rows.find((r) => r.rail === '220V AC')?.ratedVolts ?? 220
+  // Rated rail comes off the roster. The old `?? 220` invented a mains rating
+  // for a roster that had none, and it fed the headline "Rated 220 V" caption.
+  const ratedVolts = rows.find((r) => r.rail === '220V AC')?.ratedVolts ?? 0
   const reportedVolts = rows.find((r) => r.rail === '220V AC')?.volts ?? null
   const totalAmps = rows
     .filter((r) => r.wired && r.rail !== '5V USB')
@@ -421,11 +443,24 @@ export function ChannelInventoryView() {
   const standby = rows.filter((r) => r.status === 'Standby').length
   const wiredCount = rows.filter((r) => r.wired).length
 
-  const critical = 600
-  const warning = 480
-  const loadPercent = Math.min((totalWatts / critical) * 100, 100)
+  /*
+   * Trip points are the framework's CONFIGURATION and they are read from
+   * GET /Dashboard/state like everything else. This block used to open with
+   * `const critical = 600; const warning = 480` — a copy of the rig's settings
+   * typed into a component — and then rendered a load percentage, a headroom in
+   * watts and a warning/critical band derived from them. On a rig whose server
+   * was down that produced "Headroom: 600 W" beside a 0 W total: a healthy
+   * margin, asserted by the browser, against a ceiling nobody had confirmed.
+   *
+   * With no reported capacity, the percentage and the band are not "0 %" and
+   * "Normal" — they are absent, so they render as a dash.
+   */
+  const critical = thresholds.critical
+  const warning = thresholds.warning
+  const hasLimits = critical > 0
+  const loadPercent = hasLimits ? Math.min((totalWatts / critical) * 100, 100) : 0
   const headroom = critical - totalWatts
-  const band = totalWatts >= critical ? 'critical' : totalWatts >= warning ? 'warning' : 'normal'
+  const band = !hasLimits || totalWatts < warning ? 'normal' : totalWatts >= critical ? 'critical' : 'warning'
   const bandBarClass =
     band === 'critical' ? 'st-bar-fill st-bar-fill-danger' : band === 'warning' ? 'st-bar-fill st-bar-fill-warn' : 'st-bar-fill'
 
@@ -458,6 +493,7 @@ export function ChannelInventoryView() {
             </div>
             <p className="st-body">
               {`${rows.length} branches across ${rows.filter((r) => r.rail !== '5V USB').length} AC outlets (220V) and ${rows.filter((r) => r.rail === '5V USB').length} USB-C DC rail`}
+              {rows.some((r) => r.rail === 'Unrated') ? ' · some branches are unrated' : ''}
             </p>
           </div>
 
@@ -505,7 +541,7 @@ export function ChannelInventoryView() {
             <span className="st-label">Total Active Load</span>
             <span className={`st-chip ${band === 'critical' ? 'st-chip-danger' : band === 'warning' ? 'st-chip-warn' : 'st-chip-ok'}`}>
               <span className="st-dot st-dot-ok" aria-hidden="true" />
-              {live ? `${Math.round(loadPercent)}%` : UNAVAILABLE}
+              {live && hasLimits ? `${Math.round(loadPercent)}%` : UNAVAILABLE}
             </span>
           </div>
           <div className="my-1.5 flex items-baseline gap-1">
@@ -514,12 +550,12 @@ export function ChannelInventoryView() {
           </div>
           <div>
             <div className="st-bar">
-              <div className={bandBarClass} style={{ width: `${live ? loadPercent : 0}%` }} />
+              <div className={bandBarClass} style={{ width: `${live && hasLimits ? loadPercent : 0}%` }} />
             </div>
             <div className="st-micro mt-2 flex items-center justify-between">
-              <span>{`Rated: ${critical.toLocaleString()} W`}</span>
-              <span className={headroom <= 0 ? 'st-danger' : 'st-ok'}>
-                {live ? `Headroom: ${Math.round(headroom).toLocaleString()} W` : `Headroom: ${UNAVAILABLE}`}
+              <span>{hasLimits ? `Rated: ${critical.toLocaleString()} W` : `Rated: ${UNAVAILABLE}`}</span>
+              <span className={hasLimits && headroom <= 0 ? 'st-danger' : 'st-ok'}>
+                {live && hasLimits ? `Headroom: ${Math.round(headroom).toLocaleString()} W` : `Headroom: ${UNAVAILABLE}`}
               </span>
             </div>
           </div>
@@ -539,7 +575,7 @@ export function ChannelInventoryView() {
           </div>
           <div className="st-stat-foot st-micro">
             <span className="st-accent">{'↗'} INA226 on mains feed</span>
-            <span>Rated {ratedVolts} V</span>
+            <span>{ratedVolts > 0 ? `Rated ${ratedVolts} V` : `Rated ${UNAVAILABLE}`}</span>
           </div>
         </article>
 

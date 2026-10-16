@@ -43,14 +43,20 @@ export type ScenarioProfile = {
 /**
  * Per-channel electrical model.
  *
- * The rig has ONE PZEM on the common mains feed, so volts and amps are derived,
+ * The rig has ONE INA226 on the common mains feed, so volts and amps are derived,
  * never independently metered. For a channel we know the draw (P) and the rail
  * (V), so I = P / V. For a 5 V USB rail that yields a large current, which is
  * the honest consequence of the derivation rather than a plausible-looking
  * number picked to look right.
+ *
+ * An unrated channel (rated 0 — the pre-first-response roster, or a server row
+ * that never carried a rating) sends 0 V and 0 A. The old fallback substituted
+ * 220 V for it, which would have posted a mains rail for a channel the console
+ * had just admitted it knows nothing about — and the server stores whatever is
+ * posted, so the fiction would outlive the request that carried it.
  */
 function electrical(watts: number, ratedVolts: number): Pick<TelemetrySampleInput, 'voltage' | 'currentAmps'> {
-  const voltage = ratedVolts > 0 ? ratedVolts : 220
+  const voltage = ratedVolts > 0 ? ratedVolts : 0
   return {
     voltage,
     // Guard the divide: a zero-rail channel would otherwise produce NaN, which

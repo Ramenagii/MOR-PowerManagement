@@ -19,6 +19,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
     public DbSet<TelemetryReading> TelemetryReadings => Set<TelemetryReading>();
 
+    public DbSet<InaReading> InaReadings => Set<InaReading>();
+
     public DbSet<PowerSystemConfig> PowerSystemConfigs => Set<PowerSystemConfig>();
 
     public DbSet<ControlPolicy> ControlPolicies => Set<ControlPolicy>();

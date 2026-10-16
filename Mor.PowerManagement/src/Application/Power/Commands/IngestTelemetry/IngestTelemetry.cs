@@ -27,6 +27,30 @@ public record RelayStateReport
     public bool RelayClosed { get; init; }
 }
 
+/// <summary>
+/// The INA226's OWN readings for one batch, as the DC-side sensor measured them.
+/// This is not a branch figure: it is the bus voltage, shunt drop, current and
+/// power behind every derived branch reading in the same batch.
+///
+/// Nullable throughout, and independently so. Older firmware posts no
+/// <c>ina</c> object at all, and a sensor that answered for some registers and
+/// not others must not have the values it did report thrown away.
+/// </summary>
+public record Ina226Report
+{
+    // V at the INA226 bus pin (~24 V on this rig, not mains volts).
+    public double? BusV { get; init; }
+
+    // mV across the shunt resistor.
+    public double? ShuntMv { get; init; }
+
+    // A through the shunt.
+    public double? CurrentA { get; init; }
+
+    // W at the INA226 bus pin.
+    public double? PowerW { get; init; }
+}
+
 public record IngestTelemetryCommand : IRequest<IngestTelemetryResult>
 {
     public string? DeviceId { get; init; }
@@ -41,6 +65,10 @@ public record IngestTelemetryCommand : IRequest<IngestTelemetryResult>
     public List<TelemetrySample> Readings { get; init; } = new();
 
     public List<RelayStateReport> RelayStates { get; init; } = new();
+
+    // Optional, for the same (U10) reason as MeteringMode: firmware predating
+    // the `ina` block posts nothing here and simply keeps no INA226 history.
+    public Ina226Report? Ina { get; init; }
 }
 
 public record IngestTelemetryResult(
@@ -86,6 +114,26 @@ public class IngestTelemetryCommandValidator : AbstractValidator<IngestTelemetry
             sample.RuleFor(s => s.CurrentAmps).InclusiveBetween(0, 100);
             sample.RuleFor(s => s.PowerWatts).InclusiveBetween(0, 5000);
             sample.RuleFor(s => s.EnergyKwh).GreaterThanOrEqualTo(0);
+        });
+
+        // INA226 sanity bands. These are the sensor's physical envelope on this
+        // rig, not the branch ranges above: busV is the DC BUS pin (~24 V), not
+        // mains volts, so the 0-300 branch band would let a 240 V "bus" reading
+        // through; currentA is bounded by what a 10 mOhm shunt carries; powerW
+        // is bounded by what the rail can deliver. A reading outside the band is
+        // a broken sensor or a mis-scaled shunt, and storing it would put a
+        // physically impossible number in front of the operator.
+        //
+        // Each is checked only when present - a partial `ina` from a sensor that
+        // answered for some registers is valid data, not an error. ShuntMv is
+        // deliberately unbounded: the shunt drop is signed (a reverse-biased or
+        // current-reversing rig reports it negative), so any range here would
+        // reject a real measurement.
+        When(x => x.Ina is not null, () =>
+        {
+            RuleFor(x => x.Ina!.BusV).InclusiveBetween(0, 40);
+            RuleFor(x => x.Ina!.CurrentA).InclusiveBetween(0, 10);
+            RuleFor(x => x.Ina!.PowerW).InclusiveBetween(0, 500);
         });
     }
 }
@@ -139,6 +187,27 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 
             outlet.CurrentWatts = sample.PowerWatts;
             outlet.LastSeen = now;
+        }
+
+        // The INA226's own readings for THIS batch, stored against the same
+        // `now` the branch rows above carry - that shared timestamp is what ties
+        // the sensor numbers to the branch figures derived from them.
+        //
+        // Stored only when at least one field is actually reported. A present-but-
+        // empty `ina` object means the firmware has the block and the sensor read
+        // nothing; persisting four nulls would leave the dashboard with a fresh
+        // timestamp and no data, i.e. a "live" sensor that has never reported.
+        if (request.Ina is { } ina &&
+            (ina.BusV.HasValue || ina.ShuntMv.HasValue || ina.CurrentA.HasValue || ina.PowerW.HasValue))
+        {
+            _context.InaReadings.Add(new InaReading
+            {
+                Timestamp = now,
+                BusVoltageV = ina.BusV,
+                ShuntVoltageMv = ina.ShuntMv,
+                CurrentA = ina.CurrentA,
+                PowerW = ina.PowerW,
+            });
         }
 
         foreach (var report in request.RelayStates)

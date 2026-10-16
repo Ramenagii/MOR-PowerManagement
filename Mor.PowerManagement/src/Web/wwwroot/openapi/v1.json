@@ -1513,7 +1513,8 @@
           "deviceOnline",
           "deviceLastSeen",
           "framework",
-          "mainsVolts"
+          "mainsVolts",
+          "ina226"
         ],
         "type": "object",
         "properties": {
@@ -1588,6 +1589,16 @@
               "string"
             ],
             "format": "double"
+          },
+          "ina226": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Ina226StateDto"
+              }
+            ]
           }
         }
       },
@@ -1901,6 +1912,102 @@
           }
         }
       },
+      "Ina226Report": {
+        "type": "object",
+        "properties": {
+          "busV": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "shuntMv": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "currentA": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "powerW": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "Ina226StateDto": {
+        "required": [
+          "busVolts",
+          "shuntMillivolts",
+          "currentAmps",
+          "powerWatts",
+          "sampledAt"
+        ],
+        "type": "object",
+        "properties": {
+          "busVolts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "shuntMillivolts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "currentAmps": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "powerWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "sampledAt": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "InfoRequest": {
         "type": "object",
         "properties": {
@@ -1972,6 +2079,16 @@
             "items": {
               "$ref": "#/components/schemas/RelayStateReport"
             }
+          },
+          "ina": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Ina226Report"
+              }
+            ]
           }
         }
       },

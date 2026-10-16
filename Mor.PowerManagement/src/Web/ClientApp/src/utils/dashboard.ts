@@ -1,4 +1,3 @@
-import { CRITICAL_THRESHOLD, WARNING_THRESHOLD } from '../data/dashboard'
 import type { Outlet, OutletStatus } from '../types/dashboard'
 
 export function getTimeStamp() {
@@ -21,9 +20,23 @@ export function isEnergizedOutlet(status: OutletStatus) {
   return status === 'Active' || status === 'Standby'
 }
 
-export function systemState(load: number) {
-  if (load >= CRITICAL_THRESHOLD) return 'Critical'
-  if (load >= WARNING_THRESHOLD) return 'Warning'
+/**
+ * System band for a load, against thresholds the caller read from the server.
+ *
+ * The trip points are arguments rather than module constants on purpose. This
+ * used to compare against a copy of the rig's 600/480 W held in data/dashboard,
+ * so the top bar's "System Normal" was a statement about a number the console
+ * had invented — and with an offline rig at 0 W it cheerfully reported Normal
+ * against a limit that did not exist.
+ *
+ * A critical of 0 means "no limit has been reported". 0 load is then not a band,
+ * it is an absence of information, so the answer is Normal only because there is
+ * nothing to be warning about — and the dashboard's own banner is what tells the
+ * operator that the threshold behind that verdict is missing.
+ */
+export function systemState(load: number, warning: number, critical: number) {
+  if (critical > 0 && load >= critical) return 'Critical'
+  if (warning > 0 && load >= warning) return 'Warning'
   return 'Normal'
 }
 

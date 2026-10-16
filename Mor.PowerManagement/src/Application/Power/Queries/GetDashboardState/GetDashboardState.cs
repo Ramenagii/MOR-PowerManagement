@@ -65,6 +65,24 @@ public record FrameworkStateDto(
     DateTimeOffset? BelowRecoveryLimitSinceUtc,
     IReadOnlyList<int> ShedOutletIds);
 
+/// <summary>
+/// The INA226's own last-reported readings. Distinct from
+/// <see cref="DashboardStateVm.MainsVolts"/>, which is the DERIVED mains voltage
+/// (bus volts x the divider ratio) the branch watts are computed against - this
+/// is what the sensor actually measured, so an operator can see whether the
+/// derived number has drifted or the sensor has gone quiet.
+///
+/// Every field is nullable because the sensor reports them independently; the
+/// object itself is null when the latest stored reading is older than the
+/// freshness window, so a stale reading can never be presented as live.
+/// </summary>
+public record Ina226StateDto(
+    double? BusVolts,
+    double? ShuntMillivolts,
+    double? CurrentAmps,
+    double? PowerWatts,
+    DateTimeOffset? SampledAt);
+
 public record DashboardStateVm(
     IReadOnlyList<OutletStateDto> Outlets,
     double TotalWatts,
@@ -79,7 +97,9 @@ public record DashboardStateVm(
     FrameworkStateDto Framework,
     // Live INA226-derived mains volts (average of recent telemetry samples).
     // Null when no fresh device readings exist; UI falls back to rated volts.
-    double? MainsVolts);
+    double? MainsVolts,
+    // The INA226's own last sample, or null when none is fresh.
+    Ina226StateDto? Ina226);
 
 public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQuery, DashboardStateVm>
 {
@@ -139,6 +159,26 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             .DefaultIfEmpty()
             .AverageAsync(cancellationToken);
 
+        // The INA226's own last sample, from the same freshness window as
+        // mainsVolts above: 30 s against a 5 s posting interval, so anything
+        // older is a device that has stopped reporting. Reporting a stale row
+        // would show a frozen number next to a live P_total and read as a sensor
+        // fault that is not there, so the whole object is null instead - the UI
+        // then shows nothing rather than something wrong.
+        var latestIna = await _context.InaReadings
+            .Where(r => r.Timestamp >= cutoff)
+            .OrderByDescending(r => r.Timestamp)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        var ina226 = latestIna is null
+            ? null
+            : new Ina226StateDto(
+                latestIna.BusVoltageV,
+                latestIna.ShuntVoltageMv,
+                latestIna.CurrentA,
+                latestIna.PowerW,
+                latestIna.Timestamp);
+
         return new DashboardStateVm(
             outlets.Select(o => new OutletStateDto(
                 o.Id, o.Name, o.Role, o.MeterChannel, o.RelayChannel,
@@ -173,6 +213,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 framework.ConsecutiveOverLimitBatches,
                 framework.BelowRecoveryLimitSinceUtc,
                 framework.ShedLedger.Select(r => r.OutletId).ToList()),
-            mainsVolts);
+            mainsVolts,
+            ina226);
     }
 }

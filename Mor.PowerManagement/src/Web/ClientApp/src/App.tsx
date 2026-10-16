@@ -9,6 +9,8 @@ import {
   fetchDashboardState,
   ingestScenario,
   logout,
+  UNMEASURED_INA226,
+  type Ina226Reading,
 } from './api'
 import { ChannelInventoryView } from './components/ChannelInventoryView'
 import { Dashboard } from './components/Dashboard'
@@ -19,15 +21,9 @@ import { PolicyAdminView } from './components/PolicyAdminView'
 import { PoliciesView } from './components/PoliciesView'
 import { TelemetryView } from './components/TelemetryView'
 import { AppTopBar } from './components/AppTopBar'
-import {
-  baseOutlets,
-  CRITICAL_THRESHOLD,
-  initialEvents,
-  MAX_CAPACITY,
-  WARNING_THRESHOLD,
-} from './data/dashboard'
+import { baseOutlets, initialEvents } from './data/dashboard'
 import type { AppView, EventLog, Outlet, Severity } from './types/dashboard'
-import { formatWatts, getTimeStamp, isEnergizedOutlet, totalLoad } from './utils/dashboard'
+import { formatWatts, getTimeStamp, isEnergizedOutlet, systemState, totalLoad } from './utils/dashboard'
 import {
   buildScenarioPayload,
   capacityBlockProfile,
@@ -63,13 +59,16 @@ const ROUTE_TRANSITION_S = 0.2
 const SHELL_TRANSITION_S = 0.22
 
 function App() {
+  // Shape only. `baseOutlets` carries no wattage, no rated rail and no relay
+  // state, and `initialEvents` is empty — the first successful poll replaces all
+  // of it. Nothing that renders as a measurement exists before the server says
+  // so.
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
   const [events, setEvents] = useState<EventLog[]>(initialEvents)
-  const [thresholds, setThresholds] = useState({
-    max: MAX_CAPACITY,
-    warning: WARNING_THRESHOLD,
-    critical: CRITICAL_THRESHOLD,
-  })
+  // 0 is "the server has not told us". It is not 600/480/600: a guessed ceiling
+  // renders as "0 % of 600 W limit — full headroom" on a rig that knows nothing,
+  // and the hero shows a dash for every limit-derived figure instead.
+  const [thresholds, setThresholds] = useState({ max: 0, warning: 0, critical: 0 })
   const [session, setSession] = useState<Session>('checking')
   // Shown in the top bar avatar and the footer. checkSession() already returns
   // the signed-in address, so this costs nothing extra.
@@ -77,6 +76,7 @@ function App() {
   const [backendOnline, setBackendOnline] = useState(false)
   const [deviceOnline, setDeviceOnline] = useState(false)
   const [mainsVolts, setMainsVolts] = useState<number | null>(null)
+  const [ina226, setIna226] = useState<Ina226Reading>(UNMEASURED_INA226)
   const [introDone, setIntroDone] = useState(false)
   const [introKey, setIntroKey] = useState(0)
   const [activeView, setActiveView] = useState<AppView>('dashboard')
@@ -97,6 +97,7 @@ function App() {
     setThresholds(snapshot.thresholds)
     setDeviceOnline(snapshot.deviceOnline)
     setMainsVolts(snapshot.mainsVolts)
+    setIna226(snapshot.ina226)
     setBackendOnline(true)
   }, [])
 
@@ -114,7 +115,8 @@ function App() {
         if (error instanceof ApiError && error.status === 401) {
           setSession('login')
         } else {
-          // Backend unreachable: fall back to the simulated baseline.
+          // Backend unreachable. There is no simulated baseline to fall back to:
+          // the shell renders zeros and says why.
           setSession('offline')
         }
       })
@@ -162,8 +164,7 @@ function App() {
   }, [introDone])
 
   const load = totalLoad(outlets)
-  const currentState =
-    load >= thresholds.critical ? 'Critical' : load >= thresholds.warning ? 'Warning' : 'Normal'
+  const currentState = systemState(load, thresholds.warning, thresholds.critical)
 
   const addEvent = (title: string, detail: string, severity: Severity = 'info') => {
     setEvents((current) => [
@@ -256,12 +257,30 @@ function App() {
     void runScenario(idleProfile(outlets), 'Idle shutdown')
   }
 
-  // FUTURE 4+USB: SIM-02 id 1 stays valid — CH1 exists in both the 2-outlet and
-  // the 4+USB rig, so this activation request needs no retarget when the full
-  // bench is restored.
+  /*
+   * Offline the browser cannot ask the engine anything, so these two paths
+   * refuse rather than pretend. They used to make the decision locally AND write
+   * a wattage into the row — 190 W on the activation request, `allowance * 0.72`
+   * with a 90 W floor on the manual toggle — which is the exact failure the whole
+   * console is built against: a number the operator reads, that no instrument
+   * ever produced, sitting in a column labelled watts.
+   *
+   * `thresholds.critical` is 0 until the server supplies it, so "is there room"
+   * cannot even be evaluated here. Saying so is the honest answer and it tells
+   * the operator what to do about it.
+   */
   const requestActivationLocal = () => {
     const requested = outlets.find((outlet) => outlet.id === 1)
     if (!requested) return
+
+    if (thresholds.critical <= 0) {
+      addEvent(
+        'Activation not assessed',
+        'No configured capacity has been read from the server, so this request cannot be judged in the browser. Sign in to dispatch it to the policy engine.',
+        'warning',
+      )
+      return
+    }
 
     const projectedLoad = load + requested.allowance
     if (projectedLoad > thresholds.critical) {
@@ -277,16 +296,21 @@ function App() {
 
     setOutlets((current) =>
       current.map((outlet) =>
-        outlet.id === 1 ? { ...outlet, status: 'Active', watts: 190 } : outlet,
+        // Status only. The branch is energized but nothing has been metered on
+        // it, so it reports 0 W until a telemetry batch says otherwise.
+        outlet.id === 1 ? { ...outlet, status: 'Active', watts: 0 } : outlet,
       ),
     )
     addEvent(
       'Outlet activation allowed',
-      'Pre-activation capacity assessment passed; Outlet 1 relay energized.',
+      'Pre-activation capacity assessment passed; Outlet 1 relay energized. No wattage is shown for it — the local path cannot measure.',
       'success',
     )
   }
 
+  // FUTURE 4+USB: SIM-02 id 1 stays valid — CH1 exists in both the 2-outlet and
+  // the 4+USB rig, so this activation request needs no retarget when the full
+  // bench is restored.
   const requestActivation = () => {
     void runLive(() => activateOutlet(1), requestActivationLocal)
   }
@@ -310,6 +334,15 @@ function App() {
       return
     }
 
+    if (thresholds.critical <= 0) {
+      addEvent(
+        'Manual activation not assessed',
+        `No configured capacity has been read from the server, so ${outlet.name} cannot be capacity-checked in the browser. Sign in to dispatch the request to the policy engine.`,
+        'warning',
+      )
+      return
+    }
+
     const projectedLoad = load + outlet.allowance
     if (projectedLoad > thresholds.critical) {
       addEvent(
@@ -323,17 +356,24 @@ function App() {
     setOutlets((current) =>
       current.map((item) => {
         if (item.id !== id) return item
-        // Mirrors the backend activation estimate: the 90W floor applies only
-        // to mains channels, never to the 110V or 5V rails.
-        const estimate = Math.round(item.allowance * 0.72)
-        return {
-          ...item,
-          status: 'Active',
-          watts: item.volts >= 220 ? Math.max(90, estimate) : estimate,
-        }
+        /*
+          Status only — deliberately no wattage.
+          This used to mirror the backend activation estimate
+          (`Math.max(90, allowance * 0.72)` on mains) and write the result into
+          the row. That estimate is a server-side planning figure for deciding
+          whether to permit a switch-on; rendering it in the watts column made a
+          guess look like a measurement on the one screen whose job is to say
+          which numbers are real. The relay moves; the row stays at 0 until
+          telemetry reports a draw.
+        */
+        return { ...item, status: 'Active', watts: 0 }
       }),
     )
-    addEvent('Manual relay action', `${outlet.name} was activated after capacity assessment.`, 'success')
+    addEvent(
+      'Manual relay action',
+      `${outlet.name} was activated after capacity assessment. No wattage is shown for it until telemetry reports one.`,
+      'success',
+    )
   }
 
   const toggleOutlet = (id: number) => {
@@ -375,8 +415,11 @@ function App() {
     )
   }
 
+  // Was "Simulated — backend offline". Nothing simulates any more: the rig stops
+  // reporting and every figure drops to 0 with the reason attached. Calling that
+  // a simulation implied the zeros were the output of a working model.
   const connectionLabel =
-    session === 'authed' && backendOnline ? 'Live — backend' : 'Simulated — backend offline'
+    session === 'authed' && backendOnline ? 'Live — backend' : 'Offline — backend unreachable'
 
   return (
     <LayoutGroup id={`loadwise-${introKey}`}>
@@ -447,6 +490,7 @@ function App() {
                   deviceOnline={deviceOnline}
                   backendOnline={backendOnline}
                   mainsVolts={mainsVolts}
+                  ina226={ina226}
                   scenario={{
                     onNormal: scenarioNormal,
                     onActivate: requestActivation,

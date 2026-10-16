@@ -25,8 +25,15 @@ const CHART_H = 170
  */
 const PLOT_INSET = 6
 
-/** Offline the rig reports nothing, so every figure reads 0 — the OFFLINE
- * banner carries the explanation, not an em-dash. */
+/**
+ * The dash for "there is no configured value to show".
+ *
+ * Used only where a 0 would be an ARITHMETICALLY TRUE but operationally false
+ * number: headroom against a ceiling of 0 is 0 W, which reads as "you are
+ * exactly at the trip point" on a rig that has no trip point configured. An em
+ * dash cannot be misread as a measurement. Measured figures themselves still
+ * read 0 when nothing has been measured — see `live` in Dashboard.
+ */
 const UNAVAILABLE = '—'
 
 type Domain = { min: number; max: number }
@@ -148,9 +155,25 @@ export function DashboardHero({
   const warnY = warning < critical ? ruleY(warning) : null
   const tripY = ruleY(critical)
 
-  const percent = max > 0 ? Math.min((load / max) * 100, 100) : 0
+  /*
+   * Thresholds are the server's, and they are only rendered when it supplied
+   * them. `hasLimits` is false both when the backend is down and when it
+   * answered without a capacity; either way there is no ceiling, so every
+   * figure that would be derived from one prints a dash instead of arithmetic
+   * against a number the console made up.
+   */
+  const hasLimits = max > 0 && critical > 0
+  const percent = hasLimits ? Math.min((load / max) * 100, 100) : 0
   const headroom = critical - load
-  const band = load >= critical ? 'bad' : load >= warning ? 'warn' : 'live'
+  const band = !hasLimits ? 'live' : load >= critical ? 'bad' : load >= warning ? 'warn' : 'live'
+
+  const headroomText = !hasLimits
+    ? UNAVAILABLE
+    : headroom <= 0
+      ? `${Math.round(Math.abs(headroom))} W over`
+      : `${Math.round(headroom).toLocaleString()} W`
+
+  const limitTag = hasLimits ? `P_limit ${Math.round(max).toLocaleString()} W` : 'P_limit not configured'
 
   return (
     <>
@@ -166,19 +189,19 @@ export function DashboardHero({
           </div>
 
           <div>
-            <div className="meter" role="meter" aria-valuenow={Math.round(percent)} aria-valuemin={0} aria-valuemax={100} aria-label="Total load against the configured limit">
+            <div className="meter" role="meter" aria-valuenow={hasLimits ? Math.round(percent) : undefined} aria-valuemin={0} aria-valuemax={100} aria-label={hasLimits ? 'Total load against the configured limit' : 'Total load; no configured limit has been reported, so there is nothing to measure this against'}>
               <i style={{ width: `${live ? percent : 0}%`, background: band === 'bad' ? 'var(--bad)' : band === 'warn' ? 'var(--warn)' : 'var(--live)' }} />
             </div>
             <div className="lbl num" style={{ marginTop: 6 }}>
-              <span>{Math.round(percent)}</span>
-              {`% of ${Math.round(max).toLocaleString()} W limit`}
+              <span>{hasLimits ? Math.round(percent) : UNAVAILABLE}</span>
+              {hasLimits ? ` % of ${Math.round(max).toLocaleString()} W limit` : ' · no limit reported'}
             </div>
           </div>
 
           <div className="stats">
             <div>
               <span className="lbl">Headroom</span>
-              <b>{headroom <= 0 ? `${Math.round(Math.abs(headroom))} W over` : `${Math.round(headroom).toLocaleString()} W`}</b>
+              <b>{headroomText}</b>
             </div>
             <div>
               <span className="lbl">Energized</span>
@@ -194,8 +217,8 @@ export function DashboardHero({
           as a stack of overlapping layers.
         */}
         <div className="hero-r">
-          <span className="lim num" title="Configured master capacity for this rig">
-            {`P_limit ${Math.round(max).toLocaleString()} W`}
+          <span className="lim num" title="Configured master capacity for this rig, as returned by GET /Dashboard/state">
+            {limitTag}
           </span>
 
           <div className="hero-plot">

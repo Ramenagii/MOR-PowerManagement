@@ -128,6 +128,95 @@ export function stalenessState(
   return { tone: 'stale', label: `No telemetry since ${formatRelative(latestSampleAt, now)}` }
 }
 
+/**
+ * How old an INA226 sample is allowed to be before the card stops calling it a
+ * measurement.
+ *
+ * 30 s, and not 20 s like the telemetry stream: the INA226 sample rides on
+ * GET /Dashboard/state, which is polled every 500 ms but is not what the device
+ * samples on — the device writes its converter output on its own cadence, and a
+ * 30 s window is where "this rig is answering" stops being true and starts being
+ * "this rig answered, a while ago". `stalenessState` splits into three bands
+ * because a trend chart can honestly draw a slow line; a single headline figure
+ * cannot, so it gets a binary gate and a reason.
+ */
+export const INA226_STALE_SECONDS = 30
+
+/**
+ * Full-scale input of the INA226 shunt input, in millivolts.
+ *
+ * A DEVICE CONSTANT, not a reading — the same category as a rated rail. It is
+ * here so the shunt drop can be drawn against the range the converter can
+ * actually resolve, which turns a bare "3.21 mV" into a position on a scale.
+ */
+export const INA226_SHUNT_FULL_SCALE_MV = 100
+
+export type Ina226Freshness = 'live' | 'stale' | 'unmeasured'
+
+export type Ina226Age = {
+  freshness: Ina226Freshness
+  ageSeconds: number | null
+}
+
+/**
+ * Is the newest INA226 sample still a measurement?
+ *
+ * `unmeasured` and `stale` are separate answers because they demand different
+ * operator action. No sample at all means the converter is not being read —
+ * wiring, I2C, or the firmware never wrote a row. A stale sample means the rig
+ * was answering and has stopped. Collapsing them into one "not live" flag would
+ * make a loose bus lead and a stopped poller look identical.
+ */
+export function ina226Freshness(sampledAt: string | null | undefined, now: number): Ina226Age {
+  if (!sampledAt) return { freshness: 'unmeasured', ageSeconds: null }
+
+  const parsed = Date.parse(sampledAt)
+  if (Number.isNaN(parsed)) return { freshness: 'unmeasured', ageSeconds: null }
+
+  const ageSeconds = Math.max(0, (now - parsed) / 1000)
+  return {
+    freshness: ageSeconds < INA226_STALE_SECONDS ? 'live' : 'stale',
+    ageSeconds,
+  }
+}
+
+/** Clamped fill for the shunt rail. A reading above full scale is a fault, not a bar. */
+export function shuntFillPercent(millivolts: number): number {
+  if (!Number.isFinite(millivolts)) return 0
+  return Math.min(Math.max((millivolts / INA226_SHUNT_FULL_SCALE_MV) * 100, 0), 100)
+}
+
+export type PowerReconciliation = {
+  /** Bus volts x current: what the two primary figures imply. */
+  computedWatts: number
+  /** Computed minus reported. */
+  deltaWatts: number
+  /** |delta| as a percentage of the reported figure; 0 when both are zero. */
+  deltaPercent: number
+}
+
+/**
+ * Cross-check the INA226 against itself.
+ *
+ * The converter measures volts and shunt millivolts as separate conversions and
+ * then multiplies them for its power channel, so V x I and the reported watts
+ * are two answers to the same question and they are allowed to differ slightly.
+ * Showing the gap is more useful than showing either number alone: a healthy
+ * device sits within a fraction of a percent, and a reading that has drifted
+ * away from its own product is a failing converter, which no single figure on
+ * this card would reveal.
+ */
+export function reconcilePower(
+  busVolts: number,
+  currentAmps: number,
+  powerWatts: number,
+): PowerReconciliation {
+  const computedWatts = busVolts * currentAmps
+  const deltaWatts = computedWatts - powerWatts
+  const deltaPercent = powerWatts !== 0 ? Math.abs((deltaWatts / powerWatts) * 100) : 0
+  return { computedWatts, deltaWatts, deltaPercent }
+}
+
 /** Min / max / last / sum over a nullable series. Nulls are skipped, never coerced to 0. */
 export function seriesStats(values: Array<number | null>): {
   min: number | null

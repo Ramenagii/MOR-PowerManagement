@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchTelemetrySeries, type TelemetrySeries } from '../api'
+import { fetchTelemetrySeries, type Ina226Reading, type TelemetrySeries } from '../api'
 import { POLL_INTERVAL_MS } from '../data/telemetry'
+import { DASHBOARD_TIPS } from '../data/dashboard'
 import type { EventLog, Outlet } from '../types/dashboard'
 import { isEnergizedOutlet, totalLoad } from '../utils/dashboard'
 import { stalenessState } from '../utils/telemetry'
 import { DashboardHero } from './DashboardHero'
 import { DashboardOutlet } from './DashboardOutlet'
 import { DashboardSimRail, type VectorId } from './DashboardSimRail'
+import { Ina226Card } from './Ina226Card'
 import type { ScenarioNotice } from './ScenarioPanel'
 
 type ScenarioHandlers = {
@@ -28,6 +30,8 @@ export type DashboardProps = {
   backendOnline: boolean
   /** Live INA226 mains volts from state; null when the device has nothing fresh. */
   mainsVolts: number | null
+  /** Raw INA226 sample. Every field nullable; nulls are never filled in. */
+  ina226: Ina226Reading
   scenario: ScenarioHandlers
   onToggleOutlet: (id: number) => void
   onSignIn: () => void
@@ -56,6 +60,7 @@ export function Dashboard({
   deviceOnline,
   backendOnline,
   mainsVolts,
+  ina226,
   scenario,
   onToggleOutlet,
   onSignIn,
@@ -213,7 +218,17 @@ export function Dashboard({
 
       <h2 className="mp-h">
         <span>Channels</span>
-        <span className="num">ADS1220 SPI · branch CT</span>
+        {/*
+          Names the sensors, not a volts figure. This header used to print the
+          INA226 reference rail, which put a second copy of the bus voltage on
+          screen that could disagree with the card below it (the header read the
+          server's averaged reference, the card the converter's latest sample)
+          and that fell back to the rated rail whenever the device had nothing
+          fresh. One number, in one place, from one source.
+        */}
+        <span className="num" title={DASHBOARD_TIPS.outlet}>
+          ADS1220 SPI · branch CT · INA226 bus
+        </span>
       </h2>
       <div aria-label="Controlled channels">
         {outlets.length === 0 ? (
@@ -235,6 +250,13 @@ export function Dashboard({
         )}
       </div>
 
+      {/*
+        The INA226 sits here, between the branches it feeds and the vectors that
+        drive them: the branches consume its bus reading to derive their amps, and
+        the vectors change what it reads. Reading order follows the signal.
+      */}
+      <Ina226Card reading={ina226} live={live} now={now} />
+
       <h2 className="mp-h">
         <span>Vectors</span>
         <span className="num">POST /api/Dashboard/scenarios/ingest</span>
@@ -253,8 +275,20 @@ export function Dashboard({
         has no log panel, and the dashboard is read across a room, so the list is
         collapsed to a one-line count here rather than deleted — the events are
         real engine output and must not become unreachable.
+
+        The empty branch is a real state, not a missing one: GET /Dashboard/state
+        returns an empty log on a rig that has not tripped anything, and saying
+        so is the difference between "the engine is quiet" and "the log is not
+        rendering". It used to render nothing at all here, next to two seeded
+        rows in data/dashboard.ts that the browser had written about numbers it
+        had invented.
       */}
-      {events.length > 0 && (
+      {events.length === 0 ? (
+        <p className="num" style={{ marginTop: 26, color: 'var(--mute)', fontSize: 12 }}>
+          No policy events yet. GET /api/Dashboard/state returned an empty log; entries appear here the
+          moment the engine raises one — a threshold crossing, a relay action, or a fault lockout.
+        </p>
+      ) : (
         <details className="num" style={{ marginTop: 26, color: 'var(--mute)', fontSize: 12 }}>
           <summary style={{ cursor: 'pointer' }}>{`${events.length} policy events`}</summary>
           <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>

@@ -13,6 +13,8 @@ public interface IApplicationDbContext
 
     DbSet<TelemetryReading> TelemetryReadings { get; }
 
+    DbSet<InaReading> InaReadings { get; }
+
     DbSet<PowerSystemConfig> PowerSystemConfigs { get; }
 
     DbSet<ControlPolicy> ControlPolicies { get; }

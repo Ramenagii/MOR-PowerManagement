@@ -3,17 +3,34 @@ import type { EventLog, Outlet, Priority } from '../types/dashboard'
 // Testing rig values (MUST_READ.md, valid until 31 Oct 2026):
 // 2x220V outlets, P_limit capped at 600 W.
 //
-// FUTURE 4+USB: uncomment the extra baseOutlets entries below, set
-// RIG_CHANNEL_COUNT 5 and thresholds to 1200/960/1200 (max/warning/critical).
-// The seeded rig values live in ApplicationDbContextInitialiser.cs — change
-// them together or the live dashboard will disagree with this mock.
-export const MAX_CAPACITY = 600
-export const WARNING_THRESHOLD = 480
-export const CRITICAL_THRESHOLD = 600
-
-/** Channel count on the test bench; only CH1-CH2 are physically wired. */
+// FUTURE 4+USB: uncomment the extra baseOutlets entries below and set
+// RIG_CHANNEL_COUNT 5. The thresholds are NOT constants here any more: they are
+// configuration read from GET /Dashboard/state and edited through the Framework
+// admin, so the 2-outlet rig reads 600/480/600 and the full bench reads whatever
+// the operator saved (1200/960/1200). A copy of those numbers kept in the client
+// was a measurement the server never made.
+//
+// The seeded rig values themselves live in ApplicationDbContextInitialiser.cs —
+// change them together or the live dashboard will disagree with this roster.
 export const RIG_CHANNEL_COUNT = 2
 
+/**
+ * Pre-first-response roster SHAPE. Not a measurement, not a simulation.
+ *
+ * This exists so the dashboard has something to lay out on the very first frame
+ * and so the channel types stay exercised. Every field that could be read as a
+ * reading is therefore zero and every relay is `Disconnected`:
+ *
+ *   - watts 0    — nothing has been metered. 260/180 W used to sit here, which
+ *                  the hero summed into a confident 440 W before the backend had
+ *                  answered a single request.
+ *   - volts 0    — an UNRATED channel, not a 220 V rail that happens to read
+ *                  zero. A rail is configuration; inventing one is not allowed.
+ *   - Disconnected — no relay state has been reported, so none is claimed.
+ *
+ * GET /Dashboard/state replaces this array wholesale on the first successful
+ * poll, so nothing here survives into a live frame.
+ */
 export const baseOutlets: Outlet[] = [
   {
     id: 1,
@@ -23,9 +40,9 @@ export const baseOutlets: Outlet[] = [
     relay: 'Relay CH1',
     priority: 'Critical',
     allowance: 300,
-    volts: 220,
-    watts: 260,
-    status: 'Active',
+    volts: 0,
+    watts: 0,
+    status: 'Disconnected',
     schedule: 'Class hours + override',
     idleLimit: 'Exempt',
   },
@@ -37,14 +54,15 @@ export const baseOutlets: Outlet[] = [
     relay: 'Relay CH2',
     priority: 'High',
     allowance: 300,
-    volts: 220,
-    watts: 180,
-    status: 'Active',
+    volts: 0,
+    watts: 0,
+    status: 'Disconnected',
     schedule: '08:00-18:00',
     idleLimit: '20 min',
   },
   // FUTURE 4+USB: uncomment the three entries below to restore the full bench,
-  // then set RIG_CHANNEL_COUNT 5 and thresholds 1200/960/1200 above.
+  // then set RIG_CHANNEL_COUNT 5 above. They stay zeroed and Disconnected for the
+  // same reason the wired entries are: shape, not measurement.
   // {
   //   id: 3,
   //   name: 'Outlet 3',
@@ -53,9 +71,9 @@ export const baseOutlets: Outlet[] = [
   //   relay: 'Relay CH3',
   //   priority: 'High',
   //   allowance: 300,
-  //   volts: 220,
-  //   watts: 120,
-  //   status: 'Active',
+  //   volts: 0,
+  //   watts: 0,
+  //   status: 'Disconnected',
   //   schedule: '08:00-18:00',
   //   idleLimit: '20 min',
   // },
@@ -67,7 +85,7 @@ export const baseOutlets: Outlet[] = [
   //   relay: 'Relay CH4',
   //   priority: 'Medium',
   //   allowance: 300,
-  //   volts: 220,
+  //   volts: 0,
   //   watts: 0,
   //   status: 'Disconnected',
   //   schedule: 'Class hours',
@@ -77,7 +95,7 @@ export const baseOutlets: Outlet[] = [
   //   id: 5,
   //   name: 'USB 1',
   //   role: 'USB charging 5V',
-  //   // Unmetered branch: the single mains PZEM covers CH1-CH4 only, so the USB
+  //   // Unmetered branch: the single mains INA226 covers CH1-CH4 only, so the USB
   //   // rail reports its nominal rating and counts toward P_total.
   //   meter: 'Not metered - nominal only',
   //   relay: 'Relay CH5',
@@ -85,29 +103,24 @@ export const baseOutlets: Outlet[] = [
   //   allowance: 10,
   //   volts: 5,
   //   watts: 0,
-  //   status: 'Standby',
+  //   status: 'Disconnected',
   //   schedule: 'Class hours',
   //   idleLimit: 'Exempt',
   // },
 ]
 
-export const initialEvents: EventLog[] = [
-  {
-    id: 1,
-    time: '09:00',
-    title: 'Dashboard synchronized',
-    detail:
-      'Framework rules FR-01..FR-12 loaded for the testing rig: 2x220V outlets (CH1-CH2) on a single mains feed, P_limit capped at 600 W.',
-    severity: 'info',
-  },
-  {
-    id: 2,
-    time: '09:01',
-    title: 'Normal operating state',
-    detail: 'Total load is below the 480 W warning threshold.',
-    severity: 'success',
-  },
-]
+/**
+ * No pre-seeded events.
+ *
+ * The two rows this used to hold ("Dashboard synchronized", "Normal operating
+ * state — total load is below the 480 W warning threshold") were sentences the
+ * browser wrote about numbers it had made up, and the second one was a health
+ * verdict derived from static data. A policy log that starts with invented
+ * entries cannot be distinguished from a real one at a glance, which is the one
+ * job an event log has. The dashboard and the event panel both render an
+ * explicit "no events yet" state instead.
+ */
+export const initialEvents: EventLog[] = []
 
 export const priorityRank: Record<Priority, number> = {
   Critical: 4,
@@ -225,22 +238,23 @@ export const UNAVAILABLE = '—'
 // Framework tier defaults
 // ---------------------------------------------------------------------------
 
-/**
- * Whole-system ceiling and its warning/critical trip points.
+/*
+ * The system ceiling and its trip points are NOT duplicated here any more.
  *
- * The rig is calibrated as two 220 V branches against a 600 W ceiling: CH1 is
- * the instructor workstation and is sized so that CH1 + CH2 together sit just
- * under the limit, which is what makes the shed demonstration observable rather
- * than theoretical.
+ * SYSTEM_LIMIT_WATTS / SYSTEM_WARNING_WATTS / SYSTEM_CRITICAL_WATTS /
+ * CH2_ALLOCATION_WATTS used to sit in this file as a client-side copy of the
+ * framework configuration, and they were worse than unused: when
+ * GET /Dashboard/state omitted a threshold, api.ts substituted them, so the
+ * console rendered a 600 W ceiling and a 480 W warning that the server had
+ * never confirmed — and drew warning and trip lines at wattages the engine was
+ * not actually enforcing.
  *
- * `CH2_ALLOCATION_WATTS` is the default the Framework admin opens with. It is a
- * default and not an enforced value — the seeded figure the backend returns is
- * always what the editor shows.
+ * Thresholds are configuration and configuration is read from the server:
+ * `state.thresholds` drives the hero, the meter and the Framework admin editor,
+ * and the admin is the only thing that writes them back. A rig whose server
+ * answers has real thresholds here; a rig whose server does not answer has none,
+ * and the console says so instead of guessing 600.
  */
-export const SYSTEM_LIMIT_WATTS = 600
-export const SYSTEM_WARNING_WATTS = 480
-export const SYSTEM_CRITICAL_WATTS = 600
-export const CH2_ALLOCATION_WATTS = 300
 
 /**
  * Tier each branch carries on the current bench, by outlet id.
@@ -280,20 +294,28 @@ export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'No
  * and reaches the operator through a title attribute instead. The rule: a panel
  * is read from across a room, so it may state numbers, but prose has to be
  * asked for.
+ *
+ * Note what no string in here names any more: a wattage. `pLimit` and `bands`
+ * used to quote 600 W and 480 W as if the console knew the rig's trip points. It
+ * does not — it reads them from GET /Dashboard/state, and a rig whose server has
+ * not answered has none. Tooltips that assert a threshold the client is guessing
+ * are how a default becomes a specification in someone's head.
  */
 export const DASHBOARD_TIPS = {
   total: 'Sum of every channel the policy engine currently reports as energized. Polled from GET /api/Dashboard/state.',
-  headroom: 'Margin between the live total and the critical threshold. At 0 W the rig trips; the gap is the distance to that trip.',
+  headroom: 'Margin between the live total and the critical threshold the server reports. Read as a dash until that threshold has been read.',
   energized: 'Relays the policy engine currently reports as closed, over the wired channel count on this bench.',
-  pLimit: 'Configured master capacity. The 600 W ceiling this rig is calibrated against; it is a setting, not a reading.',
+  pLimit: 'Configured master capacity as returned by GET /api/Dashboard/state. It is a setting, not a reading, and it is never assumed.',
   rail:
     'The rail keeps a fixed 0-P_limit domain so the load looks the same size every minute and movement stays comparable. Columns are recorded buckets from the 15 min window; the bright marker is the live state reading, which is fresher than the newest column.',
   bands:
-    'Warning at 480 W (FR-05) raises an event; critical at 600 W (FR-06) sheds. Amber and red are reserved for these two bands and nothing else.',
+    'The warning and critical trip points the server returns. FR-05 warns at the former and FR-06 sheds at the latter; amber and red are reserved for those two bands and nothing else.',
   live:
     'Live state, polled from GET /api/Dashboard/state. Outlets post telemetry at 1 Hz; the freshness shown is the age of the newest stored sample.',
+  ina226:
+    'Bus volts, current and power read straight off the INA226 on the common mains feed. The shunt figure is the millivolts across its 100 mV shunt, which is what the current reading is actually made of. Past 30 s the sample is treated as unmeasured.',
   outlet:
-    'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. Volts is the rated rail, not a live sample.',
+    'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. The volts shown is the live INA226 mains reading and the amps are derived from it; with no fresh bus volts the pair reads 0 rather than falling back to the rated rail.',
   relay:
     'Closed passes current to the branch; open isolates it. The API reports this as an outlet status, not as a pin level.',
   amps:
@@ -362,7 +384,7 @@ export const SIM_VECTORS: readonly SimVector[] = [
     icon: 'warn',
     name: 'Capacity block rehearsal',
     intent:
-      'Drives every live channel to 82% of its draw, so the rig sits inside the 480 W warning band before the next activation attempt.',
+      'Drives every live channel to 82% of its draw, so the rig approaches the warning band the server has configured before the next activation attempt.',
     expectation:
       'A following activation request should be genuinely refused, because the load really is near the threshold.',
     endpoint: 'POST /api/Dashboard/scenarios/ingest',

@@ -2155,6 +2155,7 @@ export class DashboardStateVm implements IDashboardStateVm {
     deviceLastSeen!: Date | undefined;
     framework!: FrameworkStateDto;
     mainsVolts!: number | undefined;
+    ina226!: Ina226StateDto | undefined;
 
     [key: string]: any;
 
@@ -2199,6 +2200,7 @@ export class DashboardStateVm implements IDashboardStateVm {
             this.deviceLastSeen = _data["deviceLastSeen"] ? new Date(_data["deviceLastSeen"].toString()) : undefined as any;
             this.framework = _data["framework"] ? FrameworkStateDto.fromJS(_data["framework"]) : new FrameworkStateDto();
             this.mainsVolts = _data["mainsVolts"];
+            this.ina226 = _data["ina226"] ? Ina226StateDto.fromJS(_data["ina226"]) : undefined as any;
         }
     }
 
@@ -2235,6 +2237,7 @@ export class DashboardStateVm implements IDashboardStateVm {
         data["deviceLastSeen"] = this.deviceLastSeen ? this.deviceLastSeen.toISOString() : undefined as any;
         data["framework"] = this.framework ? this.framework.toJSON() : undefined as any;
         data["mainsVolts"] = this.mainsVolts;
+        data["ina226"] = this.ina226 ? this.ina226.toJSON() : undefined as any;
         return data;
     }
 }
@@ -2252,6 +2255,7 @@ export interface IDashboardStateVm {
     deviceLastSeen: Date | undefined;
     framework: FrameworkStateDto;
     mainsVolts: number | undefined;
+    ina226: Ina226StateDto | undefined;
 
     [key: string]: any;
 }
@@ -2650,6 +2654,130 @@ export interface IHttpValidationProblemDetails {
     [key: string]: any;
 }
 
+export class Ina226Report implements IIna226Report {
+    busV?: number | undefined;
+    shuntMv?: number | undefined;
+    currentA?: number | undefined;
+    powerW?: number | undefined;
+
+    [key: string]: any;
+
+    constructor(data?: IIna226Report) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.busV = _data["busV"];
+            this.shuntMv = _data["shuntMv"];
+            this.currentA = _data["currentA"];
+            this.powerW = _data["powerW"];
+        }
+    }
+
+    static fromJS(data: any): Ina226Report {
+        data = typeof data === 'object' ? data : {};
+        let result = new Ina226Report();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["busV"] = this.busV;
+        data["shuntMv"] = this.shuntMv;
+        data["currentA"] = this.currentA;
+        data["powerW"] = this.powerW;
+        return data;
+    }
+}
+
+export interface IIna226Report {
+    busV?: number | undefined;
+    shuntMv?: number | undefined;
+    currentA?: number | undefined;
+    powerW?: number | undefined;
+
+    [key: string]: any;
+}
+
+export class Ina226StateDto implements IIna226StateDto {
+    busVolts!: number | undefined;
+    shuntMillivolts!: number | undefined;
+    currentAmps!: number | undefined;
+    powerWatts!: number | undefined;
+    sampledAt!: Date | undefined;
+
+    [key: string]: any;
+
+    constructor(data?: IIna226StateDto) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.busVolts = _data["busVolts"];
+            this.shuntMillivolts = _data["shuntMillivolts"];
+            this.currentAmps = _data["currentAmps"];
+            this.powerWatts = _data["powerWatts"];
+            this.sampledAt = _data["sampledAt"] ? new Date(_data["sampledAt"].toString()) : undefined as any;
+        }
+    }
+
+    static fromJS(data: any): Ina226StateDto {
+        data = typeof data === 'object' ? data : {};
+        let result = new Ina226StateDto();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["busVolts"] = this.busVolts;
+        data["shuntMillivolts"] = this.shuntMillivolts;
+        data["currentAmps"] = this.currentAmps;
+        data["powerWatts"] = this.powerWatts;
+        data["sampledAt"] = this.sampledAt ? this.sampledAt.toISOString() : undefined as any;
+        return data;
+    }
+}
+
+export interface IIna226StateDto {
+    busVolts: number | undefined;
+    shuntMillivolts: number | undefined;
+    currentAmps: number | undefined;
+    powerWatts: number | undefined;
+    sampledAt: Date | undefined;
+
+    [key: string]: any;
+}
+
 export class InfoRequest implements IInfoRequest {
     newEmail?: string | undefined;
     newPassword?: string | undefined;
@@ -2764,6 +2892,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
     meteringMode?: number | undefined;
     readings?: TelemetrySample[];
     relayStates?: RelayStateReport[];
+    ina?: Ina226Report | undefined;
 
     [key: string]: any;
 
@@ -2795,6 +2924,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
                 for (let item of _data["relayStates"])
                     this.relayStates!.push(RelayStateReport.fromJS(item));
             }
+            this.ina = _data["ina"] ? Ina226Report.fromJS(_data["ina"]) : undefined as any;
         }
     }
 
@@ -2824,6 +2954,7 @@ export class IngestTelemetryCommand implements IIngestTelemetryCommand {
             for (let item of this.relayStates)
                 data["relayStates"].push(item ? item.toJSON() : undefined as any);
         }
+        data["ina"] = this.ina ? this.ina.toJSON() : undefined as any;
         return data;
     }
 }
@@ -2834,6 +2965,7 @@ export interface IIngestTelemetryCommand {
     meteringMode?: number | undefined;
     readings?: TelemetrySample[];
     relayStates?: RelayStateReport[];
+    ina?: Ina226Report | undefined;
 
     [key: string]: any;
 }

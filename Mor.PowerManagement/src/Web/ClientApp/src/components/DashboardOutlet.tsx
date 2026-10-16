@@ -18,10 +18,6 @@ type DashboardOutletProps = {
 const SPARK_W = 400
 const SPARK_H = 64
 
-/** Offline the rig reports nothing, so the row reads 0 — the OFFLINE banner
- * in the hero carries the explanation, not an em-dash. */
-const UNAVAILABLE = '—'
-
 /** Priority -> the reference's tag classes. Critical and High are the two the
  *  mock colours; everything below that stays neutral so the grid does not fill
  *  up with chips that mean nothing operationally. */
@@ -41,10 +37,11 @@ const TAG_CLASS: Record<Outlet['priority'], string> = {
  * when the branch is open — so "off" dims the card instead of drawing a second
  * badge that would compete with the switch.
  *
- * Amps is DERIVED. State returns watts and the live INA226 mains volts (falling
- * back to the rated rail when the device has nothing fresh), so the figure is
- * P / V at an assumed power factor of 1. The tooltip says which volts it used;
- * it is never presented as a direct CT reading.
+ * Amps is DERIVED. State returns watts and the live INA226 mains volts, so the
+ * figure is P / V at an assumed power factor of 1. The tooltip says which volts
+ * it used; it is never presented as a direct CT reading. With no live volts
+ * there is no honest value for either half of the pair, and the row says 0
+ * rather than quoting the rated rail back as if it had been measured.
  */
 export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
   const on = live && isEnergizedOutlet(outlet.status)
@@ -82,13 +79,19 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
     ? SPARK_H - Math.min((allowance / 2 / sparkScale), 1) * (SPARK_H - 4) - 2
     : null
 
-  // Live INA226 mains when the device is reporting; the rated rail otherwise.
-  // Offline the volts line still names the rail, but every measured figure is 0.
-  const shownVolts = live && mainsVolts !== null && mainsVolts > 0 ? mainsVolts : outlet.volts
+  // Live INA226 mains when the device is reporting; nothing otherwise.
+  //
+  // This used to fall back to `outlet.volts` — the channel's RATED rail — so a
+  // rig with no fresh converter read "220.0 V · 0.00 A" on every row: a
+  // configuration fact sitting in a column of measurements, indistinguishable
+  // from a real 220.0 V sample, and the reason a dead converter still produced a
+  // plausible-looking dashboard. With no live reference the pair now reads 0 and
+  // the tooltip says why.
   const voltsLive = live && mainsVolts !== null && mainsVolts > 0
-  const amps = shownVolts > 0 ? effWatts / shownVolts : null
+  const shownVolts = voltsLive ? mainsVolts : 0
+  const amps = voltsLive && effWatts > 0 ? effWatts / shownVolts : 0
   const wattsText = Math.round(effWatts).toLocaleString()
-  const vaText = `${shownVolts.toFixed(1)} V · ${amps !== null ? amps.toFixed(2) : UNAVAILABLE} A`
+  const vaText = `${shownVolts.toFixed(1)} V · ${amps.toFixed(2)} A`
 
   return (
     <article
@@ -112,7 +115,7 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
           {wattsText}
           <small>W</small>
         </div>
-        <div className="va num" title={voltsLive ? 'Live INA226 mains volts; amps derived as P / V at PF 1' : 'Rated rail (device has nothing fresh); amps derived as P / V at PF 1'}>
+        <div className="va num" title={voltsLive ? 'Live INA226 mains volts; branch amps derived as P / V at PF 1' : 'No fresh INA226 bus volts, so there is no reference to derive against and the rated rail is deliberately not substituted — both figures read 0'}>
           {vaText}
         </div>
       </div>

@@ -6,10 +6,15 @@ import {
   formatTick,
   formatValue,
   histogram,
+  INA226_SHUNT_FULL_SCALE_MV,
+  INA226_STALE_SECONDS,
+  ina226Freshness,
   niceDomain,
   pickTickIndices,
+  reconcilePower,
   roundToStep,
   seriesStats,
+  shuntFillPercent,
   stalenessState,
   toAreaPath,
   toPaths,
@@ -186,6 +191,77 @@ describe('stalenessState', () => {
 
   it('labels fresh data with its age', () => {
     expect(stalenessState(at(5), now, true).label).toBe('Live · 5 s ago')
+  })
+})
+
+describe('ina226Freshness', () => {
+  const now = Date.parse('2026-10-02T12:00:00Z')
+  const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString()
+
+  it('is live inside the 30 s window', () => {
+    expect(ina226Freshness(at(0), now).freshness).toBe('live')
+    expect(ina226Freshness(at(29.9), now).freshness).toBe('live')
+  })
+
+  it('flips to stale exactly at the 30 s boundary', () => {
+    expect(ina226Freshness(at(INA226_STALE_SECONDS), now).freshness).toBe('stale')
+  })
+
+  it('distinguishes never-reported from reported-and-stopped', () => {
+    // The two need different operator action: an unwired converter versus a rig
+    // that was answering an hour ago. One boolean would erase that.
+    expect(ina226Freshness(null, now).freshness).toBe('unmeasured')
+    expect(ina226Freshness(undefined, now).freshness).toBe('unmeasured')
+    expect(ina226Freshness(at(600), now).freshness).toBe('stale')
+  })
+
+  it('treats an unparseable stamp as no stamp at all', () => {
+    expect(ina226Freshness('not-a-date', now).freshness).toBe('unmeasured')
+    expect(ina226Freshness('not-a-date', now).ageSeconds).toBeNull()
+  })
+
+  it('reports the age so the card can say how old the sample is', () => {
+    expect(ina226Freshness(at(41), now).ageSeconds).toBeCloseTo(41, 3)
+  })
+})
+
+describe('shuntFillPercent', () => {
+  it('places the drop inside the converter input range', () => {
+    expect(shuntFillPercent(25)).toBe(25)
+    expect(shuntFillPercent(INA226_SHUNT_FULL_SCALE_MV)).toBe(100)
+  })
+
+  it('clamps rather than drawing past full scale', () => {
+    // A drop beyond the input range is a fault, not a bar that overflows.
+    expect(shuntFillPercent(160)).toBe(100)
+    expect(shuntFillPercent(-4)).toBe(0)
+    expect(shuntFillPercent(Number.NaN)).toBe(0)
+  })
+
+  it('maps a dead bus to an empty rail, not a full one', () => {
+    expect(shuntFillPercent(0)).toBe(0)
+  })
+})
+
+describe('reconcilePower', () => {
+  it('agrees with the reported watts when the converter is healthy', () => {
+    const result = reconcilePower(231.4, 1.284, 296.6)
+    expect(result.computedWatts).toBeCloseTo(297.1176, 3)
+    expect(result.deltaPercent).toBeLessThan(1)
+  })
+
+  it('reports the drift when the power channel has lost its own product', () => {
+    // A converter reporting 100 W while its own volts and amps say 200 W is a
+    // failing power channel. No single figure on the card would reveal it.
+    const result = reconcilePower(200, 1, 100)
+    expect(result.deltaWatts).toBeCloseTo(100, 6)
+    expect(result.deltaPercent).toBeCloseTo(100, 6)
+  })
+
+  it('does not divide by a reported zero when the bus is genuinely dead', () => {
+    const result = reconcilePower(0, 0, 0)
+    expect(result.computedWatts).toBe(0)
+    expect(result.deltaPercent).toBe(0)
   })
 })
 

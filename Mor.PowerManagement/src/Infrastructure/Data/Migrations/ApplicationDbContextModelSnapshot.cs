@@ -215,6 +215,36 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.ToTable("ControlPolicies");
                 });
 
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.InaReading", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<double?>("BusVoltageV")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("CurrentA")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("PowerW")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("ShuntVoltageMv")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset>("Timestamp")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Timestamp");
+
+                    b.ToTable("InaReadings");
+                });
+
             modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.Outlet", b =>
                 {
                     b.Property<int>("Id")

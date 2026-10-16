@@ -3533,6 +3533,37 @@ body {
 :root[data-theme='dark'] .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
 :root[data-theme='dark'] .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
 
+/* --- INA226 mains card ---------------------------------------------------- */
+/*
+ * Three figures on one row, then the shunt rail, then the reason. The figures
+ * stay 3-up all the way down to 360px by shrinking rather than wrapping: a
+ * wrapped instrument read-out stops being a single read-out, and an operator
+ * checking a bus voltage mid-sentence should not have to re-find the number.
+ */
+.mp .ina { padding: 18px 22px 16px; display: flex; flex-direction: column; gap: 13px; }
+.mp .ina-h { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.mp .ina-h b { font: 600 13px var(--ui); letter-spacing: .02em; color: var(--ink); }
+.mp .ina-figs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.mp .ina-fig { min-width: 0; }
+.mp .ina-fig .v {
+  font-family: var(--num); font-weight: 500; font-size: 34px; line-height: 1;
+  letter-spacing: -1px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.mp .ina-fig .v small { font-size: 14px; color: var(--mute); letter-spacing: 0; margin-left: 4px; }
+.mp .ina-fig .k { margin-top: 7px; color: var(--mute); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+
+/* Unmeasured is greyed rather than red: a silent converter is not an emergency,
+   and colouring it would make the loudest thing on the dashboard a fault the
+   operator may already know about. The OFFLINE banner carries the severity. */
+.mp .ina.is-off .ina-fig .v { color: var(--mute); }
+
+.mp .shunt { display: flex; flex-direction: column; gap: 6px; }
+.mp .shunt-track { height: 6px; background: var(--live-soft); border-radius: 9px; overflow: hidden; }
+.mp .shunt-track > i { display: block; height: 100%; background: var(--live); border-radius: 9px; transition: width .6s; }
+.mp .shunt-cap { display: flex; justify-content: space-between; gap: 10px; color: var(--mute); font-size: 11px; }
+.mp .ina-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--mute); }
+.mp .ina-note b { font-weight: 600; color: var(--ink); }
+
 /* --- switch -------------------------------------------------------------- */
 .mp .sw {
   width: 56px; height: 30px; border-radius: 99px; border: 0; background: var(--live);
@@ -3598,12 +3629,20 @@ body {
   .mp .big { font-size: 44px; }
   .mp .row { padding: 14px 16px; }
   .mp .stats { gap: 16px; }
+  /* Three figures stay three figures — only smaller. Wrapping them would turn
+     one instrument read-out into three and break the left-to-right scan. */
+  .mp .ina { padding: 14px 16px; gap: 11px; }
+  .mp .ina-figs { gap: 10px; }
+  .mp .ina-fig .v { font-size: 24px; letter-spacing: -.5px; }
+  .mp .ina-fig .v small { font-size: 12px; }
+  .mp .ina-fig .k { font-size: 10px; margin-top: 5px; }
 }
 
 /* --- reduced motion: kill the pulse AND the width/left transitions -------- */
 @media (prefers-reduced-motion: reduce) {
   .mp .dot.live { animation: none; }
   .mp .meter > i,
+  .mp .shunt-track > i,
   .mp .sw,
   .mp .sw::after { transition: none !important; }
 }

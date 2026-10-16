@@ -96,13 +96,31 @@ public sealed class TelemetryRetentionService(
                 }
             }
 
+            // The INA226 series grows at exactly the same rate as the branch rows
+            // (one row per batch) and is pruned by the same cutoff. Leaving it
+            // behind would turn a bounded table into an unbounded one and the
+            // "newest InaReading" the dashboard reads would silently get older
+            // and older until it aged out of the freshness window forever.
+            var inaDeleted = await context.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                DELETE FROM "InaReadings" t
+                WHERE t."Id" IN (
+                    SELECT "Id" FROM "InaReadings"
+                    WHERE "Timestamp" < {cutoff}
+                    ORDER BY "Id"
+                    LIMIT {BatchSize})
+                """,
+                cancellationToken);
+
             // Deleting readings orphans nothing: Outlet.LastSeen,
-            // Outlet.CurrentWatts and PowerEvents are independent rows.
-            if (deleted > 0 || batches > 1)
+            // Outlet.CurrentWatts and PowerEvents are independent rows, and
+            // InaReadings reference no outlet at all.
+            if (deleted > 0 || inaDeleted > 0 || batches > 1)
             {
                 logger.LogInformation(
-                    "Telemetry retention: deleted {Deleted} rows older than {Cutoff:o} ({RetentionDays} day(s), {Batches} batch(es)).",
+                    "Telemetry retention: deleted {Deleted} reading(s) and {InaDeleted} INA226 row(s) older than {Cutoff:o} ({RetentionDays} day(s), {Batches} batch(es)).",
                     deleted,
+                    inaDeleted,
                     cutoff,
                     RetentionDays,
                     batches);

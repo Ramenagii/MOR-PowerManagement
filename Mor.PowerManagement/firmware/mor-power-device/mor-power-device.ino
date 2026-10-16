@@ -842,6 +842,11 @@ String backendUrl(const char* path) {
 bool postTelemetry() {
   float amps[BRANCH_CT_COUNT];
   float mainsV;
+  // The INA226's own readings, taken from the SAME hold as the branch amps and
+  // mains volts - the snapshot rule the branch numbers already follow. Read
+  // outside the hold they would come from two different polls and the GUI could
+  // show a shunt voltage that never coexisted with the current beside it.
+  float inaBusV, inaShunt, inaAmps, inaWatts;
 
   // One hold, one snapshot: the amps posted and the voltage they are multiplied
   // by are read together, so powerWatts == currentAmps * voltage holds exactly.
@@ -850,6 +855,10 @@ bool postTelemetry() {
       amps[ch] = branchAmps[ch];
     }
     mainsV = mainsVolts_V;
+    inaBusV   = inaBusVoltage_V;
+    inaShunt  = inaShuntVoltage_mV;
+    inaAmps   = inaCurrent_A;
+    inaWatts  = inaPower_W;
     xSemaphoreGive(dataMutex);
   } else {
     return false;
@@ -870,6 +879,19 @@ bool postTelemetry() {
   // which is a condition setup() DID evaluate and can therefore speak to.
   doc["faultFlag"] = !(ina226Present && ads1220Present);
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
+
+  // The INA226's OWN readings, not derived branch figures. Until now these were
+  // serial-only: the dashboard showed branch amps and a mains voltage computed
+  // from busV, and the operator could never see what the sensor actually
+  // measured. Values are posted raw - no divider, no averaging, no clamping -
+  // because a GUI that re-derives them downstream cannot be wrong about which
+  // is which. mainsVolts_V (= busV * INA226_MAIN_VOLT_DIVIDER) stays the basis
+  // for every branch watt; this block only reports the sensor behind it.
+  JsonObject ina = doc["ina"].to<JsonObject>();
+  ina["busV"]     = inaBusV;      // V at the INA226 bus pin
+  ina["shuntmV"]  = inaShunt;     // mV across the 10 mOhm shunt
+  ina["currentA"] = inaAmps;      // A through the shunt
+  ina["powerW"]   = inaWatts;     // W at the INA226 bus pin
 
   JsonArray readings = doc["readings"].to<JsonArray>();
   float totalW = 0.0f;
@@ -919,6 +941,18 @@ bool postTelemetry() {
 
   if (!ok || missedPosts % 10 == 1) {
     Serial.printf("telemetry: HTTP %d, total=%.0f W\n", code, totalW);
+  }
+
+  // Proof, once per boot, that the `ina` block really is on the wire and not
+  // just in the serial log: the first payload this device posts is echoed
+  // verbatim. If the block is missing here it is missing on the backend.
+  static bool inaPayloadProven = false;
+  if (!inaPayloadProven) {
+    inaPayloadProven = true;
+    Serial.print("telemetry[ina] POST payload: ");
+    Serial.println(payload);
+    Serial.printf("telemetry[ina] posted: bus=%.3f V shunt=%.3f mV current=%.3f A power=%.3f W\n",
+                  inaBusV, inaShunt, inaAmps, inaWatts);
   }
   return ok;
 }
