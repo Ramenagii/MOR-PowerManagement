@@ -110,6 +110,15 @@ Per-outlet allowances are independently editable in Framework Admin and persist
 when the application restarts. Priority still controls shedding order; it does
 not exempt an outlet from its own allowance.
 
+At runtime, an energized outlet above its allowance for two consecutive fresh
+readings has its relay opened automatically, regardless of priority. It is
+eligible to restore after total load stays below 90% of P_limit for 30 seconds;
+restoration is staggered by five seconds between outlets. The ESP32 applies the
+relay command on its 500 ms config poll, so a single safe outlet is restored in
+about 31 seconds and four staged restorations take about 46 seconds, provided
+the load remains safe. Whole-system overload still uses three-reading
+confirmation against P_limit.
+
 - Firmware uses `OUTLET_COUNT 4`, `BRANCH_CT_COUNT 4`, and `RELAY_PINS[] = {1, 2, 4, 5}`.
 - INA226 uses its own I2C connection (SDA 8, SCL 9). Its readings are sent under the separate `ina` telemetry object, never as outlet ID 5.
 - Backend testing seed and dashboard roster contain exactly outlets 1–4. Stale rows above outlet 4 are removed while the first four outlets and their telemetry history are retained.

@@ -117,7 +117,7 @@ export function PoliciesView() {
       <header className="mb-space-lg flex flex-col gap-1">
         <h1 className="font-headline-md text-headline-md text-on-surface">Framework</h1>
         <p className="font-body-sm text-body-sm text-on-surface-variant">
-          Four outlet limits and the system load response.{' '}
+          Over-limit outlets trip after two readings and restore within 60 seconds once the load is safe.{' '}
           <span className="font-semibold text-on-surface">{FRAMEWORK_SCOPE}</span>
         </p>
       </header>

@@ -290,7 +290,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             // the framework just left it, not as it arrived.
             if (shedding is { Action: nameof(LoadSheddingAction.Shed) })
             {
-                total = LoadResponseEvaluator.TotalLoad(snapshots);
+                total = outlets.Sum(outlet => outlet.CurrentWatts);
                 state = LoadResponseEvaluator.GetSystemState(total, config.WarningThresholdWatts, config.CriticalThresholdWatts);
             }
         }

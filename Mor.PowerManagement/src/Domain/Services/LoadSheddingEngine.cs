@@ -20,7 +20,12 @@ public enum LoadSheddingAction
 }
 
 /// <summary>One shedded branch, remembered so restoration can be staged and ordered.</summary>
-public sealed record ShedRecord(int OutletId, LoadTier Tier, double WattsAtShed, DateTimeOffset ShedAtUtc);
+public sealed record ShedRecord(
+    int OutletId,
+    LoadTier Tier,
+    double WattsAtShed,
+    DateTimeOffset ShedAtUtc,
+    bool OutletAllowanceTrip = false);
 
 /// <summary>
 /// Cross-batch framework state. Immutable: each evaluation returns the next
@@ -33,6 +38,10 @@ public sealed record LoadSheddingState
 
     /// <summary>Consecutive batches seen over P_limit. Reset on the first batch under it.</summary>
     public int ConsecutiveOverLimitBatches { get; init; }
+
+    /// <summary>Consecutive fresh batches above each energized outlet's own allowance.</summary>
+    public IReadOnlyDictionary<int, int> ConsecutiveOutletOverLimitBatches { get; init; }
+        = new Dictionary<int, int>();
 
     /// <summary>Outlets this framework shed, oldest first.</summary>
     public IReadOnlyList<ShedRecord> ShedLedger { get; init; } = Array.Empty<ShedRecord>();
@@ -128,7 +137,9 @@ public static class LoadSheddingEngine
         var byId = outlets.ToDictionary(o => o.Id);
 
         return ledger
-            .Where(record => byId.ContainsKey(record.OutletId))
+            .Where(record => byId.ContainsKey(record.OutletId)
+                && (record.OutletAllowanceTrip
+                    || LoadTierMapper.ToTier(byId[record.OutletId].Priority) != LoadTier.Critical))
             .OrderBy(record => (int)LoadTierMapper.ToTier(byId[record.OutletId].Priority))
             .ThenByDescending(record => record.WattsAtShed)
             .ThenBy(record => record.OutletId)
@@ -241,7 +252,12 @@ public static class LoadSheddingEngine
         var faults = InspectSensorHealth(outlets, pLimitWatts, total, now);
         if (faults.Count > 0)
         {
-            var next = state with { ConsecutiveOverLimitBatches = 0, FaultLatched = true };
+            var next = state with
+            {
+                ConsecutiveOverLimitBatches = 0,
+                ConsecutiveOutletOverLimitBatches = new Dictionary<int, int>(),
+                FaultLatched = true,
+            };
             return new LoadSheddingDecision(
                 LoadSheddingAction.Alarm,
                 null,
@@ -252,6 +268,67 @@ public static class LoadSheddingEngine
                 recoveryLimit,
                 next.ConsecutiveOverLimitBatches,
                 LoadSheddingSettings.OverLimitConfirmationBatches);
+        }
+
+        // An outlet that exceeds its own configured allowance is disconnected
+        // regardless of priority. Require two fresh batches to reject a single
+        // noisy sample, then track the trip in the same timed restore ledger.
+        var outletCounters = new Dictionary<int, int>();
+        foreach (var outlet in outlets)
+        {
+            var fresh = outlet.LastSeen is { } lastSeen
+                && lastSeen >= now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds);
+            var overAllowance = !state.ManualOverride
+                && LoadResponseEvaluator.IsEnergized(outlet.Status)
+                && fresh
+                && outlet.Watts > outlet.AllowanceWatts;
+            outletCounters[outlet.Id] = overAllowance
+                ? state.ConsecutiveOutletOverLimitBatches.GetValueOrDefault(outlet.Id) + 1
+                : 0;
+        }
+
+        state = state with { ConsecutiveOutletOverLimitBatches = outletCounters };
+
+        if (!state.ManualOverride)
+        {
+            var overAllowance = outlets
+                .Where(o => outletCounters[o.Id] >= LoadSheddingSettings.OutletAllowanceConfirmationBatches)
+                .OrderByDescending(o => o.Watts - o.AllowanceWatts)
+                .ThenBy(o => o.Id)
+                .FirstOrDefault();
+
+            if (overAllowance is not null)
+            {
+                var tier = LoadTierMapper.ToTier(overAllowance.Priority);
+                var shedState = state with
+                {
+                    ConsecutiveOutletOverLimitBatches = outletCounters
+                        .Where(pair => pair.Key != overAllowance.Id)
+                        .ToDictionary(pair => pair.Key, pair => pair.Value),
+                    BelowRecoveryLimitSinceUtc = null,
+                    ShedLedger = state.ShedLedger
+                        .Where(record => record.OutletId != overAllowance.Id)
+                        .Append(new ShedRecord(
+                            overAllowance.Id,
+                            tier,
+                            overAllowance.Watts,
+                            now,
+                            OutletAllowanceTrip: true))
+                        .ToList(),
+                    FaultLatched = false,
+                };
+
+                return new LoadSheddingDecision(
+                    LoadSheddingAction.Shed,
+                    overAllowance.Id,
+                    tier,
+                    $"{Display(overAllowance)} drew {overAllowance.Watts:F0} W, above its {overAllowance.AllowanceWatts:F0} W outlet limit for " +
+                    $"{LoadSheddingSettings.OutletAllowanceConfirmationBatches} consecutive readings. Opening its relay.",
+                    shedState,
+                    recoveryLimit,
+                    outletCounters[overAllowance.Id],
+                    LoadSheddingSettings.OutletAllowanceConfirmationBatches);
+            }
         }
 
         // ---- 2. Overload path: confirm, then shed one branch per batch.
