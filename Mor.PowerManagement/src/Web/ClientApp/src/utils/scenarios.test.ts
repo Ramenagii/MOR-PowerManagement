@@ -37,6 +37,18 @@ const rig: Outlet[] = [
   outlet(2, 180, 'Active', 'Medium'),
 ]
 
+/**
+ * The live five-channel bench: four mains outlets plus the USB rail, which is
+ * Low priority, Standby and has no relay behind it.
+ */
+const bench: Outlet[] = [
+  outlet(1, 260, 'Active', 'Critical'),
+  outlet(2, 180, 'Active', 'High'),
+  outlet(3, 120, 'Active', 'Medium'),
+  outlet(4, 0, 'Disconnected', 'Medium'),
+  outlet(5, 7, 'Standby', 'Low', 5),
+]
+
 const sum = (readings: Array<{ powerWatts: number }>) => readings.reduce((t, r) => t + r.powerWatts, 0)
 
 describe('buildScenarioPayload', () => {
@@ -148,5 +160,80 @@ describe('buildScenarioPayload', () => {
     const blocked = sum(buildScenarioPayload(rig, capacityBlockProfile(rig)).readings)
     const over = sum(buildScenarioPayload(rig, overloadProfile(rig)).readings)
     expect(blocked).toBeLessThan(over)
+  })
+})
+
+describe('the monitored-only USB channel', () => {
+  it('is never a shed candidate, however low its priority', () => {
+    // CH5 is the lowest-priority energized channel on the bench, so a selector
+    // that ranked first and stopped there would "shed" a socket with no relay.
+    expect(selectiveProfile(bench).shed).toEqual([3])
+    expect(idleProfile(bench).shed).not.toContain(5)
+    for (const profile of [normalProfile(bench), capacityBlockProfile(bench), overloadProfile(bench)]) {
+      expect(profile.shed).not.toContain(5)
+      expect(profile.energize).not.toBe(undefined)
+    }
+  })
+
+  it('never receives an overload injection, even if one is aimed at it', () => {
+    const base = buildScenarioPayload(bench, {
+      loadFactor: 1,
+      energize: [1, 2, 3, 5],
+      shed: [],
+      overloadWatts: 900,
+      overloadChannel: 5,
+    })
+    // 7 W at the rail's own draw, not 7 + 900.
+    expect(base.readings.find((r) => r.outletId === 5)?.powerWatts).toBe(7)
+    expect(base.readings.find((r) => r.outletId === 1)?.powerWatts).toBe(260)
+  })
+
+  it('is reported closed in every batch, because it has no relay to open', () => {
+    for (const profile of [
+      normalProfile(bench),
+      capacityBlockProfile(bench),
+      overloadProfile(bench),
+      selectiveProfile(bench),
+      idleProfile(bench),
+    ]) {
+      const { relayStates } = buildScenarioPayload(bench, profile)
+      expect(relayStates.find((r) => r.outletId === 5)?.relayClosed).toBe(true)
+    }
+  })
+
+  it('keeps the rail present under the idle profile while a shed branch is cut', () => {
+    // The socket cannot be switched off, so an idle period must not report it as
+    // a branch that vanished. Its draw falls with the rest of the rig; the relay
+    // stays closed and the rail keeps its voltage, and the mains branch that WAS
+    // shed is the one that goes to 0 W with an open relay.
+    const { readings, relayStates } = buildScenarioPayload(bench, idleProfile(bench))
+    const usb = readings.find((r) => r.outletId === 5)
+    const shed = readings.find((r) => r.outletId === 4)
+
+    expect(usb?.voltage).toBe(5)
+    expect(usb?.currentAmps).toBeGreaterThanOrEqual(0)
+    expect(relayStates.find((r) => r.outletId === 5)?.relayClosed).toBe(true)
+    expect(shed?.powerWatts).toBe(0)
+    expect(relayStates.find((r) => r.outletId === 4)?.relayClosed).toBe(false)
+  })
+
+  it('carries every metered branch in the activation stagger', () => {
+    // The stagger counted two channels while the bench had four, so CH3 came
+    // back at 0 W in a "normal operation" batch that claims to replay the live
+    // state. CH4 sits inside the window too: a baseline batch replays the mains
+    // branches as live, so one the roster had open returns closed at 0 W.
+    const { readings, relayStates } = buildScenarioPayload(bench, normalProfile(bench))
+    for (const id of [1, 2, 3]) {
+      expect(readings.find((r) => r.outletId === id)?.powerWatts).toBeGreaterThan(0)
+      expect(relayStates.find((r) => r.outletId === id)?.relayClosed).toBe(true)
+    }
+    expect(readings.find((r) => r.outletId === 4)?.powerWatts).toBe(0)
+    expect(relayStates.find((r) => r.outletId === 4)?.relayClosed).toBe(true)
+
+    // A profile that sheds it opens it again, which is the whole difference.
+    const selective = buildScenarioPayload(bench, selectiveProfile(bench))
+    expect(selectiveProfile(bench).shed).toEqual([3])
+    expect(selective.relayStates.find((r) => r.outletId === 3)?.relayClosed).toBe(false)
+    expect(selective.relayStates.find((r) => r.outletId === 2)?.relayClosed).toBe(true)
   })
 })

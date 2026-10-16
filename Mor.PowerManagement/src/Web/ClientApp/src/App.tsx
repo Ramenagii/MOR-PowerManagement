@@ -21,7 +21,7 @@ import { PolicyAdminView } from './components/PolicyAdminView'
 import { PoliciesView } from './components/PoliciesView'
 import { TelemetryView } from './components/TelemetryView'
 import { AppTopBar } from './components/AppTopBar'
-import { baseOutlets, initialEvents } from './data/dashboard'
+import { baseOutlets, initialEvents, isMonitoredOnlyChannel } from './data/dashboard'
 import type { AppView, EventLog, Outlet, Severity } from './types/dashboard'
 import { formatWatts, getTimeStamp, isEnergizedOutlet, systemState, totalLoad } from './utils/dashboard'
 import {
@@ -58,16 +58,27 @@ const INTRO_MS = 700
 const ROUTE_TRANSITION_S = 0.2
 const SHELL_TRANSITION_S = 0.22
 
+/*
+ * Channel the SIM-02 activation request is dispatched for.
+ *
+ * CH1, on both the live path and the offline fallback that mirrors it, so the
+ * two cannot drift and start asking about different branches. It has to be a
+ * switched branch: CH5 is the USB rail and has no relay, so an activation
+ * request naming it could only ever be refused.
+ */
+const SIM_ACTIVATION_CHANNEL = 1
+
 function App() {
-  // Shape only. `baseOutlets` carries no wattage, no rated rail and no relay
-  // state, and `initialEvents` is empty — the first successful poll replaces all
-  // of it. Nothing that renders as a measurement exists before the server says
-  // so.
+  // Shape only. `baseOutlets` carries no wattage and claims no relay state —
+  // a rail on a row is configuration, not a reading — and `initialEvents` is
+  // empty. The first successful poll replaces all of it. Nothing that renders as
+  // a measurement exists before the server says so.
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
   const [events, setEvents] = useState<EventLog[]>(initialEvents)
-  // 0 is "the server has not told us". It is not 600/480/600: a guessed ceiling
-  // renders as "0 % of 600 W limit — full headroom" on a rig that knows nothing,
-  // and the hero shows a dash for every limit-derived figure instead.
+  // 0 is "the server has not told us". It is not a copy of the rig's configured
+  // ceiling: a guessed limit renders as "0 % of 1200 W limit — full headroom" on
+  // a rig that knows nothing, and the hero shows a dash for every limit-derived
+  // figure instead.
   const [thresholds, setThresholds] = useState({ max: 0, warning: 0, critical: 0 })
   const [session, setSession] = useState<Session>('checking')
   // Shown in the top bar avatar and the footer. checkSession() already returns
@@ -270,7 +281,7 @@ function App() {
    * the operator what to do about it.
    */
   const requestActivationLocal = () => {
-    const requested = outlets.find((outlet) => outlet.id === 1)
+    const requested = outlets.find((outlet) => outlet.id === SIM_ACTIVATION_CHANNEL)
     if (!requested) return
 
     if (thresholds.critical <= 0) {
@@ -286,7 +297,7 @@ function App() {
     if (projectedLoad > thresholds.critical) {
       addEvent(
         'Activation blocked',
-        `Outlet 1 request denied: ${formatWatts(load)} current load + ${formatWatts(
+        `${requested.name} request denied: ${formatWatts(load)} current load + ${formatWatts(
           requested.allowance,
         )} allowance exceeds the configured critical threshold.`,
         'warning',
@@ -298,21 +309,25 @@ function App() {
       current.map((outlet) =>
         // Status only. The branch is energized but nothing has been metered on
         // it, so it reports 0 W until a telemetry batch says otherwise.
-        outlet.id === 1 ? { ...outlet, status: 'Active', watts: 0 } : outlet,
+        outlet.id === SIM_ACTIVATION_CHANNEL ? { ...outlet, status: 'Active', watts: 0 } : outlet,
       ),
     )
     addEvent(
       'Outlet activation allowed',
-      'Pre-activation capacity assessment passed; Outlet 1 relay energized. No wattage is shown for it — the local path cannot measure.',
+      `Pre-activation capacity assessment passed; ${requested.name} relay energized. No wattage is shown for it — the local path cannot measure.`,
       'success',
     )
   }
 
-  // FUTURE 4+USB: SIM-02 id 1 stays valid — CH1 exists in both the 2-outlet and
-  // the 4+USB rig, so this activation request needs no retarget when the full
-  // bench is restored.
+  /*
+   * SIM-02 still targets CH1: the activation request needs a branch with a relay
+   * behind it, and CH1 is the Critical one on this five-channel bench as it was
+   * on the two-channel one, so the vector needs no retarget. It also cannot be
+   * pointed at CH5 — a USB socket with no relay would be denied by the backend
+   * for a reason the operator could not verify from this screen.
+   */
   const requestActivation = () => {
-    void runLive(() => activateOutlet(1), requestActivationLocal)
+    void runLive(() => activateOutlet(SIM_ACTIVATION_CHANNEL), requestActivationLocal)
   }
 
   const replayIntro = () => {
@@ -379,6 +394,24 @@ function App() {
   const toggleOutlet = (id: number) => {
     const outlet = outlets.find((item) => item.id === id)
     if (!outlet) return
+
+    /*
+     * CH5 is monitored, not switched. The row already renders its control
+     * disabled, so this cannot be reached from the dashboard — and that is
+     * exactly why it is checked again here. A guard that lives only in the view
+     * is one refactor away from dispatching a disconnection the backend accepts
+     * and the bench ignores, which would leave the row reading "disconnected"
+     * while the USB load still draws.
+     */
+    if (isMonitoredOnlyChannel(id)) {
+      addEvent(
+        'No relay on this channel',
+        `${outlet.name} has no relay behind it, so there is nothing to activate or disconnect. The request was not dispatched.`,
+        'warning',
+      )
+      return
+    }
+
     const action = isEnergizedOutlet(outlet.status)
       ? () => disconnectOutlet(id)
       : () => activateOutlet(id)

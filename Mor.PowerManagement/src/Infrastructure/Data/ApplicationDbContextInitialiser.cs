@@ -134,19 +134,22 @@ public class ApplicationDbContextInitialiser
 
         // -------------------------------------------------------------------
         // TESTING RIG (temporary until 31 Oct 2026) — see MUST_READ.md.
-        // 2 channels: 2x220V outlets (CH1-CH2) on one mains feed. Both are
-        // metered on their own ADS1220 SPI input via a branch CT.
+        // 5 channels: 4x220V outlets (CH1-CH4) each metered on its own
+        // ADS1220 SPI input via a branch CT, plus 1xUSB 5V rail (CH5) that
+        // has NO current sensor and is only monitored (its figure is the
+        // nominal rating / a residual of the INA226 mains total).
         // Set false to restore the full 13-channel rig for the final panel.
         // -------------------------------------------------------------------
         const bool TestingRig = true;
 
-        // Re-derived for the 2-outlet bench: seeded load is 260 + 180 = 440 W,
-        // so a 600 W P_limit leaves ~160 W of headroom above the seeded state
-        // while still putting the rig in overload for any single added load.
+        // Re-derived for the 5-channel bench: seeded load is 260 + 180 + 120 +
+        // 0 + 7 = 567 W, so a 1200 W P_limit leaves ~630 W of headroom above
+        // the seeded state and the rig boots healthy, while still reaching the
+        // 960 W warning threshold on one realistic added load.
         // Thresholds are 80% / 100% of capacity, matching the full-rig ratios.
-        const double TestingMaxCapacityWatts = 600.0;
-        const double TestingWarningThresholdWatts = 480.0;
-        const double TestingCriticalThresholdWatts = 600.0;
+        const double TestingMaxCapacityWatts = 1200.0;
+        const double TestingWarningThresholdWatts = 960.0;
+        const double TestingCriticalThresholdWatts = 1200.0;
 
         const double FullRigMaxCapacityWatts = 4000.0;
         const double FullRigWarningThresholdWatts = 3240.0;
@@ -160,12 +163,12 @@ public class ApplicationDbContextInitialiser
         // priority-based load shedding framework runs on - the framework reads
         // the same column rather than a second threshold, so there is exactly
         // one P_limit in the system and an operator cannot set two that
-        // disagree. On this 2-outlet bench P_limit is 600 W (the const above),
-        // and the recovery limit the framework restores into is 540 W
-        // (600 W less the 10% hysteresis band, LoadSheddingSettings).
-        // Per-outlet allowances come from each outlet's AllowanceWatts below
-        // (300 W each); the tier-1 outlet is exempt from its own cap but is
-        // still counted in P_total.
+        // disagree. On this 5-channel bench P_limit is 1200 W (the const
+        // above), and the recovery limit the framework restores into is
+        // 1080 W (1200 W less the 10% hysteresis band, LoadSheddingSettings).
+        // Per-outlet allowances come from each outlet's AllowanceWatts below;
+        // the tier-1 outlet is exempt from its own cap but is still counted in
+        // P_total.
 
         var rigConfig = await _context.PowerSystemConfigs.FirstOrDefaultAsync();
         if (rigConfig is null)
@@ -202,60 +205,25 @@ public class ApplicationDbContextInitialiser
         // Domain/Enums/LoadTier.cs): Critical(4)->Tier 1 Critical, High(3)->Tier 2
         // Important, Medium(2)->Tier 3 Deferrable, Low(1)->Tier 4 Nonessential.
         //
-        // On this 2-outlet rig that yields CH1 = Tier 1 (keep powered, exempt
-        // from its own 300 W allowance cap) and CH2 = Tier 2 (the only outlet
-        // the framework is willing to shed automatically). That is a thin demo
-        // of the ladder - the 4-channel rig below is where the ordering
-        // actually shows, but the rule is identical.
+        // On this 5-channel rig the ladder the thesis demonstrates end to end is:
+        //   CH1 Critical -> Tier 1 Critical    keep powered, cap-exempt
+        //   CH2 High     -> Tier 2 Important   shed last of the expendable
+        //   CH3 Medium   -> Tier 3 Deferrable  shed with CH4
+        //   CH4 Medium   -> Tier 3 Deferrable  shed with CH3 (seeded down)
+        //   CH5 USB 5V Low -> Tier 4 Nonessential shed FIRST, but its watts are
+        //                             a residual of the INA226 total, so it
+        //                             relieves the least real load
         var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
             ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
             ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
+            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+            // No CT on this rail: the seeded figure is its nominal rating, not
+            // a sample. Monitored only - the USB 5V load has no relay of its
+            // own; it is tracked so the dashboard shows the rail, not switched.
+            ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
         };
-
-        // FUTURE 4+USB: swap this template in when the bench grows back to five
-        // wired channels. It is kept commented so the 2-outlet rig stays the
-        // only thing that runs today.
-        //
-        // When to swap: when CH3/CH4 are physically wired to relay channels and
-        // the firmware is posting outletId 1..5 positionally. The one-shot
-        // table reset further down is driven by testingRigSpecs.Length and the
-        // renumber SQL is built from the same array, so widening the spec is
-        // all that is needed for ids to become 1..5 - but the Testing*Watts
-        // constants above must be widened in the same pass or P_total runs
-        // against a 600 W limit the 4-outlet rig cannot hold.
-        //
-        // futureTestingRigSpecs5 — 4x220V (CH1-CH4, each metered on its own
-        // ADS1220 SPI input via a branch CT) + 1xUSB 5V (CH5, NO current
-        // sensor: its figure is only ever the nominal rating, and its current
-        // is a residual of the INA226 mains total).
-        //
-        // Paired thresholds for this spec, at the 80% / 100% ratio used above:
-        //   futureTestingMaxCapacityWatts      = 1200.0;
-        //   futureTestingWarningThresholdWatts = 960.0;   (0.8 x 1200)
-        //   futureTestingCriticalThresholdWatts= 1200.0;
-        // Seeded load of the rows below is 260 + 180 + 120 + 0 + 7 = 567 W,
-        // which sits just under the 960 W warning threshold: the rig boots in
-        // a healthy state and still reaches warning on one realistic addition.
-        //
-        // TIERS on the 4+USB rig, the ladder the thesis demonstrates end to end:
-        //   CH1 Critical    -> Tier 1 Critical    keep powered, cap-exempt
-        //   CH2 High        -> Tier 2 Important   shed last of the expendable
-        //   CH3 Medium      -> Tier 3 Deferrable  shed second
-        //   CH4 Low         -> Tier 4 Nonessential shed FIRST
-        //   CH5 USB 5V Low  -> Tier 4 Nonessential shed first alongside CH4, but
-        //                              its watts are a residual of the INA226
-        //                              total, so it relieves the least real load
-        //
-        // var futureTestingRigSpecs5 = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
-        // {
-        //     ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
-        //     ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-        //     ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-        //     ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Low, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
-        //     // No CT on this rail: Volt is its nominal rating, not a sample.
-        //     ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
-        // };
 
         // Full 13-channel rig (8x220V + 1x110V + 4xUSB, single mains PZEM).
         var fullRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
@@ -314,17 +282,17 @@ public class ApplicationDbContextInitialiser
 
         if (TestingRig)
         {
-            // The bench physically has two channels, and the firmware addresses
-            // them positionally: outletId 1..2 in every telemetry batch. The
+            // The bench physically has five channels, and the firmware addresses
+            // them positionally: outletId 1..5 in every telemetry batch. The
             // full-rig seed left those outlets at ids 1 and 2 but also seeded
-            // nine more rows the bench has no channel for, so the testing rig
+            // eleven more rows the bench has no channel for, so the testing rig
             // takes the table over wholesale: delete every outlet row
             // (telemetry cascades) and re-seed in spec order, which renumbers
-            // the channels 1..2.
+            // the channels 1..5.
             //
             // The reset is one-shot: it only runs while the stored rows do not
             // already match the testing spec exactly (same rows, same order,
-            // ids 1..2). A restart after a live bench session must never wipe
+            // ids 1..5). A restart after a live bench session must never wipe
             // the device's live status, load or telemetry history.
             // Restored by flipping TestingRig back to false.
             var existing = await _context.Outlets.OrderBy(o => o.Id).ToListAsync();
@@ -336,11 +304,21 @@ public class ApplicationDbContextInitialiser
             if (!matches)
             {
                 _context.Outlets.RemoveRange(existing);
+                await _context.SaveChangesAsync();
 
-                foreach (var spec in testingRigSpecs)
+                // Insert with explicit Ids 1..5 in the same statement batch.
+                // Postgres identity columns accept explicit values, so no
+                // renumber UPDATE is needed — the previous CASE-based renumber
+                // collided with itself (23505) whenever fresh sequence ids
+                // overlapped the 1..5 targets mid-statement. The firmware sends
+                // outletId 1..5 positionally, so Id must equal channel number
+                // or Guard.Against.NotFound silently drops every reading.
+                for (var i = 0; i < testingRigSpecs.Length; i++)
                 {
+                    var spec = testingRigSpecs[i];
                     _context.Outlets.Add(new Outlet
                     {
+                        Id = i + 1,
                         Name = spec.Name,
                         Role = spec.Role,
                         MeterChannel = "PZEM-01 · mains bus",
@@ -357,29 +335,14 @@ public class ApplicationDbContextInitialiser
 
                 await _context.SaveChangesAsync();
 
-                // Postgres identity sequences do not rewind, so the fresh rows
-                // come back numbered after the deleted ones. The firmware sends
-                // outletId 1..2 positionally, so Id must equal channel number or
-                // Guard.Against.NotFound silently drops every reading. Telemetry
-                // cascaded away with the old rows, so nothing references the old
-                // ids and the renumbering is safe. Raw SQL because EF does not
-                // expose identity reseeding.
-                var renumber = new StringBuilder("UPDATE \"Outlets\" SET \"Id\" = CASE \"RelayChannel\" ");
-                for (var i = 0; i < testingRigSpecs.Length; i++)
-                {
-                    renumber.Append("WHEN '").Append(testingRigSpecs[i].Relay).Append("' THEN ").Append(i + 1).Append(' ');
-                }
-
-                renumber.Append("END WHERE \"RelayChannel\" IN (");
-                renumber.Append(string.Join(", ", testingRigSpecs.Select(s => $"'{s.Relay}'")));
-                renumber.Append(");");
-
-                await _context.Database.ExecuteSqlRawAsync(renumber.ToString());
+                // Rewind the identity sequence past the explicit ids so later
+                // operator-added outlets do not collide with 1..5. Raw SQL
+                // because EF does not expose identity reseeding.
                 await _context.Database.ExecuteSqlRawAsync(
                     "SELECT setval(pg_get_serial_sequence('\"Outlets\"', 'Id'), (SELECT COALESCE(MAX(\"Id\"), 0) FROM \"Outlets\"), true);");
 
                 _logger.LogInformation(
-                    "Testing rig active: reset {Count} outlet rows so channels renumber 1-2.", existing.Count);
+                    "Testing rig active: reset {Count} outlet rows so channels renumber 1-5.", existing.Count);
             }
         }
 
@@ -444,15 +407,15 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 2x220V outlets (CH1-CH2) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT. P_limit is capped at 600 W until 31 Oct 2026.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 480 W warning threshold.", Severity = EventSeverity.Success },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 4x220V outlets (CH1-CH4) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT, plus 1xUSB 5V rail (CH5) that is monitored only and has no relay. P_limit is capped at 1200 W until 31 Oct 2026.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 960 W warning threshold.", Severity = EventSeverity.Success },
                 new PowerEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow,
                     Title = "Priority-based load shedding armed",
-                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 300 W allowance cap), CH2 Important (tier 2, shed first). " +
-                        "P_limit 600 W; overload must persist 3 consecutive batches before anything is shed. " +
-                        "Restoration resumes only below the 540 W recovery limit (600 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
+                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 300 W allowance cap), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3), CH5 USB 5V Nonessential (tier 4, shed first - though it relieves the least real load because its figure is a residual of the INA226 mains total). " +
+                        "P_limit 1200 W; overload must persist 3 consecutive batches before anything is shed. " +
+                        "Restoration resumes only below the 1080 W recovery limit (1200 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
                         "Tier 1 is never shed automatically; an overload that survives every eligible shed raises an alarm instead of being assumed safe. " +
                         "This is prototype software control, not a substitute for fuses and breakers.",
                     Severity = EventSeverity.Info,

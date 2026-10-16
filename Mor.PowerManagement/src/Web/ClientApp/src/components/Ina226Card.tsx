@@ -193,6 +193,21 @@ export function Ina226Card({ reading, live, now }: Ina226CardProps) {
           </>
         )}
       </p>
+
+      {/*
+        What this card feeds, stated once and always — including when the card is
+        unmeasured, because "these are 0 because nothing was measured" and "these
+        0 are what the USB row is currently showing" are the same failure twice.
+        CH5 has no CT and no converter of its own, so the volts/amps pair on that
+        row comes from here and from nowhere else; CH1-CH4 derive their branch
+        amps against this bus reference. The card sits directly above the roster
+        and used to say nothing about the branches that depend on it, which left
+        four rows and one USB row reading as if they were independent of it.
+      */}
+      <p className="ina-note num">
+        Feeds outlet 5 (USB 5 V) — the only volts and amps pair that row has — and is the 220 V bus
+        reference behind outlets 1–4.
+      </p>
     </section>
   )
 }

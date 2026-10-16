@@ -22,12 +22,13 @@ public class Dashboard : IEndpointGroup
         public const string State = "dashboard:state";
     }
 
-    // Testing rig: 2 wired channels (MUST_READ.md, until 31 Oct 2026).
+    // Testing rig: 4x220V wired channels + 1xUSB 5V monitored rail
+    // (CH1-CH5) - MUST_READ.md, until 31 Oct 2026.
     // Restore to 13 with the full rig.
-    // FUTURE 4+USB: ->5
-    // Next bump is this one line only: every validation and error string below
-    // interpolates MaxChannels, so 1..2 -> 1..5 needs no other edit here.
-    private const int MaxChannels = 2;
+    // DONE: the 4+USB bump (2 -> 5) landed with the five-row testing rig seed.
+    // Every validation and error string below interpolates MaxChannels, so the
+    // next bump (5 -> 13) is this one line only.
+    private const int MaxChannels = 5;
 
     public static void Map(RouteGroupBuilder groupBuilder)
     {
@@ -125,7 +126,7 @@ public class Dashboard : IEndpointGroup
     }
 
     // Accepts whitespace, duplicates and any order (E5); rejects anything
-    // non-numeric, outside the rig's 1..2 channel range, or longer than the rig.
+    // non-numeric, outside the rig's 1..5 channel range, or longer than the rig.
     private static bool TryParseChannels(string value, out IReadOnlyList<int> ids, out string error)
     {
         ids = Array.Empty<int>();

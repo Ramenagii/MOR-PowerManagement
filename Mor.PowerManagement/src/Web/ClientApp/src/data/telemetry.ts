@@ -26,11 +26,8 @@ export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
   '7d': null,
 }
 
-/** Testing rig: 2 wired channels (MUST_READ.md, until 31 Oct 2026). */
-export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 2 }, (_, i) => i + 1)
-
-// FUTURE 4+USB: change the length above to 5 to restore the full bench. CHANNEL_COLORS
-// already carries CH1-CH5 (mains ramp + the violet USB rail), so nothing else changes.
+/** Testing rig: 4 wired mains channels + the monitored-only USB rail (MUST_READ.md, until 31 Oct 2026). */
+export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 5 }, (_, i) => i + 1)
 
 /**
  * Width of the dashboard's history strip, in seconds.
@@ -45,10 +42,16 @@ export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 2 }, (_, i) => i +
 export const HISTORY_SPAN_SECONDS = 300
 
 /**
- * Grouped by rail so the chart reads structurally rather than as arbitrary
- * hues: blue/teal ramp for the 220 V outlets, violet for the 5 V USB rail.
- * The bench currently wires CH1-CH2 only; the rest are retained so the full rig
- * restores without touching this table. All are >= 3:1 against
+ * Mapped by channel id, so the same channel keeps its colour between the chart,
+ * the legend and the policy view. Hues follow the RAIL: a blue/teal ramp for
+ * the 220 V mains outlets, amber for the 110 V outlet, violet for the 5 V USB
+ * rails. Index order and rail order are not the same thing on this bench —
+ * CH5 is the USB rail and sits in the middle of the mains ramp because it is the
+ * fifth channel — so read the label, not the position, when telling them apart.
+ *
+ * CH5 is violet on purpose. It was mains blue while it was a paper channel, and
+ * when the bench grew to five that would have drawn the one branch that cannot
+ * be shed in the same ink as the four that can. All are >= 3:1 against
  * --surface-container-lowest #ffffff, and none reads as --primary #0059c2 when
  * used as a fill.
  */
@@ -57,12 +60,12 @@ export const CHANNEL_COLORS: string[] = [
   '#0a8f6a', // CH2  mains
   '#3f7fbf', // CH3  mains
   '#0f9bb5', // CH4  mains
-  '#4a6fa5', // CH5  mains
-  '#1f7a4d', // CH6  mains
-  '#5c8ac4', // CH7  mains
-  '#2aa198', // CH8  mains
-  '#b26a00', // CH9  110 V
-  '#7a4fb5', // CH10 USB 5 V
+  '#7a4fb5', // CH5  USB 5 V
+  '#4a6fa5', // CH6  mains
+  '#1f7a4d', // CH7  mains
+  '#5c8ac4', // CH8  mains
+  '#2aa198', // CH9  mains
+  '#b26a00', // CH10 110 V
   '#9a4f9e', // CH11 USB 5 V
   '#5f5fb5', // CH12 USB 5 V
   '#8c5a3c', // CH13 USB 5 V
@@ -108,14 +111,15 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
     tone: 'simulated',
     banner:
       'Simulated — not measured. The ESP32 synthesises these readings (SIMULATE_METERS = 1). ' +
-      'Per-channel volts are nominal ratings (CH1–CH2 220 V). Current is derived as P/V; per-channel ' +
-      'watts are the mains total distributed across energized channels by allowance.',
+      'Per-channel volts are nominal ratings (CH1–CH4 220 V, CH5 5 V USB). Current is derived as P/V; ' +
+      'per-channel watts are the mains total distributed across energized channels by allowance.',
   },
   Metered: {
     tone: 'measured',
     banner:
       'One INA226 on the common mains feed reads volts and the total; each branch CT behind an ADS1015 ' +
-      'reads its own current. CH1–CH2 volts are the rated 220 V rail. Per-channel current and watts are ' +
+      'reads its own current on CH1–CH4. CH5 is a 5 V USB socket with no CT, so it carries no current ' +
+      'reading of its own. Per-channel current and watts are ' +
       'derived by distributing the measured mains total across energized channels, weighted by allowance. ' +
       'An estimation method for DSM research, not revenue-grade metering.',
   },
@@ -126,7 +130,7 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
 }
 
 export const VOLTS_CAPTION_METERED =
-  'CH1–CH2 carry the rated 220 V mains rail; the INA226 total on the common feed is what the branch current is referenced against.'
+  'CH1–CH4 carry the rated 220 V mains rail; the INA226 total on the common feed is what the branch current is referenced against.'
 
 export const VOLTS_CAPTION =
   'The channel reports its rated rail, not a live sample, so the line is flat. It still counts toward P_total.'

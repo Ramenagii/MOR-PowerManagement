@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import {
   ApiError,
+  fetchDashboardState,
   fetchTelemetrySeries,
   type TelemetrySeries,
   type TelemetryWindow,
@@ -50,9 +51,23 @@ const CHART_TABS: Array<{ id: ChartTabId; label: string }> = [
 /** Matches POLL_INTERVAL_MS in data/telemetry so both views agree on "now". */
 const STALE_AFTER_ATTEMPTS = 3
 
-/** Rig thresholds. FR-05 warns, FR-06 sheds. Not the 1,500 W mock. */
-const WARNING_WATTS = 480
-const TRIP_WATTS = 600
+/** Rig thresholds from GET /Dashboard/state (FR-05 warns, FR-06 sheds). Null until
+ * the backend answers — rules hide instead of falling back to a constant. */
+const [limits, setLimits] = useState<{ warning: number; critical: number } | null>(null)
+
+useEffect(() => {
+  let cancelled = false
+  fetchDashboardState()
+    .then((snapshot) => {
+      if (!cancelled) setLimits({ warning: snapshot.thresholds.warning, critical: snapshot.thresholds.critical })
+    })
+    .catch(() => {
+      if (!cancelled) setLimits(null)
+    })
+  return () => {
+    cancelled = true
+  }
+}, [])
 
 const CHART_W = 1000
 const CHART_H = 280
@@ -231,12 +246,14 @@ export function TelemetryView() {
   const domainMax = useMemo(() => {
     const present = seriesFor.filter((v): v is number => v !== null && Number.isFinite(v))
     const dataMax = present.length ? Math.max(...present) : 0
-    // Threshold rules always join the domain so they are never off-screen.
-    return Math.max(dataMax, activeTab === 'watts' ? TRIP_WATTS : 0) * 1.12 || 1
-  }, [seriesFor, activeTab])
+    // Threshold rules join the domain when the backend has answered, so they
+    // are never off-screen. Offline there are no rules to draw.
+    const trip = limits?.critical ?? 0
+    return Math.max(dataMax, activeTab === 'watts' ? trip : 0) * 1.12 || 1
+  }, [seriesFor, activeTab, limits])
 
-  const warnValue = activeTab === 'watts' ? WARNING_WATTS : null
-  const tripValue = activeTab === 'watts' ? TRIP_WATTS : null
+  const warnValue = activeTab === 'watts' ? limits?.warning ?? null : null
+  const tripValue = activeTab === 'watts' ? limits?.critical ?? null : null
 
   const histogram = useMemo(() => {
     const present = values.filter((v): v is number => v !== null && Number.isFinite(v))
@@ -423,7 +440,7 @@ export function TelemetryView() {
           value={formatValue(stats.max, 0)}
           unit="W"
           foot={peakIndex >= 0 ? `Peak surge at ${utcStamp(series?.timestamps[peakIndex]).slice(0, 5)}` : 'No peak reported'}
-          warn={stats.max !== null && stats.max >= WARNING_WATTS}
+          warn={stats.max !== null && limits !== null && stats.max >= limits.warning}
         />
         <StatCard
           label="Std Dev (Σ)"

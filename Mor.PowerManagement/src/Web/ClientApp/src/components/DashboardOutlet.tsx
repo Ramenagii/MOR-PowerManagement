@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import type { Outlet } from '../types/dashboard'
-import { relayGpio } from '../data/dashboard'
+import { DASHBOARD_TIPS, isMonitoredOnlyChannel, relayGpio } from '../data/dashboard'
 import { isEnergizedOutlet } from '../utils/dashboard'
 import { buildPath } from './DashboardHero'
 
@@ -42,9 +42,18 @@ const TAG_CLASS: Record<Outlet['priority'], string> = {
  * it used; it is never presented as a direct CT reading. With no live volts
  * there is no honest value for either half of the pair, and the row says 0
  * rather than quoting the rated rail back as if it had been measured.
+ *
+ * CH5 is the one row that is not a controlled channel. It is a 5 V USB socket
+ * with no relay behind it, so it renders the same five columns — a bench reads
+ * as one list, and a USB socket that looks like a different product from a mains
+ * outlet is a worse answer than one that says plainly what it is — but the
+ * switch is disabled with the reason on it. A control that cannot write must not
+ * look writable, and POSTing a disconnection for a branch with no relay would
+ * return a success that changed nothing on the bench.
  */
 export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
-  const on = live && isEnergizedOutlet(outlet.status)
+  const monitorOnly = isMonitoredOnlyChannel(outlet.id)
+  const on = live && (monitorOnly || isEnergizedOutlet(outlet.status))
 
   const peak = useMemo(() => {
     let max = 0
@@ -87,24 +96,42 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   // from a real 220.0 V sample, and the reason a dead converter still produced a
   // plausible-looking dashboard. With no live reference the pair now reads 0 and
   // the tooltip says why.
+  //
+  // CH5 derives from the same INA226 bus sample and no other source, because it
+  // has no converter of its own. The tooltip on that row says the volts are the
+  // bus it is fed from and not a sample taken at the socket, so the 5 V rail is
+  // never mistaken for a 220 V measurement.
   const voltsLive = live && mainsVolts !== null && mainsVolts > 0
   const shownVolts = voltsLive ? mainsVolts : 0
   const amps = voltsLive && effWatts > 0 ? effWatts / shownVolts : 0
   const wattsText = Math.round(effWatts).toLocaleString()
   const vaText = `${shownVolts.toFixed(1)} V · ${amps.toFixed(2)} A`
 
+  const vaTitle = monitorOnly
+    ? DASHBOARD_TIPS.usb
+    : voltsLive
+      ? 'Live INA226 mains volts; branch amps derived as P / V at PF 1'
+      : 'No fresh INA226 bus volts, so there is no reference to derive against and the rated rail is deliberately not substituted — both figures read 0'
+
   return (
     <article
       className={`mp-card row ${on ? '' : 'off'}`}
-      aria-label={`${outlet.name}, ${on ? 'energized' : 'open'}, ${wattsText} watts`}
+      aria-label={`${outlet.name}, ${monitorOnly ? 'monitored only, no relay' : on ? 'energized' : 'open'}, ${wattsText} watts`}
     >
       {/* 1 — identity + priority tag */}
       <div className="idcol">
         <b>{`${`CH${String(outlet.id).padStart(2, '0')}`} · ${outlet.name}`}</b>
-        <div className="meta num" title={`Relay ${outlet.relay} on ${relayGpio(outlet.id)}`}>
-          {relayGpio(outlet.id)}
+        <div className="meta num" title={monitorOnly ? DASHBOARD_TIPS.usb : `Relay ${outlet.relay} on ${relayGpio(outlet.id)}`}>
+          {monitorOnly ? '5 V USB · monitored' : relayGpio(outlet.id)}
         </div>
-        <span className={`tag ${TAG_CLASS[outlet.priority]}`} title={`Shed order: ${outlet.priority} priority`}>
+        <span
+          className={`tag ${TAG_CLASS[outlet.priority]}`}
+          title={
+            monitorOnly
+              ? `${outlet.priority} priority on the rail, but there is no relay to shed: the framework ranks it first and can do nothing with it`
+              : `Shed order: ${outlet.priority} priority`
+          }
+        >
           {outlet.priority}
         </span>
       </div>
@@ -115,7 +142,7 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
           {wattsText}
           <small>W</small>
         </div>
-        <div className="va num" title={voltsLive ? 'Live INA226 mains volts; branch amps derived as P / V at PF 1' : 'No fresh INA226 bus volts, so there is no reference to derive against and the rated rail is deliberately not substituted — both figures read 0'}>
+        <div className="va num" title={vaTitle}>
           {vaText}
         </div>
       </div>
@@ -180,19 +207,34 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
       </div>
 
       {/* 5 — switch */}
+      {/*
+        Disabled on CH5, and disabled for its own reason rather than sharing the
+        "backend unreachable" one: that reason would be wrong, and an operator
+        retrying an unreachable server to bring a socket up would be chasing a
+        fault that does not exist. `aria-pressed` is omitted rather than set,
+        because a control that cannot be pressed has no pressed state to report —
+        the row's rail and the label above the switch already say the branch is
+        powered and unswitchable.
+      */}
       <button
         type="button"
         className="sw"
-        aria-pressed={on}
-        aria-label={`${on ? 'Disconnect' : 'Activate'} ${outlet.name}`}
-        title={
-          live
-            ? on
-              ? `POST /api/Dashboard/outlets/${outlet.id}/disconnection`
-              : `POST /api/Dashboard/outlets/${outlet.id}/activation`
-            : 'Backend unreachable — no command can be dispatched'
+        aria-pressed={monitorOnly ? undefined : on}
+        aria-label={
+          monitorOnly
+            ? `${outlet.name} is monitored only and has no relay to switch`
+            : `${on ? 'Disconnect' : 'Activate'} ${outlet.name}`
         }
-        disabled={!live || busy}
+        title={
+          monitorOnly
+            ? 'Monitored-only channel: no relay is fitted behind the USB socket, so there is nothing to activate or disconnect.'
+            : live
+              ? on
+                ? `POST /api/Dashboard/outlets/${outlet.id}/disconnection`
+                : `POST /api/Dashboard/outlets/${outlet.id}/activation`
+              : 'Backend unreachable — no command can be dispatched'
+        }
+        disabled={monitorOnly || !live || busy}
         onClick={() => onToggle(outlet.id)}
       />
     </article>

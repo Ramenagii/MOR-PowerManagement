@@ -1,4 +1,5 @@
 import type { RelayStateInput, TelemetrySampleInput } from '../api'
+import { isMonitoredOnlyChannel } from '../data/dashboard'
 import type { Outlet, Priority } from '../types/dashboard'
 
 /**
@@ -19,11 +20,20 @@ import type { Outlet, Priority } from '../types/dashboard'
 const HIGH_PRIORITY: Priority[] = ['High', 'Critical']
 
 /**
- * Channel that carries the POL-04 overload injection. CH1 exists in both the
- * 2-outlet and the 4+USB rig, so one value covers the whole demo.
+ * Channels that carry a relay, in roster order. This is what the activation
+ * stagger counts: CH5 is not one of them, so it is neither staggered in as a
+ * newly activated branch nor ever named as a switchable one.
+ */
+const SWITCHABLE_CHANNEL_COUNT = 4
+
+/**
+ * Channel that carries the POL-04 overload injection. CH1 exists on this rig
+ * and on every rig it grew into, so one value covers the whole demo.
  *
- * FUTURE: retarget if CH1 becomes critical infra — pick a branch the engine is
- * allowed to shed, and keep the value 1 otherwise.
+ * Retarget if CH1 becomes critical infra — pick a branch the engine is allowed
+ * to shed, and keep the value 1 otherwise. `buildScenarioPayload` drops the
+ * injection if this is ever pointed at a monitored-only channel rather than
+ * posting 900 W into a socket that cannot be shed.
  */
 const OVERLOAD_CHANNEL = 1
 
@@ -85,17 +95,35 @@ export function buildScenarioPayload(
   const readings: TelemetrySampleInput[] = []
   const relayStates: RelayStateInput[] = []
 
+  // A monitored-only channel has no relay to open, so it can never be the target
+  // of an injection. Resolved once here rather than trusted from the profile, so
+  // a retargeted OVERLOAD_CHANNEL fails by posting nothing instead of posting
+  // 900 W onto a 5 V socket. Outlet ids are 1-based, so -1 cannot collide.
+  const overloadChannel = isMonitoredOnlyChannel(profile.overloadChannel) ? -1 : profile.overloadChannel
+
   outlets.forEach((outlet, index) => {
-    const energized = !profile.shed.includes(outlet.id)
+    // CH5 is monitored, not switched. Its relay report is pinned closed whatever
+    // a profile asks for, because the firmware pins it too: a batch that claimed
+    // the USB socket open would teach the server that a branch with no relay can
+    // be cut, and the next shed decision would be made on that fiction.
+    const monitorOnly = isMonitoredOnlyChannel(outlet.id)
+    const energizeable = !monitorOnly && !profile.shed.includes(outlet.id)
 
     // Stagger activation so each new channel is not switched on at the exact
     // same instant; this keeps the trace readable without faking the totals.
-    const isEnergized = energized && (index < 2 || profile.energize.includes(outlet.id))
+    // Counts the four mains branches, so the stagger widens with the bench
+    // instead of staying a two-channel courtesy on a five-channel rig. A branch
+    // inside the window is replayed as live whatever the roster last reported —
+    // that is what a baseline batch means — and it posts its own draw, so one the
+    // roster had open comes back closed at 0 W rather than pretending to load.
+    const isEnergized =
+      monitorOnly ||
+      (energizeable && (index < SWITCHABLE_CHANNEL_COUNT || profile.energize.includes(outlet.id)))
 
     let watts = 0
     if (isEnergized) {
       watts = outlet.watts * profile.loadFactor
-      if (outlet.id === profile.overloadChannel) watts += profile.overloadWatts
+      if (outlet.id === overloadChannel) watts += profile.overloadWatts
     }
 
     // Clamp to the server's accepted range (InclusiveBetween(0, 5000)) so an
@@ -166,12 +194,21 @@ export function overloadProfile(outlets: Outlet[]): ScenarioProfile {
  * Selective response (POL-05): shed the lowest-priority energized channels.
  * Ordering uses the same Low -> Critical rank the policies use.
  *
- * `count` stays 1 on purpose: it is safe for the 2-outlet rig and for the full
- * 4+USB bench, where shedding one Low-priority branch leaves the rest live.
+ * Monitored-only channels are filtered out first. CH5 is Low — the lowest rank
+ * on the bench — so without that filter it would be picked every time and the
+ * "shed" it received would be a relay report the hardware cannot make, leaving
+ * the mains branches drawing exactly what they drew before.
+ *
+ * `count` stays 1 on purpose: it is safe on this bench and on the wider one, and
+ * shedding one branch at a time is what the framework's stagger expects.
  */
 export function selectiveProfile(outlets: Outlet[], count = 1): ScenarioProfile {
   const candidates = outlets
-    .filter((outlet) => outlet.status === 'Active' || outlet.status === 'Standby')
+    .filter(
+      (outlet) =>
+        !isMonitoredOnlyChannel(outlet.id) &&
+        (outlet.status === 'Active' || outlet.status === 'Standby'),
+    )
     .sort((a, b) => priorityRankFor(a.priority) - priorityRankFor(b.priority))
     .slice(0, count)
     .map((outlet) => outlet.id)
@@ -189,13 +226,22 @@ export function selectiveProfile(outlets: Outlet[], count = 1): ScenarioProfile 
  * Standby/idle shutdown (POL-08): report the idle channels at near-zero draw
  * so the server's idle timer sees a genuine low-load period. The timer still
  * runs on the server's own clock; this only supplies the readings it reads.
+ *
+ * CH5 is excluded from the shed list for the same reason as in the selective
+ * profile, and it still reports its own reduced draw: the socket has no switch,
+ * so the honest simulation of an idle period is a rail that draws a little, not
+ * one that has been cut.
  */
 export function idleProfile(outlets: Outlet[]): ScenarioProfile {
   return {
     loadFactor: 0.05,
     energize: [],
     shed: outlets
-      .filter((outlet) => outlet.status === 'Standby' || outlet.watts <= 80)
+      .filter(
+        (outlet) =>
+          !isMonitoredOnlyChannel(outlet.id) &&
+          (outlet.status === 'Standby' || outlet.watts <= 80),
+      )
       .map((outlet) => outlet.id),
     overloadWatts: 0,
     overloadChannel: OVERLOAD_CHANNEL,

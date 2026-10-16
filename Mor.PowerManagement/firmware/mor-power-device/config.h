@@ -6,45 +6,39 @@
 // MOR power-management prototype — ESP32 edge controller.
 // Edit the values below for your bench, then compile and flash with:
 //   arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-//   arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
+//   arduino-cli upload -p COM12 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 // The board is an ESP32-S3 (WCH CH343 USB-serial). Using esp32:esp32:esp32
 // compiles but esptool refuses the flash with "This chip is ESP32-S3".
 // ---------------------------------------------------------------------------
 
-// Testing rig (MUST_READ.md, until 31 Oct 2026): 2x220V outlets, BOTH CT-metered
-// off the ADS1220. There is no USB channel on this rig any more - do not re-add
-// an unmetered outlet to fill the count: a channel with no sensor has no honest
-// reading to post (see the BRANCH_CT_COUNT note below).
-// Restore to 13 for the final rig: CH1-8 220V, CH9 110V, CH10-13 USB.
-#define OUTLET_COUNT 2
-
 // ---------------------------------------------------------------------------
-// FUTURE 4x220V + 1xUSB (5 channels) TEMPLATE — INERT, DO NOT UNCOMMENT HERE.
+// LIVE RIG (5 channels): 4x220V CT-metered outlets + 1x USB socket.
 // ---------------------------------------------------------------------------
-// This is the next rig step, written down so it is a mechanical edit rather than
-// a redesign. It changes NOTHING today: the values below are comments and the
-// active configuration stays at the 2-channel rig above. Do not "prepare" by
-// half-applying it - a half-applied 5-channel config posts readings for outlets
-// that do not exist.
+//   outletId 1..4  220 V mains outlets, one ZMCT103C CT each on the ADS1220
+//                  (AIN0, AIN1, AIN2, AIN3). Watts are derived from the CT
+//                  amps x the ONE mains voltage below, exactly as before.
+//   outletId 5     USB socket, MONITORED ONLY. No CT is fitted, and there is no
+//                  relay: the socket is never actuated by this firmware. Its
+//                  volts/amps/watts come straight off the INA226, which now
+//                  double-duties as the USB rail monitor and the mains voltage
+//                  reference (see the INA226 block below).
 //
-//   1. OUTLET_COUNT          2 -> 5
-//   2. BRANCH_CT_COUNT       2 -> 4      (4 CTs fitted; the USB outlet has none)
-//   3. RELAY_PINS            { 2, 1, <GPIO3>, <GPIO4>, <GPIO5> }
-//      Pick three GPIOs that are free on this board: NOT 8/9 (I2C), NOT 10-14
-//      (SPI), NOT 0/3/45/46 (strapping), NOT 19/20 (USB). The bracketed ones
-//      are placeholders, not recommendations - check the schematic first.
-//   4. CT_MUX[] in the .ino  uncomment the AIN2 / AIN3 entries (CH3, CH4)
-//   5. The USB outlet is outletId 5 and is UNMETERED: no CT is fitted, so it
-//      posts 0.0 A / 0.0 W and USB_RAIL_VOLTS (5.0f) as a LABEL ONLY - the
-//      voltage is never multiplied by anything. It must be posted as a
-//      deliberate zero, not derived as a residual: the INA226 is not on the
-//      mains feed, so no mains total exists here to subtract from, and a
-//      fabricated residual would be a lie in the telemetry.
-//   6. Re-seed the backend device/outlet rows on the LAN backend (see
-//      BACKEND_HOST below) so the dashboard has outlets 3, 4 and 5. The backend
-//      still carries the full 13-channel rig, so a stale seed will overwrite
-//      this one on start and the chart will disagree with the device.
+// Every outlet on this rig therefore has a real sensor behind it: CH1-4 behind
+// a CT, CH5 behind the INA226. Nothing is posted as a fabricated zero or a
+// residual.
+//
+// Tier roles (the backend seed must carry these so the priority logic and the
+// dashboard labels agree with the device; RULES_ENABLED is still 0, so the
+// firmware does not act on them yet):
+//   CH1  Critical     always-on load that must never be shed
+//   CH2  Important    shed only under real pressure
+//   CH3  Deferrable   shed first when the budget is tight
+//   CH4  Nonessential shed early, cheap to lose
+//   CH5  USB          Low / priority-only - monitored, never switched
+//
+// Restore to 13 for the final rig: CH1-8 220V, CH9 110V, CH10-13 USB.
 // ---------------------------------------------------------------------------
+#define OUTLET_COUNT 5
 
 // ---- Wi-Fi ----
 // Credentials live in NVS flash (written on first setup), so the repo never
@@ -149,18 +143,53 @@
 // pull-ups, verified by an actual bus scan.
 #define I2C_CLOCK_HZ 100000
 
-// ---- INA226: voltage REFERENCE only ----
-// MUST_READ.md section 12: on this rig the INA226 is NOT a mains power meter.
-// It is wired to a 24 V DC rail behind a divider, so its current and power
+// ---- INA226: USB rail monitor + mains voltage REFERENCE ----
+// MUST_READ.md section 12 still holds: the INA226 is NOT a mains power meter.
+// It sits on a 24 V DC rail behind a divider, so its current and power
 // registers read ~0 and must never be used as a mains total, as a P_total, or
-// as the basis for any channel's wattage (see the BRANCH_CT_COUNT note below).
-// Its only job is the bus voltage: 24.1 V at the pin x the divider below.
-// The INA226 senses at most 36 V, so it sits behind that divider by design.
+// as the basis for any CH1-4 channel's wattage (see the BRANCH_CT_COUNT note
+// below). Its current/power registers are NOT a USB load measurement either on
+// THIS wiring: outlet 5 posts the INA226's own bus volts and shunt current
+// because that is the only rail the socket shares with the sensor. If a USB
+// load is clamped on, the shunt current that appears on outlet 5 IS that load;
+// if the socket is on a different rail than the INA226 shunt, outlet 5 will
+// read that other rail's current - check the wiring before trusting an amps
+// figure on CH5.
+//
+// WHAT THE INA226 NOW DOES (5-channel rig), two jobs on one sensor:
+//   1. Mains reference. inaBusVoltage_V x INA226_MAIN_VOLT_DIVIDER is the single
+//      mains voltage that CH1-4 volts and CH1-4 watts are both derived from.
+//      UNCHANGED by the 5-channel expansion.
+//   2. USB rail monitor. outletId 5 posts volts = inaBusVoltage_V, amps =
+//      inaCurrent_A, watts = that product. It is the raw bus-pin reading, NOT
+//      the divided mains value: the divider exists to bring a 24 V rail under
+//      the INA226's 36 V limit, and applying it to a USB figure would report a
+//      5 V socket as ~47 V.
+//
+// IF THE INA226 IS REWIRED TO THE 5 V USB RAIL, TWO THINGS CHANGE AND ONE DOES
+// NOT. FLAGGED HERE, NOT APPLIED - the divider is left at its calibrated 9.46:
+//   - MUST CHANGE: INA226_MAIN_VOLT_DIVIDER would become ~1.0 (or whatever the
+//     new resistor ladder gives), and every CH1-4 volt and watt figure in the
+//     telemetry would be wrong by 9.46x until it was re-fitted. Re-calibrate
+//     with a multimeter on mains and on the 5 V rail together, in one pass.
+//   - MUST CHANGE: INA226_MAX_CURRENT_AMPS / INA226_SHUNT_OHM must be re-checked
+//     against the shunt actually in the USB path; a USB load will sit far below
+//     the 8 A full scale configured for the mains-side shunt.
+//   - DOES NOT CHANGE: the CH1-4 CT chain (ADS1220, ZMCT_CAL_FACTOR, the
+//     piecewise curve, the adaptive EMA). Current is measured by the CTs and is
+//     entirely independent of the INA226, so only the VOLTAGE multiplied against
+//     those amps would move.
+//
+// Until the divider is deliberately re-fitted, treat outlet 5 as a monitor of
+// whatever rail the INA226 is actually on and say so on the dashboard.
 #define INA226_ADDR 0x40
 // Bus-voltage divider ratio, calibrated on the bench. The INA226 reports 24.1 V
 // at its bus pin; mains measured 228 V with a multimeter, so 228 / 24.1 = 9.46.
 // Re-check with a multimeter after touching the resistor ladder and update this
 // one number — it is the only calibration constant in the voltage path.
+// DO NOT "fix" this to 1.0 to make the USB outlet read 5 V without doing the
+// mains re-calibration above; that single edit would make every CH1-4 watt in
+// the telemetry wrong by 9.46x.
 #define INA226_MAIN_VOLT_DIVIDER 9.46f
 
 // Shunt calibration, exactly as the validated bench sketch sets it: 8 A full
@@ -196,9 +225,8 @@
 // reference with gain 1 for +/-3.3 V. The library names below are ADS1220_WE
 // enum values, which is why this header must be included AFTER the library.
 #define ADS_PGA_GAIN ADS1220_GAIN_1
-// Normal mode tops out at 475 SPS, which cannot cover 2 x 600 samples inside
-// the 1 s sweep period. Turbo mode DR level 5 should be 2000 SPS, so a
-// two-channel pass (1200 conversions) was expected to take ~600 ms.
+// Normal mode tops out at 475 SPS, which cannot cover a 4 x 250 sample pass
+// inside the sweep period. Turbo mode DR level 5 should be 2000 SPS.
 //
 // MEASURED 2026-10-15: the pass takes ~1131 ms, i.e. ~940 us per conversion
 // (~1060 SPS), so either the DR field is not in force or each blocking read
@@ -304,34 +332,60 @@
 // smaller is smoothed (1 - ADAPTIVE_EMA_HISTORY old, ADAPTIVE_EMA_HISTORY new).
 #define ZMCT_ADAPTIVE_STEP_AMPS 0.015f
 #define ZMCT_ADAPTIVE_EMA_HISTORY 0.7f
-// Samples per channel per pass. At the ADS1220's 2000 SPS (ADS_DATA_RATE) 600
-// samples is ~300 ms, which is ~18 AC cycles at 60 Hz — long enough for the RMS
-// to mean something. Two channels per pass is ~600 ms, inside the 1 s period
-// below.
-#define ZMCT_DEDICATED_SAMPLES 600
-// Stack for the sampling task; it is pinned to core 0 so a full two-channel
+// Samples per channel per pass. WAS 600, sized for a 2-channel sweep.
+//
+// MEASURED 2026-10-15 on this ADC: one blocking single-shot conversion costs
+// ~940 us (the boot "[ADC] self-test" line prints the real figure on every
+// flash - re-read it). So a 600-sample window is ~564 ms PER CHANNEL: 2
+// channels fit the old 1 s sweep, 4 channels would need ~2.3 s and would leave
+// core 0 occupied almost continuously, which is the condition that starved
+// IDLE0 and rebooted the rig with a task watchdog abort (see sensorTask() in the
+// .ino).
+//
+// So the window is halved to 250 samples (~235 ms/channel, ~14 AC cycles at
+// 60 Hz - still a long enough window for an RMS to mean something) and the sweep
+// period below is doubled, which keeps the pass at ~940 ms against a 2 s
+// period: under the METER_INTERVAL_MS/2 guard, so the watchdog path never
+// engages on a healthy rig.
+//
+// The visible consequence of the 2 s period: branchAmps only refreshes every 2 s
+// while telemetry posts every 1 s, so the dashboard can show one repeated amps
+// frame between updates. That is a stale-but-true number, which is the honest
+// trade - the alternative is a sweep that overruns its own period and stops
+// posting altogether.
+#define ZMCT_DEDICATED_SAMPLES 250
+// Stack for the sampling task; it is pinned to core 0 so a full four-channel
 // pass cannot delay the serial output on core 1.
 #define SENSOR_TASK_STACK 4096
 #define SENSOR_TASK_PRIORITY 2
-// How many ADS1220 channels actually have a CT wired (0..4). CH1-CH2 on this
-// rig, and every outlet is measured: there is no unmetered channel, so there is
-// no fabricated reading to explain. If a channel is ever added without a CT, do
-// NOT derive its current as a residual (mains total minus the measured
-// branches): the INA226 is not on the mains feed (see the INA226 note above), so
-// no mains total exists here to subtract from, and a fabricated residual would
-// be a lie in the telemetry.
-#define BRANCH_CT_COUNT 2
+// How many ADS1220 channels actually have a CT wired (0..4). CH1-CH4 on this
+// rig, one CT each: AIN0, AIN1, AIN2, AIN3. The FIFTH outlet (outletId 5, the
+// USB socket) has no CT and never will - it is measured by the INA226, which
+// reports a real volts and a real amps rather than a fabricated zero. So
+// BRANCH_CT_COUNT is OUTLET_COUNT - 1 by construction, and the firmware posts
+// OUTLET_COUNT readings from BRANCH_CT_COUNT CT channels plus the INA226.
+//
+// If a channel is ever added without a CT, do NOT derive its current as a
+// residual (mains total minus the measured branches): the INA226 is not on the
+// mains feed (see the INA226 note above), so no mains total exists here to
+// subtract from, and a fabricated residual would be a lie in the telemetry.
+#define BRANCH_CT_COUNT 4
 // Per-branch overcurrent trip in amps RMS, evaluated by FR-03 on the board.
 #define BRANCH_OVERCURRENT_AMPS 5.0f
 
-// How often the sensor sweep runs. The RMS window is blocking by nature
-// (BRANCH_CT_COUNT channels x ~300 ms = ~600 ms for both), so it is
-// deliberately NOT run every loop iteration: core 0 would be occupied almost
-// continuously and telemetry would stutter. The main loop keeps spinning at full
-// speed between sweeps, and the dashboard still sees a fresh reading every
-// second. The sweep is on SPI and the INA226 on I2C, so the two no longer
-// contend for a bus (see the i2cMutex note in the .ino).
-#define METER_INTERVAL_MS 1000UL
+// How often the sensor sweep runs. WAS 1000 ms, sized for a 2-channel pass;
+// DOUBLED to 2000 ms with the 4-CT rig because each blocking channel window is
+// now ~235 ms (ZMCT_DEDICATED_SAMPLES), i.e. ~940 ms for all four. The RMS
+// window is blocking by nature, so the sweep is deliberately NOT run every loop
+// iteration: core 0 would be occupied almost continuously and telemetry would
+// stutter. The main loop keeps spinning at full speed between sweeps and the
+// dashboard still sees a reading on every telemetry batch. The sweep is on SPI
+// and the INA226 on I2C, so the two no longer contend for a bus (see the
+// i2cMutex note in the .ino).
+//
+// If this period ever needs to go back toward 1 s, ZMCT_DEDICATED_SAMPLES has to
+// come down with it - the pass duration, not the period, is what starves IDLE0.
+#define METER_INTERVAL_MS 2000UL
 
 // How often the INA226 is read. It is a VOLTAGE REFERENCE (see above), not a
 // power meter, so it does not need a fast sample rate: the mains voltage it
@@ -358,15 +412,21 @@
 // actually read on the bench).
 #define REPORT_METERING_MODE
 
-// ---- Relay outputs, one per outlet channel ----
-// Testing rig order: CH1-CH2 = the two 220 V outlets, CT-metered.
-// FUTURE 4+USB: this becomes { 2, 1, <GPIO3>, <GPIO4>, <GPIO5> } - see the
-// template next to OUTLET_COUNT for the full sequence.
-// GPIO 1 and 2 are the two relay channels wired on this board. Safe ESP32-S3
-// GPIOs: they clear the I2C pair (8, 9), the USB pair (19, 20), the strapping
-// pins (0, 3, 45, 46) and the SPI flash/PSRAM bank, and they clear the SPI bus
-// too (CS 10, MOSI 11, SCLK 12, MISO 13, DRDY 14) so no relay pin can be
-// pulled around by ADC traffic.
+// ---- Relay outputs, one per mains outlet channel ----
+// Live rig order: CH1-CH4 = the four 220 V outlets, CT-metered. CH5 = the USB
+// socket, which has NO RELAY: RELAY_PINS[4] is reserved but never driven (see
+// USB_OUTLET_NO_RELAY below).
+//
+// Exclusion banks this table has to clear on the ESP32-S3, all checked for the
+// pins in use:
+//   I2C   8, 9          (INA226 SDA/SCL)
+//   SPI   10-14         (ADS1220 CS/DRDY/SCLK/MISO/MOSI)
+//   strapping 0, 3, 45, 46
+//   USB-JTAG 19, 20
+//   GPIO 4, 5, 6 clear ALL of the above. They are ordinary GPIOs on the
+//   ESP32-S3 (not strapping, not ADC-only, not in the octal-PSRAM pin set,
+//   which the N16R8 module uses at 26-32 and 35-37), so nothing else on this
+//   board claims them.
 //
 // GPIO 1 CHECKED, NOT ASSUMED (2026-10-15): on the ESP32-S3 the strapping pins
 // are 0, 3, 45 and 46 only. GPIO 1 is an ordinary GPIO (ADC1_CH0), is not in
@@ -376,6 +436,17 @@
 // it is an ADC1 pin, so it cannot be sampled by ADC2 while ADC1 is busy; that
 // does not affect a digital output.
 //
+// VERIFY BEFORE POWERING: GPIO 4/5/6 were chosen from the exclusion banks above,
+// which is a correct-by-construction argument but NOT an observation of the
+// physical board. Until a relay is heard clicking on CH3 and CH4, actuation on
+// those two channels is UNVERIFIED: the firmware will drive the pins and report
+// pin=HIGH/LOW honestly either way, but only a meter across the contact (or the
+// CH3/CH4 CT current going to zero on a disconnect) proves a relay is really
+// attached to that pin. If the board headers are wired differently, change this
+// table and the RELAY_PIN_n aliases together - the static_asserts below exist
+// precisely because those two descriptions of the same wiring are the easiest
+// pair in this file to edit and forget the other one of.
+//
 // VOLTAGE: the ESP32-S3 drives 3.3 V. A 5 V relay module with a 4N35/PC817
 // input still pulls its coil in at 3.3 V (the opto LED threshold is ~1.2-1.4 V),
 // but a module whose series resistor was sized for 5 V delivers noticeably less
@@ -383,12 +454,31 @@
 // click, put a transistor or level shifter in front of it - or power the opto
 // from VCC with the ESP32 side pulled low - rather than raising the ESP32 pin,
 // which is not possible at 3.3 V anyway.
-static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 2, 1 };
+static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 2, 1, 4, 5, 6 };
 // Named single-outlet aliases, because the wiring order (board header) and the
 // channel order (dashboard CH1 first) are not the same thing and a bare
-// RELAY_PINS[i] index hides that. RELAY_PIN_1 -> CH1, RELAY_PIN_2 -> CH2.
+// RELAY_PINS[i] index hides that. RELAY_PIN_1 -> CH1, ..., RELAY_PIN_5 -> CH5.
 #define RELAY_PIN_1 2
 #define RELAY_PIN_2 1
+#define RELAY_PIN_3 4
+#define RELAY_PIN_4 5
+#define RELAY_PIN_5 6
+
+// ---- USB outlet (outletId 5) is MONITORED ONLY ----
+// The socket has no relay behind it on this rig, so index 4 of the arrays above
+// is a RESERVED PLACEHOLDER and nothing in the firmware drives it: setup() does
+// not pinMode it, applyRelays() skips it, syncConfig() ignores a backend
+// desiredStatus for channelId 5, and its reported relayClosed is pinned true.
+// That is deliberate and is the honest thing to post: claiming to switch a
+// socket that has no switch would let the dashboard show "disconnected" while
+// the USB load is still drawing current.
+//
+// 1 = the last channel (outletId OUTLET_COUNT) is monitored-only and is never
+// 0 = every outlet has a relay and the whole table is driven.
+// If a relay IS later fitted behind the USB socket, set this to 0 and give it a
+// real pin - but do not reuse GPIO 6 as-is without confirming nothing else on
+// the board wants it.
+#define USB_OUTLET_NO_RELAY 1
 
 // NC (normally closed) contact wiring, as built on the bench:
 //   power PASSES while the relay coil is idle  (pin HIGH)
@@ -440,10 +530,11 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 2, 1 };
 #define OUTLET_STATUS_DISCONNECTED 3
 
 // ---- Manual switch inputs, raw rocker/switch caps (0 = not wired) ----
-// Neither switch is wired on this rig. 0 is a real "not connected" marker here,
-// not a channel number: GPIO 0 is a strapping pin and must never be used as a
-// switch input on the ESP32-S3.
-static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0 };
+// No switch is wired on this rig. 0 is a real "not connected" marker here, not a
+// channel number: GPIO 0 is a strapping pin and must never be used as a switch
+// input on the ESP32-S3. The USB socket (index 4) has no switch and no relay
+// either, so it is 0 like the rest.
+static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
 
 // ---- Local autonomy ----
 #define LOCAL_AUTO_SHED true
@@ -451,21 +542,46 @@ static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0 };
 #define SWITCH_DEBOUNCE_MS 50
 
 // ---- Consistency guards ----
-// These two descriptions of the same wiring are the easiest pair in this file to
+// These descriptions of the same wiring are the easiest pair in this file to
 // edit and forget the other one of, and a mismatch here means the telemetry and
 // the schematic disagree about which relay is which outlet.
 static_assert(RELAY_PIN_1 == RELAY_PINS[0], "RELAY_PIN_1 must match RELAY_PINS[0]");
 static_assert(RELAY_PIN_2 == RELAY_PINS[1], "RELAY_PIN_2 must match RELAY_PINS[1]");
-// Every outlet must be CT-metered on THIS rig: an unmetered channel has no
-// honest reading to post, and the 2-outlet rig has none by design. This is the
-// guard that will FAIL first when the 4+USB template above is applied - that is
-// intended. At that point, delete or rewrite this assert and restore the
-// unmetered USB outlet in the .ino; do not delete the rule and leave the guard.
-static_assert(BRANCH_CT_COUNT == OUTLET_COUNT,
-              "every outlet on this rig is CT-metered; no unmetered channels allowed");
+static_assert(RELAY_PIN_3 == RELAY_PINS[2], "RELAY_PIN_3 must match RELAY_PINS[2]");
+static_assert(RELAY_PIN_4 == RELAY_PINS[3], "RELAY_PIN_4 must match RELAY_PINS[3]");
+static_assert(RELAY_PIN_5 == RELAY_PINS[4], "RELAY_PIN_5 must match RELAY_PINS[4]");
+// Every outlet needs a real sensor. CH1-CH4 have a CT each; the USB socket
+// (outletId 5) is measured by the INA226 instead, so the CT count is one short
+// of the outlet count BY DESIGN and never equals it. The old guard
+// (BRANCH_CT_COUNT == OUTLET_COUNT) was the 2-channel rig's rule; it fails here
+// on purpose, because a 5th CT is not what fills that slot.
+static_assert(BRANCH_CT_COUNT == OUTLET_COUNT - 1,
+              "CH1-4 are CT-metered; outlet 5 is INA226-metered (monitored-only USB)");
+// No relay pin may collide with a sensor bus. These are the fixed wiring, not
+// choices, and a relay pin that lands on one of them takes the whole sensor
+// chain down with it - so the collision is made a compile error instead of a
+// bench mystery.
+static_assert(RELAY_PIN_1 != I2C_SDA_PIN && RELAY_PIN_1 != I2C_SCL_PIN,
+              "relay pin collides with the INA226 I2C bus");
+static_assert(RELAY_PIN_2 != I2C_SDA_PIN && RELAY_PIN_2 != I2C_SCL_PIN,
+              "relay pin collides with the INA226 I2C bus");
+static_assert(RELAY_PIN_3 != I2C_SDA_PIN && RELAY_PIN_3 != I2C_SCL_PIN,
+              "relay pin collides with the INA226 I2C bus");
+static_assert(RELAY_PIN_4 != I2C_SDA_PIN && RELAY_PIN_4 != I2C_SCL_PIN,
+              "relay pin collides with the INA226 I2C bus");
+static_assert(RELAY_PIN_3 != ADS1220_CS_PIN && RELAY_PIN_3 != ADS1220_DRDY_PIN &&
+              RELAY_PIN_3 != ADS1220_SCLK_PIN && RELAY_PIN_3 != ADS1220_MISO_PIN &&
+              RELAY_PIN_3 != ADS1220_MOSI_PIN,
+              "relay pin collides with the ADS1220 SPI bus");
+static_assert(RELAY_PIN_4 != ADS1220_CS_PIN && RELAY_PIN_4 != ADS1220_DRDY_PIN &&
+              RELAY_PIN_4 != ADS1220_SCLK_PIN && RELAY_PIN_4 != ADS1220_MISO_PIN &&
+              RELAY_PIN_4 != ADS1220_MOSI_PIN,
+              "relay pin collides with the ADS1220 SPI bus");
 // The telemetry loop, the relay loop and relayClosedDesired[] are all sized by
-// OUTLET_COUNT, and the FUTURE template tops out at 5 (4 CT + 1 USB). A larger
-// rig (the 13-channel final one) has to widen these deliberately, not by
-// truncation: reading past the end of relayClosedDesired[] would post a relay
-// state read from whatever is next in memory.
-static_assert(OUTLET_COUNT <= 5, "widen the arrays deliberately before exceeding the 4+USB template");
+// OUTLET_COUNT. A larger rig (the 13-channel final one) has to widen these
+// deliberately, not by truncation: reading past the end of relayClosedDesired[]
+// would post a relay state read from whatever is next in memory, and the
+// 13-channel rig needs 8 CT-metered channels, which this ADS1220 (4 inputs)
+// cannot supply.
+static_assert(OUTLET_COUNT <= 5, "widen the arrays deliberately before exceeding the 5-channel rig");
+static_assert(BRANCH_CT_COUNT <= 4, "the ADS1220 has 4 single-ended inputs (AIN0..AIN3)");

@@ -225,12 +225,18 @@ export function Dashboard({
           server's averaged reference, the card the converter's latest sample)
           and that fell back to the rated rail whenever the device had nothing
           fresh. One number, in one place, from one source.
+
+          The trailing count is the reason a row in this list cannot be switched:
+          four branches have a CT and a relay, the fifth is the USB rail and has
+          neither. The row itself says which is which, so this only has to make
+          the shape of the bench legible from across a room.
         */}
         <span className="num" title={DASHBOARD_TIPS.outlet}>
-          ADS1220 SPI · branch CT · INA226 bus
+          4 × 220 V · branch CT + relay · 1 × 5 V USB · monitored only
         </span>
       </h2>
-      <div aria-label="Controlled channels">
+      {/* Not "controlled channels": CH5 is in this list and has no control. */}
+      <div aria-label="Channels">
         {outlets.length === 0 ? (
           <div className="mp-card" style={{ padding: '18px 22px', color: 'var(--mute)' }}>
             <span className="num">Channel roster not loaded.</span>

@@ -1,32 +1,39 @@
 import type { EventLog, Outlet, Priority } from '../types/dashboard'
 
 // Testing rig values (MUST_READ.md, valid until 31 Oct 2026):
-// 2x220V outlets, P_limit capped at 600 W.
+// FIVE channels — four 220 V mains outlets (CH1-CH4) on one mains feed, plus a
+// 5 V USB socket (CH5) that has no relay behind it and is monitored only.
 //
-// FUTURE 4+USB: uncomment the extra baseOutlets entries below and set
-// RIG_CHANNEL_COUNT 5. The thresholds are NOT constants here any more: they are
-// configuration read from GET /Dashboard/state and edited through the Framework
-// admin, so the 2-outlet rig reads 600/480/600 and the full bench reads whatever
-// the operator saved (1200/960/1200). A copy of those numbers kept in the client
-// was a measurement the server never made.
+// The thresholds are NOT constants here: they are configuration read from
+// GET /Dashboard/state and edited through the Framework admin, so this rig reads
+// whatever the operator saved (1200/960/1200 as seeded). A copy of those numbers
+// kept in the client was a measurement the server never made, and it was the
+// number the meter and the warning/trip lines were drawn from.
 //
 // The seeded rig values themselves live in ApplicationDbContextInitialiser.cs —
 // change them together or the live dashboard will disagree with this roster.
-export const RIG_CHANNEL_COUNT = 2
+export const RIG_CHANNEL_COUNT = 5
 
 /**
  * Pre-first-response roster SHAPE. Not a measurement, not a simulation.
  *
  * This exists so the dashboard has something to lay out on the very first frame
  * and so the channel types stay exercised. Every field that could be read as a
- * reading is therefore zero and every relay is `Disconnected`:
+ * reading is therefore zero and every relay claims nothing:
  *
  *   - watts 0    — nothing has been metered. 260/180 W used to sit here, which
  *                  the hero summed into a confident 440 W before the backend had
  *                  answered a single request.
- *   - volts 0    — an UNRATED channel, not a 220 V rail that happens to read
- *                  zero. A rail is configuration; inventing one is not allowed.
- *   - Disconnected — no relay state has been reported, so none is claimed.
+ *   - volts      — a rail is CONFIGURATION, so a row carries only the one the rig
+ *                  specification names: 220 V on CH3/CH4 and the 5 V USB rail on
+ *                  CH5. CH1/CH2 stay unrated (0), exactly as they have always
+ *                  been. It does not leak into the console: the volts figure on
+ *                  every row comes from the live INA226 sample or reads 0, never
+ *                  from this field.
+ *   - Disconnected — no relay state has been reported, so none is claimed. CH5 is
+ *                  not an exception: the USB socket has no relay, so it is never
+ *                  "disconnected", only present. Standby is that fact — powered
+ *                  whenever the supply is up, with nothing to switch it off.
  *
  * GET /Dashboard/state replaces this array wholesale on the first successful
  * poll, so nothing here survives into a live frame.
@@ -60,53 +67,56 @@ export const baseOutlets: Outlet[] = [
     schedule: '08:00-18:00',
     idleLimit: '20 min',
   },
-  // FUTURE 4+USB: uncomment the three entries below to restore the full bench,
-  // then set RIG_CHANNEL_COUNT 5 above. They stay zeroed and Disconnected for the
-  // same reason the wired entries are: shape, not measurement.
-  // {
-  //   id: 3,
-  //   name: 'Outlet 3',
-  //   role: 'Lab instrument',
-  //   meter: 'PZEM-01 - mains bus',
-  //   relay: 'Relay CH3',
-  //   priority: 'High',
-  //   allowance: 300,
-  //   volts: 0,
-  //   watts: 0,
-  //   status: 'Disconnected',
-  //   schedule: '08:00-18:00',
-  //   idleLimit: '20 min',
-  // },
-  // {
-  //   id: 4,
-  //   name: 'Outlet 4',
-  //   role: 'Student workstation',
-  //   meter: 'PZEM-01 - mains bus',
-  //   relay: 'Relay CH4',
-  //   priority: 'Medium',
-  //   allowance: 300,
-  //   volts: 0,
-  //   watts: 0,
-  //   status: 'Disconnected',
-  //   schedule: 'Class hours',
-  //   idleLimit: '15 min',
-  // },
-  // {
-  //   id: 5,
-  //   name: 'USB 1',
-  //   role: 'USB charging 5V',
-  //   // Unmetered branch: the single mains INA226 covers CH1-CH4 only, so the USB
-  //   // rail reports its nominal rating and counts toward P_total.
-  //   meter: 'Not metered - nominal only',
-  //   relay: 'Relay CH5',
-  //   priority: 'Low',
-  //   allowance: 10,
-  //   volts: 5,
-  //   watts: 0,
-  //   status: 'Disconnected',
-  //   schedule: 'Class hours',
-  //   idleLimit: 'Exempt',
-  // },
+  {
+    id: 3,
+    name: 'Outlet 3',
+    role: 'Lab instrument',
+    meter: 'PZEM-01 - mains bus',
+    relay: 'Relay CH3',
+    priority: 'Medium',
+    allowance: 300,
+    volts: 220,
+    watts: 0,
+    status: 'Disconnected',
+    schedule: '08:00-18:00',
+    idleLimit: '20 min',
+  },
+  {
+    id: 4,
+    name: 'Outlet 4',
+    role: 'Student workstation',
+    meter: 'PZEM-01 - mains bus',
+    relay: 'Relay CH4',
+    priority: 'Medium',
+    allowance: 300,
+    volts: 220,
+    watts: 0,
+    status: 'Disconnected',
+    schedule: 'Class hours',
+    idleLimit: '15 min',
+  },
+  {
+    id: 5,
+    name: 'USB 1',
+    role: 'USB charging 5V',
+    // Unmetered branch. There is no CT clamped to the USB socket, so no reading
+    // on this row is ever a CT sample: the watts come from the server and the
+    // volts/amps pair is the INA226's own bus reading, both labelled as such on
+    // the row itself.
+    meter: 'Not metered - INA226 bus only',
+    relay: 'No relay - monitored only',
+    priority: 'Low',
+    allowance: 10,
+    volts: 5,
+    watts: 0,
+    // Standby, not Disconnected: see the note above. The seed in
+    // ApplicationDbContextInitialiser.cs agrees, and the firmware pins this
+    // channel's reported relayClosed to true so the rail can never be shown as
+    // switched off while something is still drawing from it.
+    status: 'Standby',
+    schedule: 'Class hours',
+    idleLimit: 'Exempt',
+  },
 ]
 
 /**
@@ -140,22 +150,49 @@ export const priorityRank: Record<Priority, number> = {
  * not wired in order: CH1 lands on GPIO2 and CH2 on GPIO1. GPIO1 was claimed
  * by the debug UART first, so the numbering runs backwards from the ids, and
  * an id-derived rule would swap the two and misreport which branch is live.
+ * CH3 and CH4 continue on GPIO4 and GPIO5 for the same reason — GPIO3 is a
+ * strapping pin on the ESP32-S3 and was left alone, so the pin column runs
+ * 2, 1, 4, 5 rather than 1, 2, 3, 4. `RELAY_PINS` in
+ * firmware/mor-power-device/config.h is the same list and the reason it looks
+ * like this; change the two together.
  *
  * "Closed" means the relay is passing current to the branch; "open" means the
  * branch is isolated. The API carries that as an OutletStatus, not as a pin
  * level, so the pin here names the wire and never claims to be a live reading.
  *
- * FUTURE 4+USB: add each branch's pin as it is wired. Do not derive it from the
- * channel id — the existing two entries are the proof that the order is not
- * sequential.
+ * CH5 has NO ENTRY and that absence is the fact, not a gap. The firmware
+ * reserves index 4 of its relay array and never drives it (USB_OUTLET_NO_RELAY
+ * = 1): no pinMode, no coil, nothing to switch. See MONITORED_ONLY_CHANNEL_IDS.
  */
 export const RELAY_GPIO: Record<number, string> = {
   1: 'GPIO2',
   2: 'GPIO1',
+  3: 'GPIO4',
+  4: 'GPIO5',
 }
 
 export function relayGpio(outletId: number): string {
   return RELAY_GPIO[outletId] ?? '—'
+}
+
+/**
+ * Channels with no relay behind them. Read by the row that renders the switch
+ * and by the scenario builders that post relay reports.
+ *
+ * CH5 is the USB socket. It is monitored, never switched, so three rules follow
+ * from that one fact and all three used to be violated separately:
+ *   - the row shows a disabled control with the reason, instead of a switch that
+ *     would dispatch a disconnection nobody can perform;
+ *   - a scenario never reports it open, because the firmware pins its
+ *     relayClosed to true and a batch that claimed otherwise would teach the
+ *     server that a socket can be cut;
+ *   - it is never nominated for an overload injection, because 900 W on a 5 V
+ *     rail is not a harsher version of the same scenario, it is a false one.
+ */
+export const MONITORED_ONLY_CHANNEL_IDS: readonly number[] = [5]
+
+export function isMonitoredOnlyChannel(outletId: number): boolean {
+  return MONITORED_ONLY_CHANNEL_IDS.includes(outletId)
 }
 
 // ---------------------------------------------------------------------------
@@ -263,31 +300,38 @@ export const UNAVAILABLE = '—'
  * class stops. CH2 is Important — demo equipment can be interrupted without
  * ending the session, but it should not be the first thing shed.
  *
- * FUTURE 4+USB: CH3 and CH4 appear here as planned assignments only. They are
- * listed so the Framework admin can show what the full bench is being built
- * toward, and they are rendered as DISABLED rows because the 2-outlet rig does
- * not wire them. When CH3-CH5 are added to the backend roster they arrive from
- * GET /Dashboard/state with their own stored priority and this table stops being
- * the source of truth for them — at which point delete the entries below.
+ * This used to be a build PLAN for channels the bench did not wire, which made
+ * it wrong the moment they were wired. It is now the priority-to-tier mapping the
+ * console labels a stored priority with, and CH3-CH5 are in it because they are
+ * on the bench: the live roster carries Critical / High / Medium / Medium / Low,
+ * so CH3 and CH4 are both Deferrable (tier 3) and CH5 is Nonessential (tier 4).
+ * CH4 is therefore Deferrable and not the Nonessential this file once planned
+ * for it — its stored priority is Medium, and the stored priority wins.
+ *
+ * The stored priority itself is never read from here: it arrives per channel
+ * from GET /Dashboard/state and is edited in the Framework admin.
  */
 export const TIER_PLAN: Record<number, 'Critical' | 'Important' | 'Deferrable' | 'Nonessential'> = {
   1: 'Critical',
   2: 'Important',
   3: 'Deferrable',
-  4: 'Nonessential',
+  4: 'Deferrable',
+  5: 'Nonessential',
 }
 
 /**
- * Branches the full bench is being built toward but the current rig does not
- * wire. Shown as disabled placeholders only — never as editable rows, because a
- * control that cannot write must not look writable.
+ * Branches the bench does not wire, shown as disabled placeholders by the
+ * Framework admin. EMPTY, and that is the correct state rather than a leftover:
+ * CH3 and CH4 were on this list until they were wired, and while they were still
+ * listed the admin table drew a live row and a "Not wired" row for the same
+ * channel side by side.
  *
- * FUTURE 4+USB: delete this list once those ids appear in the live roster.
+ * Still exported because PolicyAdminView maps over it: an empty list makes that
+ * view render no placeholder rows, which is exactly what a fully wired bench
+ * should show. Add an id here only when a channel is genuinely absent from
+ * GET /Dashboard/state, and remove it in the same pass that wires it.
  */
-export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'Nonessential'; volts: number }> = [
-  { id: 3, tier: 'Deferrable', volts: 220 },
-  { id: 4, tier: 'Nonessential', volts: 220 },
-]
+export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'Nonessential'; volts: number }> = []
 
 /**
  * Every explanation the dashboard used to print as a paragraph now lives here
@@ -304,7 +348,8 @@ export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'No
 export const DASHBOARD_TIPS = {
   total: 'Sum of every channel the policy engine currently reports as energized. Polled from GET /api/Dashboard/state.',
   headroom: 'Margin between the live total and the critical threshold the server reports. Read as a dash until that threshold has been read.',
-  energized: 'Relays the policy engine currently reports as closed, over the wired channel count on this bench.',
+  energized:
+    'Relays the policy engine currently reports as closed, over the channel count this bench reports. CH5 has no relay, so it is powered by definition and never moves that count.',
   pLimit: 'Configured master capacity as returned by GET /api/Dashboard/state. It is a setting, not a reading, and it is never assumed.',
   rail:
     'The rail keeps a fixed 0-P_limit domain so the load looks the same size every minute and movement stays comparable. Columns are recorded buckets from the 15 min window; the bright marker is the live state reading, which is fresher than the newest column.',
@@ -316,6 +361,8 @@ export const DASHBOARD_TIPS = {
     'Bus volts, current and power read straight off the INA226 on the common mains feed. The shunt figure is the millivolts across its 100 mV shunt, which is what the current reading is actually made of. Past 30 s the sample is treated as unmeasured.',
   outlet:
     'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. The volts shown is the live INA226 mains reading and the amps are derived from it; with no fresh bus volts the pair reads 0 rather than falling back to the rated rail.',
+  usb:
+    'CH5 is a 5 V USB socket with no relay behind it — the firmware reserves the pin and never drives it — so the rail is monitored and never switched. Its volts/amps pair is the INA226 bus reading it is fed from, not a sample taken at the socket, and the switch is disabled because there is nothing to dispatch.',
   relay:
     'Closed passes current to the branch; open isolates it. The API reports this as an outlet status, not as a pin level.',
   amps:
@@ -354,9 +401,11 @@ export type SimVector = {
 }
 
 /**
- * The six prescribed defense-demo vectors. The intent/expectation prose is kept
- * verbatim from the original scenario panel; it now reaches the operator
- * through a tooltip on an icon-only button rather than as a card per vector.
+ * The six prescribed defense-demo vectors. The intent/expectation prose comes
+ * from the original scenario panel; it now reaches the operator through a
+ * tooltip on an icon-only button rather than as a card per vector, and SIM-05
+ * and SIM-06 have since been reworded where CH5 changed what the builder can
+ * honestly promise.
  */
 export const SIM_VECTORS: readonly SimVector[] = [
   {
@@ -406,7 +455,7 @@ export const SIM_VECTORS: readonly SimVector[] = [
     icon: 'priority',
     name: 'Selective response',
     intent:
-      'Sheds the lowest-priority energized channel, ordered by the same Low → Critical rank the policy engine uses.',
+      'Sheds the lowest-priority energized channel, ordered by the same Low → Critical rank the policy engine uses. CH5 is excluded whatever its priority: it is the lowest of all and it has no relay to open.',
     expectation: "Load drops by exactly the shed channel's contribution. The remainder stays energized.",
     endpoint: 'POST /api/Dashboard/scenarios/ingest',
   },
@@ -415,7 +464,7 @@ export const SIM_VECTORS: readonly SimVector[] = [
     icon: 'standby',
     name: 'Idle timeout cutoff',
     intent:
-      'Reports the low-draw channels at 5% of their draw and closes their relays, so the server\'s idle timer sees a genuine low-load period.',
+      'Reports the low-draw channels at 5% of their draw and closes their relays, so the server\'s idle timer sees a genuine low-load period. CH5 reports its reduced draw and is never reported open, because it has no relay to close.',
     expectation:
       "The idle timer runs on the server's own clock. This vector supplies the readings it reads; it cannot shorten the wait.",
     endpoint: 'POST /api/Dashboard/scenarios/ingest',

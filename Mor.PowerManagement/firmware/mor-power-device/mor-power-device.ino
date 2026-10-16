@@ -27,22 +27,35 @@
   worst print or report one odd sample.
 
   Hardware
-    INA226  0x40   voltage REFERENCE only: it sits on a 24 V DC rail behind a
-                   divider, so it is NOT a mains power meter and its current /
-                   power registers are not a mains total (MUST_READ.md
-                   section 12). Its only job here is the mains voltage.
-    ADS1220 SPI   24-bit ADC, one ZMCT103C per mains branch (CH1-CH2).
+    INA226  0x40   voltage REFERENCE + USB rail monitor: it sits on a 24 V DC
+                   rail behind a divider, so it is NOT a mains power meter and
+                   its current / power registers are not a mains total (MUST_READ
+                   _Read section 12). Two jobs: (a) bus volts x 9.46 = the one
+                   mains voltage every CH1-4 volt and watt is derived from;
+                   (b) the raw bus volts + shunt current are what outletId 5
+                   (the USB socket) posts as its volts and amps. If it is ever
+                   rewired to the 5 V rail the divider must be re-fitted -
+                   config.h flags it, and the divider is deliberately NOT changed.
+    ADS1220 SPI   24-bit ADC, one ZMCT103C per mains branch (CH1-CH4).
                    CS = GPIO 10, DRDY = GPIO 14, SCLK = 12, MISO = 13,
                    MOSI = 11. Single-ended against AVSS, AVDD as VREF.
     I2C     SDA = GPIO 8, SCL = GPIO 9  (I2C_SDA_PIN / I2C_SCL_PIN), INA226
             only. The CT channels are on SPI, so the two sensors no longer
             share a bus.
-    RELAY   CH1 = GPIO 2, CH2 = GPIO 1 (RELAY_PINS)
+    RELAY   CH1 = GPIO 2, CH2 = GPIO 1, CH3 = GPIO 4, CH4 = GPIO 5 (RELAY_PINS).
+            CH5 = the USB socket: NO RELAY, monitored only - nothing drives it.
 
   Channels
-    CH1-CH2  220 V mains outlets, both CT-metered (BRANCH_CT_COUNT channels).
-             Every outlet is metered: there is no unmetered/USB channel left to
-             fabricate a reading for.
+    CH1-CH4  220 V mains outlets, CT-metered (BRANCH_CT_COUNT = 4). Watts are
+             amps x the single mains voltage from the INA226, exactly as before.
+    CH5      USB socket, outletId 5. No CT and no relay. Volts = INA226 bus V,
+             amps = INA226 shunt A, watts = their product. It is a real
+             measurement of a real rail, not a fabricated zero and not a
+             residual - see the residual warning below.
+
+  Tiers (must match the backend seed; RULES_ENABLED is 0 so nothing acts yet)
+    CH1 Critical | CH2 Important | CH3 Deferrable | CH4 Nonessential
+    CH5 USB - Low / priority-only
 
   Flash
     arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
@@ -79,23 +92,22 @@ ADS1220_WE ads1220(&SPI, ADS1220_CS_PIN, ADS1220_DRDY_PIN,
 // 2.5 V-biased AC ripple referenced to ground, with no negative excursion to
 // pair it with, so AINx/AVSS is the correct comparison (not AINx/AIN0).
 //
-// Sized for 4 (the ADS1220's full single-ended input count) so the future
-// 4-CT rig needs NO change to this table's shape - only the two commented
-// entries and BRANCH_CT_COUNT. The inactive slots hold a sentinel instead of a
-// real input: if someone raises BRANCH_CT_COUNT without uncommenting the entries
-// below, the sweep reads the internal reference rather than a CT and the mV RMS
-// collapses to ~0 - an obviously broken chain, not two channels silently
-// reporting the same AIN1.
+// Sized for 4 (the ADS1220's full single-ended input count) and NOW FULLY
+// POPULATED: the 4-CT rig is live, so every slot below is a real input and the
+// ADS1220_MUX_UNUSED sentinel is gone. The sentinel existed so that raising
+// BRANCH_CT_COUNT without filling the table would read the internal reference
+// and collapse the mV RMS to ~0 - an obviously broken chain rather than two
+// channels silently reporting the same AIN1. That protection is now provided by
+// the static_assert below, which fails at COMPILE time instead: if a slot were
+// ever left unfilled or BRANCH_CT_COUNT were raised above the fitted CTs, the
+// build stops instead of posting a fabricated reading.
 //
 // Channel mapping: CH1 -> AIN0, CH2 -> AIN1, CH3 -> AIN2, CH4 -> AIN3.
-#define ADS1220_MUX_UNUSED ADS1220_MUX_REFPX_REFNX_4   // "no CT fitted here" sentinel
 static const ads1220Mux CT_MUX[4] = {
   ADS1220_MUX_0_AVSS,   // CH1 -> AIN0 (fitted, active)
-//ADS1220_MUX_2_AVSS,   // CH3 -> AIN2 (future 4-CT rig)
   ADS1220_MUX_1_AVSS,   // CH2 -> AIN1 (fitted, active)
-//ADS1220_MUX_3_AVSS,   // CH4 -> AIN3 (future 4-CT rig)
-  ADS1220_MUX_UNUSED,   // slot 3: no CT on this rig
-  ADS1220_MUX_UNUSED,   // slot 4: no CT on this rig
+  ADS1220_MUX_2_AVSS,   // CH3 -> AIN2 (fitted, active)
+  ADS1220_MUX_3_AVSS,   // CH4 -> AIN3 (fitted, active)
 };
 static_assert(BRANCH_CT_COUNT <= 4, "ADS1220 has 4 single-ended inputs");
 
@@ -119,25 +131,33 @@ struct ZmctReading {
   float amps;           // millivoltsRms / 1000 x ZMCT_CAL_FACTOR (A per V)
 };
 
-// There is deliberately no UNMETERED outlet on THIS rig: both outlets have a CT
-// behind them, and a phantom channel posting 0.0 A / 0.0 W is a number that
-// looks like a measurement on the dashboard but is not one. That is why nothing
-// is posted for outletId 3: it does not exist.
+// The USB outlet (outletId 5) is MONITORED, not fabricated.
 //
-// FUTURE 4x220V + 1xUSB (5-channel rig - see the template at the top of
-// config.h). Inert today; nothing below is compiled:
-//#define UNMETERED_USB_OUTLET_ID (BRANCH_CT_COUNT + 1)   // 5 on the 4+USB rig
-//#define USB_RAIL_VOLTS 5.0f                            // LABEL ONLY, never multiplied
-// ...and then post it in postTelemetry() as 0.0 A / 0.0 W at USB_RAIL_VOLTS, and
-// print it as UNMETERED in printSerialTelemetry(). Deliberately NOT a residual:
-// the INA226 is not on the mains feed, so there is no total to subtract from.
+// It has no CT - the ADS1220's four inputs are all taken by CH1-CH4 - and it
+// used to have no sensor at all, which is why the 2-channel rig posted nothing
+// rather than posting a zero. It is not in that position any more: the INA226
+// measures the rail the socket is on, so outletId 5 posts the sensor's OWN
+// volts and amps. That is a real measurement, not a placeholder.
 //
-// Expansion checklist (all four, in order - a partial application posts
-// readings for outlets that do not exist):
-//   1. bump OUTLET_COUNT 2->5 and BRANCH_CT_COUNT 2->4 in config.h
-//   2. extend RELAY_PINS with the three new GPIOs (+ RELAY_PIN_3/4/5 aliases)
-//   3. uncomment the AIN2/AIN3 CT_MUX entries and the USB stub above
-//   4. re-seed the backend device/outlet rows on the LAN backend (config.h)
+// Deliberately NOT a residual (mains total minus the measured branches): the
+// INA226 is not on the mains feed, so there is no mains total here to subtract
+// from, and a fabricated residual would be a lie in the telemetry. The volts
+// posted are the RAW INA226 bus-pin reading, NOT busV x INA226_MAIN_VOLT_DIVIDER
+// - that divider exists to pull a 24 V rail under the INA226's 36 V limit, and
+// applying it here would report a USB socket as ~228 V. config.h documents what
+// has to change if the sensor is ever moved onto the 5 V rail (the divider must
+// be re-fitted; it is deliberately left at 9.46).
+#define USB_OUTLET_ID (BRANCH_CT_COUNT + 1)      // 5
+// The USB socket must be the LAST outlet, because isMonitoredOnly() and every
+// index calculation below key off OUTLET_COUNT - 1. If that ever stops being
+// true the firmware would skip a real relay and report the socket as cut, so
+// the build stops instead.
+static_assert(USB_OUTLET_ID == OUTLET_COUNT,
+              "the monitored-only USB outlet must be the last outletId");
+// Watts for the USB outlet: the product of the two INA226 figures, taken from
+// the SAME dataMutex hold as the volts and amps they were read with, so
+// powerWatts == currentAmps * voltage holds exactly here as it does on CH1-CH4.
+static inline float usbWatts(float busV, float amps) { return busV * amps; }
 
 // Relay DESIRED state, one entry per outlet: true = contact closed = power ON.
 // This is the single source the telemetry reports from AND the state the pins
@@ -145,15 +165,30 @@ struct ZmctReading {
 // in. Nothing actuates it yet (RULES_ENABLED 0, no switch inputs fitted), so it
 // boots all-true and only a future FR rule or a wired manual switch will clear
 // a bit. NC contacts: closed == HIGH == RELAY_POWER_ON_LEVEL.
-bool relayClosedDesired[OUTLET_COUNT] = { true, true };
+//
+// The USB entry is forced true and is NOT driven to a pin (USB_OUTLET_NO_RELAY):
+// there is no relay behind the socket, so it can only ever report CLOSED.
+bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true, true };
 
 // The outlet status ORDINAL the backend last sent for each channel, and a
 // counter used to throttle the "config synced" line (config sync runs at
 // CONFIG_INTERVAL_MS, which is fast enough to flood the console). Purely
 // diagnostic - nothing acts on these, they exist so a mismatch between the
 // backend's view and the device's view is visible on the bench.
-int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1 };
+int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
 uint32_t syncCount = 0;
+
+// True for the one outlet that is monitored only and has no relay behind it.
+// The index arithmetic (OUTLET_COUNT - 1) assumes the USB socket is the LAST
+// channel; config.h static_asserts that assumption cannot be violated silently.
+static inline bool isMonitoredOnly(uint8_t idx) {
+#if USB_OUTLET_NO_RELAY
+  return idx == (OUTLET_COUNT - 1);
+#else
+  (void)idx;
+  return false;
+#endif
+}
 
 // Drives every relay pin to its desired state. Called at boot, after every
 // config sync, and before each telemetry batch, so the state the backend is
@@ -161,13 +196,25 @@ uint32_t syncCount = 0;
 // merely intended). RELAY_OUTPUT_ENABLED gates only the pin write: the desired
 // state is still tracked and still reported when it is 0, so the dashboard
 // never sees a silent device claim a relay state it is not enforcing.
+//
+// The monitored-only channel (the USB socket) is SKIPPED: RELAY_PINS[idx] there
+// is a reserved placeholder, not a wired relay, and driving it would switch a
+// pin that goes nowhere while the dashboard implied the socket had been cut.
 void applyRelays() {
 #if RELAY_OUTPUT_ENABLED
   for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    if (isMonitoredOnly(i)) continue;
     digitalWrite(RELAY_PINS[i],
                  relayClosedDesired[i] ? RELAY_POWER_ON_LEVEL : RELAY_POWER_OFF_LEVEL);
   }
 #endif
+  // A monitored-only outlet can never be open. Forcing the bit here rather than
+  // only at post time means every reader of relayClosedDesired[] - serial, sync,
+  // telemetry - sees the same thing, so there is no path that can report the
+  // socket as cut.
+  for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    if (isMonitoredOnly(i)) relayClosedDesired[i] = true;
+  }
 }
 
 // Cross-core Shared Sensor Variables
@@ -199,8 +246,9 @@ float inaPower_W = 0.0;
 bool ina226Present = false;
 bool ads1220Present = false;
 
-// Per-branch CT current, index 0 = CH1 (ADS1220 AIN0/AVSS) .. index 1 = CH2
-// (ADS1220 AIN1/AVSS).
+// Per-branch CT current, index 0 = CH1 (ADS1220 AIN0/AVSS) .. index 3 = CH4
+// (AIN3/AVSS). The USB socket (outletId 5) is NOT in this array: it has no CT
+// and its current is the INA226's, posted separately from inaCurrent_A.
 // Watts are deliberately NOT stored per branch: storing them beside the amps
 // they came from is what let the firmware publish a voltage and a wattage
 // derived from two different mains readings. They are computed from amps and
@@ -318,7 +366,11 @@ void setup() {
     ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
     Serial.print("INA226  OK  (0x");
     Serial.print(INA226_ADDR, HEX);
-    Serial.println(") - mains voltage reference active");
+    Serial.print(") - mains voltage reference active (divider x");
+    Serial.print(INA226_MAIN_VOLT_DIVIDER);
+    Serial.print(") + outletId ");
+    Serial.print(USB_OUTLET_ID);
+    Serial.println(" USB rail monitor (raw busV/shuntA, NOT divided)");
   } else {
     Serial.print("Error: INA226 module not detected at 0x");
     Serial.println(INA226_ADDR, HEX);
@@ -333,13 +385,43 @@ void setup() {
   // is written before the level precisely so the pin is an output when it is
   // driven HIGH - a pin left as a floating input would let the coil state be
   // undefined, and undefined is not an acceptable state for 220 V.
+  //
+  // The monitored-only channel (the USB socket) is skipped entirely: its
+  // RELAY_PINS entry is a reserved placeholder with no relay behind it, and
+  // pinMode-ing it would make a spare GPIO an output driven high for no reason.
   for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    if (isMonitoredOnly(i)) continue;
     pinMode(RELAY_PINS[i], OUTPUT);
     digitalWrite(RELAY_PINS[i], RELAY_POWER_ON_LEVEL);
   }
   // Then enforce the desired state (all-true on this rig) from one place, so
   // boot and steady state cannot disagree.
   applyRelays();
+
+  // ---- Relay GPIO table, printed once at boot ----
+  // The single place the wiring is visible on the bench. It exists because
+  // GPIO 4/5/6 were chosen from the ESP32-S3 exclusion banks (not strapping,
+  // not USB-JTAG 19/20, not I2C 8/9, not SPI 10-14, not in the octal-PSRAM
+  // pin set), which is a correct-by-construction argument and NOT an
+  // observation of the physical board. If a relay does not click on CH3/CH4,
+  // this line is what gets corrected - change RELAY_PINS here in config.h and
+  // the RELAY_PIN_n aliases with it, then reflash.
+  Serial.print("[RELAY] pins:");
+  for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
+    Serial.print(" CH"); Serial.print(i + 1); Serial.print("=GPIO");
+    Serial.print(RELAY_PINS[i]);
+    if (isMonitoredOnly(i)) Serial.print("(MONITORED-ONLY,no relay)");
+  }
+  Serial.println();
+  Serial.print("[RELAY] tiers: CH1 Critical | CH2 Important | CH3 Deferrable | "
+               "CH4 Nonessential | CH5 USB Low/priority-only");
+  Serial.println();
+  Serial.print("[RELAY] CH3 (GPIO");
+  Serial.print(RELAY_PIN_3);
+  Serial.print(") and CH4 (GPIO");
+  Serial.print(RELAY_PIN_4);
+  Serial.println(") are UNVERIFIED against the physical wiring until a relay is");
+  Serial.println("[RELAY]   heard clicking / the CT current drops on a disconnect.");
 
   // ---- ADS1220: 24-bit SPI ADC for the ZMCT103C CT sensors ----
   // init() brings up SPI on the remapped pins, resets the ADC and verifies it
@@ -410,8 +492,11 @@ void setup() {
     Serial.print(" V (AVDD-calibrated) | single-shot | window=");
     Serial.print(ZMCT_DEDICATED_SAMPLES);
     Serial.print(" samples/channel | opmode+DR=ADS_OP_MODE/ADS_DATA_RATE (turbo, 2000 SPS)");
-    Serial.print(" | channels="); Serial.print(BRANCH_CT_COUNT);
-    Serial.print(" | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
+    Serial.print(" | CT channels="); Serial.print(BRANCH_CT_COUNT);
+    Serial.print(" (AIN0..AIN"); Serial.print(BRANCH_CT_COUNT - 1);
+    Serial.print(") | outlets="); Serial.print(OUTLET_COUNT);
+    Serial.print(" (CH1-4 CT + CH"); Serial.print(USB_OUTLET_ID);
+    Serial.print(" USB on INA226) | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
     Serial.println(" s");
 
     // Hand the measured per-conversion cost to the sweep so it can bound itself
@@ -717,10 +802,14 @@ void printSerialTelemetry() {
   }
 
   Serial.println("==================================================");
-  Serial.print("[INA226 DC] Bus: "); Serial.print(inaV, 3);
+  Serial.print("[INA226] Bus: "); Serial.print(inaV, 3);
   Serial.print(" V | Shunt: "); Serial.print(inaShunt, 3);
   Serial.print(" mV | Current: "); Serial.print(inaI, 3);
   Serial.print(" A | Power: "); Serial.print(inaP, 3); Serial.println(" W");
+  Serial.print("[INA226] mains = bus x "); Serial.print(INA226_MAIN_VOLT_DIVIDER);
+  Serial.print(" = "); Serial.print(mainsV, 1);
+  Serial.print(" V (CH1-4 reference) | outlet "); Serial.print(USB_OUTLET_ID);
+  Serial.println(" USB uses the RAW bus V, not this divided value");
   Serial.println("--------------------------------------------------");
   // The grid voltage printed here is the one every watt below was multiplied
   // by, taken from the same snapshot as the amps.
@@ -738,12 +827,25 @@ void printSerialTelemetry() {
     // "pin=LOW" is what the hardware has. If the relay module is active-LOW
     // (RELAY_ACTIVE_LEVEL_INVERTED in config.h) those two disagree, and this
     // line is how that gets noticed on a bench with no one listening for a
-    // click.
+    // click. On CH3/CH4 the same readback is how a missing relay is noticed:
+    // the pin will read exactly as commanded whether or not a module is
+    // attached to it, so only the CT current proves the wiring.
     Serial.print("="); Serial.print(digitalRead(RELAY_PINS[ch]) ? "HIGH" : "LOW");
     Serial.println();
   }
-  // No UNMETERED line any more: every outlet on this rig has a CT behind it, so
-  // there is nothing honest to print for a channel with no sensor.
+  // ---- outletId 5: the USB socket, monitored on the INA226 ----
+  // Printed separately from the CT block because it is NOT a CT reading and
+  // comes from a different sensor on a different bus. It has no relay, so
+  // there is deliberately no "desired=/pin=" clause: there is nothing to
+  // switch, and claiming otherwise would be the firmware lying about hardware
+  // it does not have.
+  Serial.print("  CH"); Serial.print(USB_OUTLET_ID);
+  Serial.print(" (INA226, no CT) -> ");
+  Serial.print(inaV, 3);
+  Serial.print(" V | "); Serial.print(inaI, 3);
+  Serial.print(" A | "); Serial.print(usbWatts(inaV, inaI), 2);
+  Serial.print(" W | relay: NONE (monitored-only, always CLOSED) | tier: Low/priority-only");
+  Serial.println();
 
 #if ZMCT_CALIBRATION_MODE
   // ---- CT calibration helper (config.h ZMCT_CALIBRATION_MODE 1) ----
@@ -779,6 +881,17 @@ void printSerialTelemetry() {
     Serial.print("[CAL] ZMCT_CAL_FACTOR = "); Serial.print(ZMCT_CAL_FACTOR, 4);
     Serial.print(" A/V   ZMCT_CAL_REF_WATTS = "); Serial.print(ZMCT_CAL_REF_WATTS, 1);
     Serial.println(" W  (0 = no reference load applied, so no suggestion is printed)");
+    // The channel->input map, once, so a NO SIGNAL on CH3/CH4 can be told apart
+    // from a channel that is mapped to the wrong AINx. All four CT channels are
+    // live now; outletId 5 is deliberately absent from this table because the
+    // USB socket has no CT and is measured by the INA226 instead.
+    Serial.print("[CAL] CT channels = ");
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      Serial.print(" CH"); Serial.print(ch + 1); Serial.print("->AIN"); Serial.print(ch);
+      if (ch + 1 < BRANCH_CT_COUNT) Serial.print(",");
+    }
+    Serial.print(" | outlet "); Serial.print(USB_OUTLET_ID);
+    Serial.println(" = USB socket on INA226 (no CT, no relay) - NOT part of this calibration");
     Serial.println("[CAL] PROCEDURE: clamp ONE known load onto ONE branch, measure its");
     Serial.println("[CAL]   watts with a meter, put that number in ZMCT_CAL_REF_WATTS");
     Serial.println("[CAL]   (config.h) and reflash. Read 'suggested=' below, then write");
@@ -788,7 +901,7 @@ void printSerialTelemetry() {
     Serial.println("[CAL] NO SIGNAL means a wiring/sensor fault, not a factor fault.");
   }
   // The chain itself is throttled to 1 Hz. printSerialTelemetry() runs at 4 Hz,
-  // and 2 channels of full chain at 4 Hz buries the boot line, the INA226 line
+  // and 4 channels of full chain at 4 Hz buries the boot line, the INA226 line
   // and the telemetry result in the very log this mode exists to read.
   if ((calPrintTick++ % 4) == 0) {
     for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
@@ -836,9 +949,10 @@ String backendUrl(const char* path) {
   return url;
 }
 
-// One batch per second. Both outlets carry their measured CT current against
-// the one shared mains voltage. There is no third reading and no unmetered
-// filler: every posted outletId is a channel with a sensor behind it.
+// One batch per second. CH1-CH4 carry their measured CT current against the one
+// shared mains voltage; outletId 5 (the USB socket) carries the INA226's own bus
+// volts and shunt current. Every posted outletId is a channel with a real sensor
+// behind it - no zeros, no residuals.
 bool postTelemetry() {
   float amps[BRANCH_CT_COUNT];
   float mainsV;
@@ -886,7 +1000,12 @@ bool postTelemetry() {
   // measured. Values are posted raw - no divider, no averaging, no clamping -
   // because a GUI that re-derives them downstream cannot be wrong about which
   // is which. mainsVolts_V (= busV * INA226_MAIN_VOLT_DIVIDER) stays the basis
-  // for every branch watt; this block only reports the sensor behind it.
+  // for every CH1-4 watt; this block only reports the sensor behind it.
+  //
+  // Since the 5-channel expansion the same two figures are ALSO the outletId 5
+  // reading above (busV = its volts, currentA = its amps), which is why they are
+  // posted raw: the dashboard can show the USB socket's numbers and the sensor
+  // block side by side and they must match exactly.
   JsonObject ina = doc["ina"].to<JsonObject>();
   ina["busV"]     = inaBusV;      // V at the INA226 bus pin
   ina["shuntmV"]  = inaShunt;     // mV across the 10 mOhm shunt
@@ -905,9 +1024,26 @@ bool postTelemetry() {
     r["energyKwh"] = 0.0;                // no cumulative counter on this rig
     totalW += watts;
   }
-  // No extra entry after the loop: outletId 1..BRANCH_CT_COUNT is the whole
-  // rig, and totalW is the sum of every reading above it - it used to under-
-  // report by whatever a phantom USB channel drew.
+  // ---- outletId 5: the USB socket, measured by the INA226 ----
+  // volts = the RAW bus-pin reading, NOT mainsV and NOT busV x the divider. The
+  // divider (INA226_MAIN_VOLT_DIVIDER) is there to pull a 24 V rail under the
+  // INA226's 36 V limit; applying it to a USB figure would post ~228 V next to a
+  // real 5 V socket. watts = the product of these same two numbers, taken from
+  // the one hold they were both read under, so powerWatts == currentAmps *
+  // voltage holds here exactly as it does on CH1-CH4.
+  {
+    JsonObject u = readings.add<JsonObject>();
+    u["outletId"] = USB_OUTLET_ID;
+    u["voltage"] = inaBusV;
+    u["currentAmps"] = inaAmps;
+    u["powerWatts"] = usbWatts(inaBusV, inaAmps);
+    u["energyKwh"] = 0.0;                // no cumulative counter on this rig
+    // Counted in the total: it is a real measurement of a real rail, so
+    // excluding it would under-report the same way a phantom channel did.
+    totalW += usbWatts(inaBusV, inaAmps);
+  }
+  // No extra entry after the loop: outletId 1..BRANCH_CT_COUNT plus USB_OUTLET_ID
+  // is the whole rig, and totalW is the sum of every reading above it.
 
   // Push the desired contact states to the pins before reporting them, so the
   // state the backend is told about is the state the hardware is in when this
@@ -923,6 +1059,10 @@ bool postTelemetry() {
     // holds, which is the same array the pins are driven from, so the day a
     // rule clears a bit the dashboard cannot be told "closed" while the pin is
     // driven LOW. NC contacts: closed == HIGH == power present.
+    //
+    // The USB entry is pinned true by applyRelays() and reported here as such:
+    // it has no relay, so "closed" is not a claim about a switch state, it is a
+    // truthful "this outlet is not switched by this device".
     s["relayClosed"] = relayClosedDesired[i];
   }
 
@@ -1036,6 +1176,27 @@ bool syncConfig() {
       continue;
     }
     const uint8_t idx = (uint8_t)(channelId - 1);
+    // The USB socket (outletId 5) is monitored-only: it has no relay, so a
+    // desiredStatus for it cannot be honoured by this device. It is recorded
+    // and reported, then IGNORED - acting on it would either drive a
+    // placeholder pin to nowhere or, worse, let the dashboard show the socket
+    // as disconnected while its load is still drawing. Reporting a Disconnect
+    // that was NOT applied is the failure mode this guard exists to prevent, so
+    // it is stated explicitly on the bench instead of silently swallowed.
+    if (isMonitoredOnly(idx)) {
+      const int status = o["desiredStatus"] | -1;
+      if (status >= 0) lastDesiredStatus[idx] = (int8_t)status;
+      if (status == OUTLET_STATUS_DISCONNECTED) {
+        Serial.print("[RELAY] CH"); Serial.print(channelId);
+        Serial.println(" (USB socket) has no relay on this rig: desiredStatus="
+                       " DISCONNECTED recorded but NOT applied - this device cannot");
+        Serial.println("[RELAY]   switch the socket. Cut it at the socket, or fit a");
+        Serial.println("[RELAY]   relay and set USB_OUTLET_NO_RELAY 0 in config.h.");
+      }
+      relayClosedDesired[idx] = true;
+      channelsSeen++;
+      continue;
+    }
     // Missing or non-numeric desiredStatus means "no instruction", NOT "on".
     // Defaulting an absent command to CLOSED is how a shed would be undone by
     // the next poll.
@@ -1084,6 +1245,10 @@ bool syncConfig() {
     for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
       Serial.printf(" CH%u=%d(%s)", i + 1, lastDesiredStatus[i],
                     relayClosedDesired[i] ? "CLOSED" : "OPEN");
+      // Mark the channel the device is NOT switching, so a reader of this line
+      // does not read CH5's CLOSED as "the relay is closed" when no relay
+      // exists behind it.
+      if (isMonitoredOnly(i)) Serial.print("/no-relay");
     }
     Serial.println();
   }
