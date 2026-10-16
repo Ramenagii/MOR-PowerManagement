@@ -56,23 +56,13 @@ export const TIERS: TierSpec[] = [
   { id: 'Nonessential', priority: 'Low', blurb: 'Shed first. Safe to interrupt at any time.' },
 ]
 
-/**
- * Whether a tier carries its own per-outlet cap.
- *
- * A Critical branch is the one thing the framework exists to keep alive, so it
- * is given a headroom claim on the whole system rather than a private budget:
- * capping it would let a 100 W allowance strand it while unused watts sit on the
- * table. It therefore reports "no per-outlet cap — counts toward total" instead
- * of a number an operator would reasonably expect to be enforced.
- */
+/** Every tier has its own allowance, including Critical outlets. */
 export const TIER_HAS_OWN_CAP: Record<TierId, boolean> = {
-  Critical: false,
+  Critical: true,
   Important: true,
   Deferrable: true,
   Nonessential: true,
 }
-
-export const NO_CAP_NOTE = 'no per-outlet cap — counts toward total'
 
 export function tierOf(priority: Priority | undefined): TierId {
   const match = TIERS.find((tier) => tier.priority === priority)

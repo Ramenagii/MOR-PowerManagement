@@ -138,9 +138,8 @@ public static class LoadSheddingEngine
     }
 
     /// <summary>
-    /// Per-outlet cap assessment. Returns allowed when the branch's own
-    /// allowance is not exceeded, OR when the branch is the cap-exempt
-    /// highest-priority outlet.
+    /// Per-outlet allowance assessment. Priority never bypasses the configured
+    /// allowance under the current framework policy.
     /// <summary>
     public static ActivationAssessment AssessOutletAllowance(
         OutletLoadSnapshot outlet,
@@ -154,7 +153,7 @@ public static class LoadSheddingEngine
             return new ActivationAssessment(
                 ActivationVerdict.Allowed,
                 "POL-02",
-                $"{Display(outlet)} is the highest-priority outlet ({tier}): exempt from its per-outlet allowance cap, but still counted in P_total.");
+                $"{Display(outlet)} is exempt from its per-outlet allowance cap, but still counted in P_total.");
         }
 
         if (currentOutletWatts > outlet.AllowanceWatts)

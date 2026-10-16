@@ -68,15 +68,9 @@ public abstract class LoadSheddingSettings
     public const int InterReconnectDelaySeconds = 5;
 
     // ---- Per-outlet allowance --------------------------------------------
-    // The highest-priority outlet is exempt from its own allowance cap so the
-    // one outlet the operator has declared essential can never be capped out
-    // of service by the framework's own accounting.
-    //
-    // It is NOT exempt from P_total: it is still measured and still counted, so
-    // an essential outlet drawing the whole site still drives shedding of
-    // everything else and still drives the overload alarm. Exempt-from-cap is a
-    // statement about policy, exempt-from-measurement would be a safety hole.
-    public const bool CriticalTierIsCapExempt = true;
+    // Every outlet, including Critical, has an independently editable allowance.
+    // Priority controls shed order; it does not bypass that outlet's allowance.
+    public const bool CriticalTierIsCapExempt = false;
 
     // ---- Fault handling ---------------------------------------------------
     // A branch that reports no fresh reading is treated as UNKNOWN rather than

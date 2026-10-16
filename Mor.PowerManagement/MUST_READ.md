@@ -101,10 +101,14 @@ The bench has exactly four controlled AC outlets. The INA226 is connected to the
 
 | Channel | Hardware | Relay GPIO (ESP32-S3) | CT input | Voltage | Allowance |
 |---|---|---:|---|---:|---:|
-| CH1 | Outlet 1 | 1 | ADS1220 AIN0 | 238 V | 1100 W |
-| CH2 | Outlet 2 | 2 | ADS1220 AIN1 | 238 V | 1100 W |
-| CH3 | Outlet 3 | 4 | ADS1220 AIN2 | 238 V | 1100 W |
-| CH4 | Outlet 4 | 5 | ADS1220 AIN3 | 238 V | 1100 W |
+| CH1 | Outlet 1 | 1 | ADS1220 AIN0 | 238 V | 300 W |
+| CH2 | Outlet 2 | 2 | ADS1220 AIN1 | 238 V | 300 W |
+| CH3 | Outlet 3 | 4 | ADS1220 AIN2 | 238 V | 300 W |
+| CH4 | Outlet 4 | 5 | ADS1220 AIN3 | 238 V | 300 W |
+
+Per-outlet allowances are independently editable in Framework Admin and persist
+when the application restarts. Priority still controls shedding order; it does
+not exempt an outlet from its own allowance.
 
 - Firmware uses `OUTLET_COUNT 4`, `BRANCH_CT_COUNT 4`, and `RELAY_PINS[] = {1, 2, 4, 5}`.
 - INA226 uses its own I2C connection (SDA 8, SCL 9). Its readings are sent under the separate `ina` telemetry object, never as outlet ID 5.

@@ -38,17 +38,13 @@ public static class LoadTierMapper
     };
 
     /// <summary>
-    /// The one outlet whose own per-outlet allowance cap does not
-    /// apply: a tier-1 outlet, lowest outlet id breaking a tie. Deterministic on
-    /// purpose - an exemption that moved between calls would make activation
-    /// decisions non-reproducible.
+    /// The legacy exemption hook. Current framework settings keep per-outlet
+    /// allowances enabled for every tier, so this returns null.
     /// </summary>
     public static int? SelectCapExemptOutletId(IEnumerable<OutletLoadSnapshot> outlets)
     {
-        // Only tier 1 is ever exempt; a lower tier gets no exemption regardless
-        // of how it ranks against its neighbours, because "the best outlet on
-        // this rig" must not silently mean "whichever outlet happens to be
-        // least important".
+        // Retained for compatibility with the framework setting. The current
+        // four-outlet policy has no allowance-exempt tier.
         var tier1 = outlets
             .Where(o => ToTier(o.Priority) == LoadTier.Critical)
             .OrderBy(o => o.Id)
@@ -61,8 +57,8 @@ public static class LoadTierMapper
     }
 
     /// <summary>
-    /// Every outlet exempt from its own per-outlet cap. Normally a single tier-1
-    /// outlet; a tie is broken by lowest id so the set is deterministic.
+    /// Outlet IDs exempt from their own per-outlet allowance. Empty under the
+    /// current policy, where every tier has an allowance.
     /// </summary>
     public static IReadOnlyCollection<int> SelectCapExemptOutletIds(IEnumerable<OutletLoadSnapshot> outlets)
     {
@@ -76,10 +72,8 @@ public static class LoadTierMapper
     /// <para>
     /// Tier 1 (Critical) is never auto-shed, whatever P_total is: that is FR-09
     /// priority preservation, and it is a SEPARATE decision from the per-outlet
-    /// cap exemption above. Cap exemption is about the outlet's own allowance
-    /// accounting; shed eligibility is about what the framework is willing to
-    /// disconnect. Conflating them would mean either capping an essential
-    /// outlet or making an inessential outlet unshe-ddable.
+    /// allowance accounting; shed eligibility is about what the framework is
+    /// willing to disconnect. They remain separate decisions.
     /// </para>
     /// <para>
     /// Manual shed (the operator's own button) is unaffected - an operator can

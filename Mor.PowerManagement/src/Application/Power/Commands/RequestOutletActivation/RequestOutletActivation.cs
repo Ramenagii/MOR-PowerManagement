@@ -50,17 +50,15 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
 
         var total = LoadResponseEvaluator.TotalLoad(snapshots);
 
-        // Per-outlet allowance cap (FR-04 / FR-05, tier-aware). The tier-1
-        // outlet is exempt from its OWN cap - not from P_limit, which is
-        // checked separately below and still counts it.
+        // Per-outlet allowance cap (FR-04 / FR-05). Every tier is checked
+        // against its own allowance; priority only changes shed ordering.
         var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
         var allowance = LoadSheddingEngine.AssessOutletAllowance(
             new OutletLoadSnapshot(outlet.Id, outlet.Priority, outlet.Status, outlet.CurrentWatts, outlet.AllowanceWatts, outlet.LastSeen, outlet.Name),
             outlet.CurrentWatts,
             capExempt);
 
-        // Whole-system limit. Checked even for the cap-exempt outlet: "no
-        // per-outlet limit" must never read as "no limit at all".
+        // Whole-system limit is checked separately from the branch allowance.
         var systemLimit = LoadResponseEvaluator.AssessActivation(
             total, outlet.AllowanceWatts, config.CriticalThresholdWatts, outlet.Name);
 

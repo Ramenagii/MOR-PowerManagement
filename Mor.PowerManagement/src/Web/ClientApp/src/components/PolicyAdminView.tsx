@@ -22,7 +22,6 @@ import type { Outlet, Priority } from '../types/dashboard'
 import {
   PRIORITY_RANK,
   TIERS,
-  NO_CAP_NOTE,
   tierHasCap,
   tierOf,
   draftFrom,
@@ -1094,11 +1093,8 @@ export function PolicyAdminView() {
                     </td>
 
                     {/*
-                      Per-outlet cap. A Critical branch has no private budget by
-                      design — it draws on the whole-system ceiling instead, so
-                      the cell says so rather than showing a number that would
-                      look enforced and is not. The note replaces the input
-                      entirely, so the row height stays stable as tiers change.
+                      Each outlet has its own editable allowance, regardless of
+                      priority tier. Priority controls which outlet is shed first.
                     */}
                     <td className="px-3 py-2.5 align-middle">
                       {tierHasCap(tierOf(draft.priority)) ? (
@@ -1125,10 +1121,10 @@ export function PolicyAdminView() {
                       ) : (
                         <div
                           className="flex h-8 items-center rounded-md border border-dashed border-outline-variant bg-surface-container-low px-2"
-                          title="A Critical branch is protected rather than capped. It claims headroom on the whole-system limit instead of a private allowance, so unused capacity on other branches stays available to it."
+                          title="Every outlet has an editable allowance."
                         >
                           <span className="min-w-0 truncate font-code text-code text-outline">
-                            {NO_CAP_NOTE}
+                            Set an allowance
                           </span>
                         </div>
                       )}

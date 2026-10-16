@@ -26,8 +26,8 @@ public record OutletStateDto(
     // Thesis-facing tier, derived from Priority. Surfaced so the dashboard can
     // label tiers without re-implementing the mapping.
     LoadTier Tier,
-    // True for the single tier-1 outlet, which is exempt from its own
-    // per-outlet allowance cap but is still counted in P_total.
+    // Legacy policy flag. False for every outlet under the current framework
+    // settings; priority does not exempt an outlet from its allowance.
     bool PerOutletCapExempt,
     // True when the framework (not the operator) shed this branch, i.e. it is
     // on the staged-restoration ladder.

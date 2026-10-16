@@ -144,21 +144,14 @@ public class ApplicationDbContextInitialiser
         // 3520 W warning threshold on one realistic added load.
         // Thresholds are 80% / 100% of capacity, matching the full-rig ratios.
         //
-        // 1200/960/1200 -> 4400/3520/4400 (2026-10-16), adopted from the
-        // operator's reference sketch: totalWattageLimit 4400 W with 1100 W per
-        // outlet. Warning stays at exactly 80% of capacity (0.8 x 4400 = 3520).
+        // The live rig uses a 4400 W whole-system ceiling, with warning at 80%
+        // (3520 W). Each outlet separately starts with an editable 300 W
+        // allowance; changing a branch allowance does not change P_limit.
         //
         // WHAT THIS CHANGES ON THE BENCH, stated plainly: the seeded 567 W used
         // to sit at 47% of a 1200 W P_limit, i.e. the rig booted ALREADY inside
         // the warning band, and one ordinary added load tripped it. At 4400 W
-        // the same seed sits at 13% and the rig boots comfortably below warning,
-        // so FR-01..FR-12 now need a genuinely large added load to demonstrate
-        // a shed on this rig. That is the honest trade for matching the
-        // operator's real capacity: 1100 W per outlet x 4 outlets cannot be
-        // exceeded on this panel, so the per-outlet allowances (1100 W each,
-        // below) are what actually bind first, and the total is now a backstop
-        // rather than the primary constraint. Anyone demoing a system-wide shed
-        // needs a load approaching 4400 W, not a laptop.
+        // the same seed sits at 13% and the rig boots comfortably below warning.
         //
         // Note this is now BELOW the full-rig 4000 W capacity below, which is
         // correct and intentional: this four-outlet bench panel is rated 4400 W by
@@ -183,9 +176,8 @@ public class ApplicationDbContextInitialiser
         // disagree. On this four-outlet bench P_limit is 4400 W (the const
         // above), and the recovery limit the framework restores into is
         // 3960 W (4400 W less the 10% hysteresis band, LoadSheddingSettings).
-        // Per-outlet allowances come from each outlet's AllowanceWatts below;
-        // the tier-1 outlet is exempt from its own cap but is still counted in
-        // P_total.
+        // Per-outlet allowances come from each outlet's independently editable
+        // AllowanceWatts field; priority does not exempt a branch from its cap.
 
         var rigConfig = await _context.PowerSystemConfigs.FirstOrDefaultAsync();
         if (rigConfig is null)
@@ -223,29 +215,28 @@ public class ApplicationDbContextInitialiser
         // Important, Medium(2)->Tier 3 Deferrable, Low(1)->Tier 4 Nonessential.
         //
         // On this four-outlet rig the ladder the thesis demonstrates end to end is:
-        //   CH1 Critical -> Tier 1 Critical    keep powered, cap-exempt
+        //   CH1 Critical -> Tier 1 Critical    keep powered, still has a 300 W allowance
         //   CH2 High     -> Tier 2 Important   shed last of the expendable
         //   CH3 Medium   -> Tier 3 Deferrable  shed with CH4
         //   CH4 Medium   -> Tier 3 Deferrable  shed with CH3 (seeded down)
         var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
-            // Per-outlet AllowanceWatts 300 -> 1100 on CH1-CH4 (2026-10-16), from the
-            // operator's reference sketch's per-outlet wattageLimit1..4. The USB rail
-            // stays at 10 W: it is a different rail with a different part, and the
-            // sketch's 1100 W figure is about 220 V mains outlets, not a 5 V socket.
+            // 300 W is the editable default per-outlet allowance for this 4-channel rig.
+            // Framework Admin can change each branch independently. Existing rows keep
+            // their operator-edited allowance across application restarts.
             //
             // The seeded Watts (260 / 180 / 120 / 0) are DELIBERATELY UNCHANGED.
             // They are the rig's realistic start state and are not the limits; a
             // seeded value that was silently rescaled to match a new cap would be a
             // fabricated measurement, and the whole point of these rows is that they
             // represent a real (if small) load so the dashboard is not reading zeroes.
-            // Every seeded CH1-3 figure is well inside its 1100 W allowance
-            // (24% / 16% / 11%), which is what a bench panel actually sitting idle
+            // Every seeded CH1-3 figure is within its 300 W allowance
+            // (87% / 60% / 40%), which is what a bench panel actually sitting idle
             // looks like.
-            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 1100, 220, "Class hours + override", null, OutletStatus.Active, 260),
-            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 1100, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 1100, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 1100, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
+            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
+            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
         };
 
         // Full 13-channel rig (8x220V + 1x110V + 4xUSB, single mains PZEM).
@@ -268,8 +259,8 @@ public class ApplicationDbContextInitialiser
 
         var outletSpecs = TestingRig ? testingRigSpecs : fullRigSpecs;
 
-        // Idempotent rig sync: add missing channels, refresh policy fields on
-        // existing ones, never touch live status/readings.
+        // Idempotent rig sync: add missing channels and refresh hardware identity
+        // on existing ones, while preserving operator-edited outlet allowances.
         foreach (var spec in outletSpecs)
         {
             var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Name == spec.Name);
@@ -296,7 +287,6 @@ public class ApplicationDbContextInitialiser
                 outlet.MeterChannel = "PZEM-01 · mains bus";
                 outlet.RelayChannel = spec.Relay;
                 outlet.Priority = spec.Priority;
-                outlet.AllowanceWatts = spec.Allowance;
                 outlet.RatedVoltageVolts = spec.Volts;
                 outlet.Schedule = spec.Schedule;
                 outlet.IdleLimitMinutes = spec.Idle;
@@ -327,7 +317,13 @@ public class ApplicationDbContextInitialiser
                     var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Id == i + 1);
                     if (outlet is null)
                     {
-                        outlet = new Outlet { Id = i + 1, Status = spec.Status, CurrentWatts = spec.Watts };
+                        outlet = new Outlet
+                        {
+                            Id = i + 1,
+                            Status = spec.Status,
+                            CurrentWatts = spec.Watts,
+                            AllowanceWatts = spec.Allowance,
+                        };
                         _context.Outlets.Add(outlet);
                     }
 
@@ -336,7 +332,6 @@ public class ApplicationDbContextInitialiser
                     outlet.MeterChannel = "PZEM-01 · mains bus";
                     outlet.RelayChannel = spec.Relay;
                     outlet.Priority = spec.Priority;
-                    outlet.AllowanceWatts = spec.Allowance;
                     outlet.RatedVoltageVolts = spec.Volts;
                     outlet.Schedule = spec.Schedule;
                     outlet.IdleLimitMinutes = spec.Idle;
@@ -414,13 +409,13 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the four-outlet testing rig: four 220V outlets, each metered by a branch CT. INA226 is separate DC rail telemetry. P_limit is capped at 4400 W (1100 W per outlet).", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the four-outlet testing rig: four 220V outlets, each metered by a branch CT, with editable 300 W per-outlet allowances. INA226 is separate DC rail telemetry. P_limit is 4400 W.", Severity = EventSeverity.Info },
                 new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 3520 W warning threshold.", Severity = EventSeverity.Success },
                 new PowerEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow,
                     Title = "Priority-based load shedding armed",
-                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 1100 W allowance cap), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3). " +
+                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3). Each outlet has its own editable 300 W allowance. " +
                         "P_limit 4400 W; overload must persist 3 consecutive batches before anything is shed. " +
                         "Restoration resumes only below the 3960 W recovery limit (4400 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
                         "Tier 1 is never shed automatically; an overload that survives every eligible shed raises an alarm instead of being assumed safe. " +
