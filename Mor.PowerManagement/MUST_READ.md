@@ -29,7 +29,7 @@ branch load.
 | **Execution Point (EP)** | ESP32-S3 firmware. Executes the same rules locally, drives relays, syncs with DP. |
 | **FR-xx** | Framework Rule. Replaces `POL-xx` everywhere (code, seeds, dashboard, thesis text). Crosswalk in §6. |
 | **ECA** | Event → Condition → Action rule body, evaluated every loop tick. |
-| **P_total** | Sum of **all** branch watts, **including the USB rail** (see §2). |
+| **P_total** | Sum of the four measured mains outlet branches; INA226 DC readings are separate. |
 | **P_limit** | The critical system threshold that drives shedding. **1200 W during testing.** |
 | **P_branch** | One outlet channel's measured watts. |
 
@@ -91,81 +91,25 @@ arduino-cli lib install "INA226"
 > `.ino` for a duplicate literal before you assume your edit took effect (see §8).
 
 **Electrical cautions — read before wiring:**
-- The INA226 senses **max 36 V**. It must sit behind a **voltage divider**; never
-  connect mains directly. `INA226_MAIN_VOLT_DIVIDER` is set to **9.46** (bench
-  calibrated: 24.1 V at the bus pin, 228 V on the multimeter) and is passed to
-  `configure(..., bus_V_scaling_e4)` so the reported volts are scaled mains volts.
-  **Re-check the ratio with a multimeter after touching the resistor ladder** and
-  update that one number in `config.h` — it is the only constant in the voltage path.
-- The INA226 has **no energy register**; the firmware integrates power into a
-  cumulative kWh (`integratedEnergyWh`).
-- `ZMCT_ZERO_MV` (2500) is the CT's 0 A centre and `ZMCT_MV_PER_AMP` (1.0) its
-  ratio — **calibrate both against a known load** (e.g. clamp 1 A, read serial).
-- The **USB rail (CH5) is unmetered.** It has no CT and the residual method does
-  **not** work on this rig: the INA226 sits on a 24 V DC rail and never sees the
-  mains feed, so "mains total minus the four branches" cannot be computed.
-  **CH5 reports 0 W and P_total is the sum of the four measured branches only.**
-  The policy still counts USB toward P_total and CH5 is still a shed candidate
-  (lowest priority), but its own contribution is currently **unmeasured**, not
-  verified as zero.
-- `INA226` (`0x40`) and `ADS` (`0x48`) addresses must not collide.
-- `SIMULATE_METERS` in `config.h` is `0` — the rig reads the real INA226 + ADS1015
-  on the wired bench. Set `1` for synthetic readings only when the sensors are
-  removed. Both paths are compile-verified.
+- The INA226 is connected to the ESP32 over I2C and measures its own DC shunt path. It is not a mains meter, not an outlet, and is never added to the mains load total. Never connect mains to the INA226.
+- The four outlet CTs feed ADS1220 AIN0–AIN3. Each outlet's current is measured on its own branch.
+- Mains voltage is the configured 238 V reference. The INA226 reading does not set or scale outlet voltage.
+- `SIMULATE_METERS` is `0` on the bench: the firmware reads the INA226 and ADS1220 hardware.
+## 2. Testing rig (four-outlet bench)
 
-## 2. Testing rig (TEMPORARY — until 31 Oct 2026)
+The bench has exactly four controlled AC outlets. The INA226 is connected to the ESP32 as a separate DC shunt monitor; it is sensor telemetry, not an outlet and not part of the mains load total.
 
-| Channel | Hardware | Relay GPIO (ESP32-S3) | Voltage class | Priority | Allowance |
-|---|---|---|---|---|---|
-| CH1 | Outlet 1 — Instructor workstation | 10 | 220 V | Critical | 300 W |
-| CH2 | Outlet 2 — Demo equipment | 11 | 220 V | High | 300 W |
-| CH3 | Outlet 3 — Lab instrument | 12 | 220 V | High | 300 W |
-| CH4 | Outlet 4 — Student workstation | 13 | 220 V | Medium | 300 W |
-| CH5 | USB 5 V charging | 14 | 5 V | Low | 10 W |
+| Channel | Hardware | Relay GPIO (ESP32-S3) | CT input | Voltage | Allowance |
+|---|---|---:|---|---:|---:|
+| CH1 | Outlet 1 | 1 | ADS1220 AIN0 | 238 V | 1100 W |
+| CH2 | Outlet 2 | 2 | ADS1220 AIN1 | 238 V | 1100 W |
+| CH3 | Outlet 3 | 4 | ADS1220 AIN2 | 238 V | 1100 W |
+| CH4 | Outlet 4 | 5 | ADS1220 AIN3 | 238 V | 1100 W |
 
-- **Firmware:** `OUTLET_COUNT 5`, `RELAY_PINS[] = {10, 11, 12, 13, 14}` in
-  `firmware/mor-power-device/config.h`. They start at 10 to stay clear of the I²C
-  pair (SDA 8, SCL 9); they also avoid strapping pins 0/3/45/46, USB pins 19/20 and
-  the SPI flash pins.
-- **Backend seed:** only 5 outlets seeded (`ApplicationDbContextInitialiser.cs`); the
-  CH6..CH13 rows are not created while testing. The old 8-outlet + 110 V + 4-USB spec is
-  frozen in git and restored in §9.
-- **The USB rail counts toward P_total.** This is a deliberate change from the
-  Chapter 1 manuscript wording ("excluded from the load-shed logic") — the manuscript is
-  updated at manuscript time, the code follows this doc.
-- **110 V auxiliary socket:** not present on the test rig. When it returns, it is
-  metered and reported but is **never** a shed candidate.
-- Expect ~1200 W of real load across 4 outlets: keep the bench under the cap or the
-  demo will shed during setup.
-
-### Testing thresholds (TEMPORARY)
-
-| Parameter | Value | Notes |
-|---|---|---|
-| `MaxCapacityWatts` | **1200 W** | hard software cap; matches P_limit during testing |
-| `CriticalThresholdWatts` (P_limit) | **1200 W** | **capped for testing** |
-| `WarningThresholdWatts` | **960 W** | 80 % of P_limit, hysteresis clears at 900 W |
-| `StandbyThresholdWatts` | **80 W** | branch ≤ 80 W with relay closed = standby |
-| `StandbyIdleMinutes` | 30 | idle → shed |
-| `StabilizationDelayMs` | 500 | post-activation verification window |
-| `NominalVoltageVolts` / tolerance | 220 V ± 10 % | 198–264 V class window |
-| Branch overcurrent factor | 1.25 × rated | FR-03 latch |
-| Thermal slew | 400 W/min branch | alarm only |
-| Shed per cycle | 1 outlet | small rig: shed one at a time, re-assess |
-| Shed cooldown | 60 s | no outlet auto-shed twice inside 60 s |
-| Fault latch | 300 s | manual ack required (DP) |
-
-### Lab profiles (context multiplier on the globals)
-
-| Profile | P_limit | Warning | Idle | Shed Medium? |
-|---|---|---|---|---|
-| **Bench Instrumentation** (default for the panel) | 1200 W | 960 W | 30 min | no |
-| Embedded Prototyping | 1200 W | 960 W | 60 min | no (soldering stations = Critical) |
-| Tutorial | 1000 W | 800 W | 15 min | yes |
-| Heavy Machinery | 1500 W | 1200 W | 45 min | yes (long-running motors) |
-
----
-
+- Firmware uses `OUTLET_COUNT 4`, `BRANCH_CT_COUNT 4`, and `RELAY_PINS[] = {1, 2, 4, 5}`.
+- INA226 uses its own I2C connection (SDA 8, SCL 9). Its readings are sent under the separate `ina` telemetry object, never as outlet ID 5.
+- Backend testing seed and dashboard roster contain exactly outlets 1–4. Stale rows above outlet 4 are removed while the first four outlets and their telemetry history are retained.
+- System capacity is 4400 W, with 3520 W warning and 4400 W critical thresholds.
 ## 3. The Framework rules (FR-01 .. FR-12)
 
 Ordered by precedence. **Precedence resolves conflicts: the lowest-numbered rule that
@@ -213,9 +157,7 @@ fires wins for a given branch in a given tick.** Every rule body is ECA.
 | **FR-11** | `CalibrationDueAt < now` for the branch's instrument class | downgrade branch Critical→High, badge on dashboard, exempt from FR-09 preservation | Branch | §4 calibration & maintenance trails |
 | **FR-12** | Any rule fires (any family) | persist a `RuleAuditRow` (ruleId, branch, trigger snapshot, action, severity, actor) + `PowerEvent` | System | §1 documented audit evidence |
 
-**Aux rail rule (not FR):** the 110 V socket (when it returns) is metered and reported
-but is never a shed candidate; the **USB rail (CH5) counts toward P_total and IS a shed
-candidate, lowest priority by default.**
+**Separate sensor:** INA226 DC telemetry is reported independently and does not create an outlet, a relay, or mains load.
 
 ### Precedence summary
 
@@ -237,11 +179,10 @@ dropping automatically.** Do not break this chain.
 ESP32-S3, every 5000 ms
   1. read/derive per-branch V/A/W
        SIMULATE_METERS=1 : synthesised from allowances (bench, no sensors)
-       SIMULATE_METERS=0 : INA226 (mains volts only, via the 9.46 divider)
-                           + ADS1x15 (per-branch CT current);
-                           CH5 USB is unmetered and reports 0 W
-                           P_total = sum of the four measured branches
-  2. POST /api/Device/telemetry   { deviceId, sFault, meteringMode, readings[5], relayStates[5] }
+       SIMULATE_METERS=0 : ADS1220 measures four branch CTs; INA226 reports
+                           its separate DC shunt telemetry. P_total sums only
+                           the four mains outlets
+  2. POST /api/Device/telemetry   { deviceId, faultFlag, meteringMode, readings[4], relayStates[4], ina }
        (X-Device-Key header required when Device:ApiKey is set)
   3. BACKEND, in order, single transaction:
        validate ranges → persist TelemetryReading rows
@@ -291,13 +232,13 @@ in `TESTING_LOG.md` per run.
 
 | Rule | Test setup | Expected | Evidence |
 |---|---|---|---|
-| FR-01 | post `sFault: true` | all 5 relays open, statuses Restricted, Critical event | serial `POL-01/FR-01`, dashboard banner |
+| FR-01 | post `sFault: true` | all 4 relays open, statuses Restricted, Critical event | serial `POL-01/FR-01`, dashboard banner |
 | FR-02 | post readings with V=180 on CH3 | CH3 shed + latched, deny further activation | PowerEvent + audit row |
 | FR-03 | post I > 1.25× rating on CH2 for 2 ticks | CH2 shed + latched | audit row |
 | FR-04 | P_total 300 W, request CH4 | allowed, relay closes after 500 ms | config sync shows Active |
 | FR-05 | P_total ≥ 1200 W, request CH4 | denied, relay open, Warning event | audit row |
 | FR-06 | activate CH4 while over cap | CH4 shed again (newest first) | audit row |
-| FR-07 | push P_total to 1300 W | lowest-priority branch (USB/CH5) shed; Critical/High untouched | serial + dashboard |
+| FR-07 | push P_total above limit | lowest-priority eligible outlet shed; Critical/High untouched | serial + dashboard |
 | FR-08 | keep overload after Low/Medium shed | Medium shed next; Critical preserved | audit rows |
 | FR-09 | keep overload, CH1 Critical energized | CH1 never shed | audit rows |
 | FR-10 | branch ≤ 80 W for 30 min | shed → Disconnected | audit row |
@@ -305,13 +246,12 @@ in `TESTING_LOG.md` per run.
 | FR-12 | any of the above | one audit row per firing with trigger snapshot | `GET /api/Dashboard/rules/audit` |
 
 **L3 — Loop / integration (live rig, COM10)**
-- Serial @115200: `IP:` → `config synced: P_limit=1200 W, 5 channels` → `telemetry: HTTP 200` every 5 s.
+- Serial @115200: `IP:` → `config synced: P_limit=4400 W, 4 channels` → `telemetry: HTTP 200` every 5 s.
 - Dashboard `ESP32 online` pill (telemetry within 30 s).
 - **End-to-end relay drop:** trigger an overload (heavy load or scenario) and physically
   confirm the relay(s) open within 20 s and the outlet card flips to Disconnected with the
   rule ID in the event log.
-- USB-in-P_total check: `P_total` on the dashboard must move when a USB device is
-  connected/disconnected.
+- INA226 check: its DC readings stay separate from the four-outlet mains P_total.
 - Backend outage test: stop the API, confirm relays still protect (local FR-01/FR-07 on
   serial), confirm `HTTP -1` then recovery resync.
 
@@ -404,7 +344,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 arduino-cli board list
 # 3. flash
 arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-# 4. watch serial @115200: IP → config synced (P_limit=1200, 5 channels) → telemetry 200
+# 4. watch serial @115200: IP → config synced (P_limit=4400, 4 channels) → telemetry 200
 arduino-cli monitor -p COM10 -b 115200
 # 5. run the backend for the LAN
 dotnet run --project src/Web --urls http://0.0.0.0:5211

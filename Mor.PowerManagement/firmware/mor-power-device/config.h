@@ -12,20 +12,13 @@
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// LIVE RIG (5 channels): 4x220V CT-metered outlets + 1x USB socket.
+// LIVE RIG (4 channels): four 220V CT-metered and relay-controlled outlets.
 // ---------------------------------------------------------------------------
 //   outletId 1..4  220 V mains outlets, one ZMCT103C CT each on the ADS1220
 //                  (AIN0, AIN1, AIN2, AIN3). Watts are derived from the CT
 //                  amps x the ONE mains voltage below, exactly as before.
-//   outletId 5     USB socket, MONITORED ONLY. No CT is fitted, and there is no
-//                  relay: the socket is never actuated by this firmware. Its
-//                  volts/amps/watts come straight off the INA226, which is the
-//                  3.3 V rail monitor and nothing else (see the INA226 block
-//                  below).
-//
-// Every outlet on this rig therefore has a real sensor behind it: CH1-4 behind
-// a CT, CH5 behind the INA226. Nothing is posted as a fabricated zero or a
-// residual.
+// The INA226 is separate DC-rail telemetry. It is not an outlet and does not
+// increase the relay or CT channel count.
 //
 // Tier roles (the backend seed must carry these so the priority logic and the
 // dashboard labels agree with the device; RULES_ENABLED is still 0, so the
@@ -34,11 +27,10 @@
 //   CH2  Important    shed only under real pressure
 //   CH3  Deferrable   shed first when the budget is tight
 //   CH4  Nonessential shed early, cheap to lose
-//   CH5  USB          Low / priority-only - monitored, never switched
 //
 // Restore to 13 for the final rig: CH1-8 220V, CH9 110V, CH10-13 USB.
 // ---------------------------------------------------------------------------
-#define OUTLET_COUNT 5
+#define OUTLET_COUNT 4
 
 // ---- Wi-Fi ----
 // Credentials live in NVS flash (written on first setup), so the repo never
@@ -183,28 +175,10 @@
 // (see the BRANCH_CT_COUNT note below). Every CH1-4 volt and watt figure now
 // comes from MAINS_FIXED_VOLTS, so no CH1-4 number depends on the sensor at all.
 //
-// WHAT THE INA226 NOW DOES (5-channel rig), ONE job:
-//   USB rail monitor. outletId 5 posts volts = inaBusVoltage_V, amps =
-//   inaCurrent_A, watts = that product, and doc["ina"] posts the same four raw
-//   figures. The divider is no longer part of any calculation.
-//
-// HARDWARE EXPECTATION - READ THE LIVE BUS READING BEFORE TRUSTING CH5:
-//   the module is expected to be wired across the 3.3 V rail and report
-//   ~3.3 V at its bus pin (2026-10-16: the operator's reference sketch labels
-//   this rail "INA226 3.3V Rail", which supersedes the 5 V USB rail label the
-//   previous revision of this file used). If the serial line reads ~5 V the
-//   module is on the USB 5 V rail instead, and if it still reads ~24 V it is
-//   PHYSICALLY STILL ON THE 24 V RAIL and must be rewired. Do not fudge a
-//   constant to make that number look right: a wrong bus voltage with the
-//   right-looking telemetry is worse than an obviously wrong one.
-//
-//   - MUST CHANGE if a different shunt is fitted: INA226_MAX_CURRENT_AMPS /
-//     INA226_SHUNT_OHM must be re-checked against the shunt actually in the
-//     path. They are 0.75 A / 0.1 Ohm: 75 mV shunt full-scale, inside the
-//     INA226's +/-81.9 mV input range with margin for shunt tolerance.
-//   - DOES NOT CHANGE: the CH1-4 CT chain (ADS1220, ZMCT_CAL_FACTOR, the
-//     piecewise curve, the adaptive EMA). Current is measured by the CTs and is
-//     entirely independent of the INA226 and of MAINS_FIXED_VOLTS.
+// INA226 is connected directly to the ESP32 over I2C and reports its own DC
+// bus voltage, shunt current and power in the separate `ina` telemetry object.
+// Those values are never assigned an outlet id or included in mains P_total.
+// Check the live bus and shunt ratings against the board before relying on it.
 #define INA226_ADDR 0x40
 
 // ---- Mains voltage: FIXED CONSTANT ----
@@ -260,14 +234,8 @@
 // computed current and power at zero even while raw shunt millivolts changed.
 // The shunt is a component on the board, read from its marking, not a bench fit.
 //
-// Consequences to keep in mind before trusting a CH5 reading:
-//   - Past ~0.75 A the INA226 saturates at the ADC. A fault on the rail that draws
-//     more than 0.75 A will therefore read as a flat maximum rather than as an
-//     over-range flag. CH5 has no relay (USB_OUTLET_NO_RELAY), so nothing on
-//     the rig will open a breaker for it - watch this rail, do not trust it to
-//     detect its own overload.
-//   - MAINS_FIXED_VOLTS and the CH1-4 CT chain are untouched by any of this:
-//     current on those channels is measured by CTs, not by this sensor.
+// The INA226 range is a DC sensor limit; it does not limit the four outlets.
+// CH1-CH4 CT measurements and the configured mains voltage are independent.
 #define INA226_MAX_CURRENT_AMPS 0.75f
 #define INA226_SHUNT_OHM 0.1f
 // NOTE (2026-10-16, mains is now fixed): this value is now IDENTICAL to
@@ -503,12 +471,8 @@
 // pass cannot delay the serial output on core 1.
 #define SENSOR_TASK_STACK 4096
 #define SENSOR_TASK_PRIORITY 2
-// How many ADS1220 channels actually have a CT wired (0..4). CH1-CH4 on this
-// rig, one CT each: AIN0, AIN1, AIN2, AIN3. The FIFTH outlet (outletId 5, the
-// USB socket) has no CT and never will - it is measured by the INA226, which
-// reports a real volts and a real amps rather than a fabricated zero. So
-// BRANCH_CT_COUNT is OUTLET_COUNT - 1 by construction, and the firmware posts
-// OUTLET_COUNT readings from BRANCH_CT_COUNT CT channels plus the INA226.
+// CH1-CH4 each have one CT wired to ADS1220 AIN0-AIN3. INA226 is reported in
+// the separate `ina` telemetry object and is never counted as an outlet.
 //
 // If a channel is ever added without a CT, do NOT derive its current as a
 // residual (mains total minus the measured branches): the INA226 is not on the
@@ -559,9 +523,6 @@
 #define REPORT_METERING_MODE
 
 // ---- Relay outputs, one per mains outlet channel ----
-// Live rig order: CH1-CH4 = the four 220 V outlets, CT-metered. CH5 = the USB
-// socket, which has NO RELAY: RELAY_PINS[4] is reserved but never driven (see
-// USB_OUTLET_NO_RELAY below).
 //
 // Exclusion banks this table has to clear on the ESP32-S3, all checked for the
 // pins in use:
@@ -582,12 +543,8 @@
 // still worth knowing that it is an ADC1 pin, so it cannot be sampled by ADC2
 // while ADC1 is busy; that does not affect a digital output.
 //
-// RELAY ORDER CORRECTED 2026-10-16 from the operator's own wiring, measured on
-// the rig: outlet 1 = GPIO 1, outlet 2 = GPIO 2, outlet 3 = GPIO 4, outlet 4 =
-// GPIO 5, USB (outlet 5) = no relay. The table previously read {2, 1, 4, 5, 6},
-// i.e. CH1 and CH2 were SWAPPED - a command for outlet 1 cut outlet 2 instead,
-// which is what made disconnect commands look unresponsive. The {4, 5} tail was
-// already right.
+// Relay order: outlet 1 = GPIO 1, outlet 2 = GPIO 2, outlet 3 = GPIO 4,
+// outlet 4 = GPIO 5.
 //
 // VERIFY BEFORE POWERING: the exclusion-bank argument above is
 // correct-by-construction but NOT an observation of the physical board, and the
@@ -605,36 +562,13 @@
 // click, put a transistor or level shifter in front of it - or power the opto
 // from VCC with the ESP32 side pulled low - rather than raising the ESP32 pin,
 // which is not possible at 3.3 V anyway.
-// Operator wiring, corrected 2026-10-16 (was {2, 1, 4, 5, 6} - CH1/CH2 swapped).
-// Index 4 is the USB socket placeholder and is NEVER driven (USB_OUTLET_NO_RELAY).
-static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 6 };
-// Named single-outlet aliases, because the wiring order (board header) and the
-// channel order (dashboard CH1 first) are not the same thing and a bare
-// RELAY_PINS[i] index hides that. RELAY_PIN_1 -> CH1, ..., RELAY_PIN_5 -> CH5.
+// Operator wiring, corrected 2026-10-16 (CH1/CH2 pin mapping verified).
+static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5 };
 #define RELAY_PIN_1 1
 #define RELAY_PIN_2 2
 #define RELAY_PIN_3 4
 #define RELAY_PIN_4 5
-// Placeholder only - the USB socket has no relay, so this value is never
-// pinMode'd or driven. Kept as 6 purely so the index exists; see
-// USB_OUTLET_NO_RELAY.
-#define RELAY_PIN_5 6
-
-// ---- USB outlet (outletId 5) is MONITORED ONLY ----
-// The socket has no relay behind it on this rig, so index 4 of the arrays above
-// is a RESERVED PLACEHOLDER and nothing in the firmware drives it: setup() does
-// not pinMode it, applyRelays() skips it, syncConfig() ignores a backend
-// desiredStatus for channelId 5, and its reported relayClosed is pinned true.
-// That is deliberate and is the honest thing to post: claiming to switch a
-// socket that has no switch would let the dashboard show "disconnected" while
-// the USB load is still drawing current.
-//
-// 1 = the last channel (outletId OUTLET_COUNT) is monitored-only and is never
-// 0 = every outlet has a relay and the whole table is driven.
-// If a relay IS later fitted behind the USB socket, set this to 0 and give it a
-// real pin - but do not reuse GPIO 6 as-is without confirming nothing else on
-// the board wants it.
-#define USB_OUTLET_NO_RELAY 1
+#define USB_OUTLET_NO_RELAY 0
 
 // ---- Relay-transition window drop (2026-10-16) ----
 // NO NEW TUNABLE. This block documents a mechanism that lives entirely in
@@ -790,9 +724,8 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 6 };
 // ---- Manual switch inputs, raw rocker/switch caps (0 = not wired) ----
 // No switch is wired on this rig. 0 is a real "not connected" marker here, not a
 // channel number: GPIO 0 is a strapping pin and must never be used as a switch
-// input on the ESP32-S3. The USB socket (index 4) has no switch and no relay
-// either, so it is 0 like the rest.
-static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
+// input on the ESP32-S3. All four switch inputs are currently unwired.
+static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0 };
 
 // ---- Local autonomy ----
 #define LOCAL_AUTO_SHED true
@@ -807,14 +740,8 @@ static_assert(RELAY_PIN_1 == RELAY_PINS[0], "RELAY_PIN_1 must match RELAY_PINS[0
 static_assert(RELAY_PIN_2 == RELAY_PINS[1], "RELAY_PIN_2 must match RELAY_PINS[1]");
 static_assert(RELAY_PIN_3 == RELAY_PINS[2], "RELAY_PIN_3 must match RELAY_PINS[2]");
 static_assert(RELAY_PIN_4 == RELAY_PINS[3], "RELAY_PIN_4 must match RELAY_PINS[3]");
-static_assert(RELAY_PIN_5 == RELAY_PINS[4], "RELAY_PIN_5 must match RELAY_PINS[4]");
-// Every outlet needs a real sensor. CH1-CH4 have a CT each; the USB socket
-// (outletId 5) is measured by the INA226 instead, so the CT count is one short
-// of the outlet count BY DESIGN and never equals it. The old guard
-// (BRANCH_CT_COUNT == OUTLET_COUNT) was the 2-channel rig's rule; it fails here
-// on purpose, because a 5th CT is not what fills that slot.
-static_assert(BRANCH_CT_COUNT == OUTLET_COUNT - 1,
-              "CH1-4 are CT-metered; outlet 5 is INA226-metered (monitored-only USB)");
+static_assert(BRANCH_CT_COUNT == OUTLET_COUNT,
+              "each controlled outlet must have one CT channel");
 // No relay pin may collide with a sensor bus. These are the fixed wiring, not
 // choices, and a relay pin that lands on one of them takes the whole sensor
 // chain down with it - so the collision is made a compile error instead of a
@@ -841,5 +768,5 @@ static_assert(RELAY_PIN_4 != ADS1220_CS_PIN && RELAY_PIN_4 != ADS1220_DRDY_PIN &
 // would post a relay state read from whatever is next in memory, and the
 // 13-channel rig needs 8 CT-metered channels, which this ADS1220 (4 inputs)
 // cannot supply.
-static_assert(OUTLET_COUNT <= 5, "widen the arrays deliberately before exceeding the 5-channel rig");
+static_assert(OUTLET_COUNT <= 4, "widen the arrays deliberately before exceeding the 4-channel rig");
 static_assert(BRANCH_CT_COUNT <= 4, "the ADS1220 has 4 single-ended inputs (AIN0..AIN3)");

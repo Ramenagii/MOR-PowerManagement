@@ -27,7 +27,7 @@ export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
 }
 
 /** Testing rig: 4 wired mains channels + the monitored-only USB rail (MUST_READ.md, until 31 Oct 2026). */
-export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 5 }, (_, i) => i + 1)
+export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 4 }, (_, i) => i + 1)
 
 /**
  * Width of the dashboard's history strip, in seconds.
@@ -111,14 +111,14 @@ export const PROVENANCE_COPY: Record<string, { tone: string; banner: string }> =
     tone: 'simulated',
     banner:
       'Simulated — not measured. The ESP32 synthesises these readings (SIMULATE_METERS = 1). ' +
-      'Per-channel volts are nominal ratings (CH1–CH4 220 V, CH5 5 V USB). Current is derived as P/V; ' +
+      'Per-channel volts use the 220 V mains rating. Current is derived as P/V; ' +
       'per-channel watts are the mains total distributed across energized channels by allowance.',
   },
   Metered: {
     tone: 'measured',
     banner:
       'The ESP32 polls the INA226 over I2C for its DC bus and shunt current. Branch CTs are read separately ' +
-      'through the ADS1220 on CH1–CH4. CH5 has no CT. Per-channel current and watts are derived from ' +
+      'through the ADS1220 on CH1–CH4. Per-channel current and watts are derived from ' +
       'reported channel loads and rated voltage in this demo mode.',
   },
   Unknown: {

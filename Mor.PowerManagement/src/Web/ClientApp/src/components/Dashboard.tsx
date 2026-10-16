@@ -303,7 +303,7 @@ export function Dashboard({
               the tooltip saying nothing on the rig measures that rail — which
               is a weaker claim than a wrong number, and it is a true one.
             */
-            mainsVolts={outlet.id === 5 ? null : mainsVolts}
+            mainsVolts={mainsVolts}
             busy={busyId === outlet.id}
             onToggle={toggleOutlet}
           />

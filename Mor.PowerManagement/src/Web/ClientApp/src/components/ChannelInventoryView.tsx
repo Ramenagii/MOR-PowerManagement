@@ -61,20 +61,12 @@ const UNAVAILABLE = '—'
 // ---------------------------------------------------------------------------
 
 /**
- * Branches on the full bench that the current 2-outlet rig does not wire.
+ * Branches this four-outlet rig does not currently wire.
  *
- * FUTURE 4+USB: when CH3-CH5 are physically installed, delete this table — the
- * cards stop being placeholders because GET /Dashboard/state starts returning
- * those ids, and the roster filter below drops them automatically. GPIO pins for
- * them must be added to RELAY_GPIO in data/dashboard.ts at the same time; do not
- * guess them from the channel id, the two wired channels prove the order is not
- * sequential.
+ * All four physical outlets are installed, so this list stays empty. INA226 is
+ * independent sensor telemetry and does not create an unwired outlet card.
  */
-const UNWIRED_BRANCHES: Array<{ id: number; rail: '220V AC' | '110V AC' | '5V USB'; eyebrow: string }> = [
-  { id: 3, rail: '220V AC', eyebrow: 'AC Outlet 3' },
-  { id: 4, rail: '220V AC', eyebrow: 'AC Outlet 4' },
-  { id: 5, rail: '5V USB', eyebrow: 'USB-C DC Rail' },
-]
+const UNWIRED_BRANCHES: Array<{ id: number; rail: '220V AC' | '110V AC' | '5V USB'; eyebrow: string }> = []
 
 /** Relay GPIO per channel. Single source of truth lives in data/dashboard.ts
  * (RELAY_GPIO, matching firmware RELAY_PINS {1,2,4,5}); do not duplicate it

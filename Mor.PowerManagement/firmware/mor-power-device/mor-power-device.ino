@@ -33,9 +33,9 @@
                    238 V constant (MAINS_FIXED_VOLTS in config.h), no longer
                    derived from this sensor, so every CH1-4
                    volt and watt is independent of the INA226 entirely. The raw
-                   bus volts + shunt current are what outletId 5 (the USB socket)
-                   posts as its volts and amps, and the same four figures go out
-                   in doc["ina"]. The bus pin is EXPECTED TO READ ~3.3 V now: ~5 V
+                   bus volts + shunt current are reported in doc["ina"] only,
+                   separately from the four outlet readings. The bus pin should
+                   match the DC rail being monitored; it does not set mains volts.
                    means the module is on the USB rail, and ~24 V means it is
                    physically still on the 24 V rail and must be rewired - do not
                    fudge a constant to hide either.
@@ -47,20 +47,14 @@
             share a bus.
     RELAY   CH1 = GPIO 1, CH2 = GPIO 2, CH3 = GPIO 4, CH4 = GPIO 5 (RELAY_PINS).
              Operator wiring, corrected 2026-10-16 (was CH1 = GPIO 2, CH2 = GPIO 1).
-            CH5 = the USB socket: NO RELAY, monitored only - nothing drives it.
 
   Channels
     CH1-CH4  220 V mains outlets, CT-metered (BRANCH_CT_COUNT = 4). Watts are
              amps x the single mains voltage from the FIXED 238 V constant,
              exactly as before.
-    CH5      USB socket, outletId 5. No CT and no relay. Volts = INA226 bus V,
-             amps = INA226 shunt A, watts = their product. It is a real
-             measurement of a real rail, not a fabricated zero and not a
-             residual - see the residual warning below.
 
   Tiers (must match the backend seed; RULES_ENABLED is 0 so nothing acts yet)
     CH1 Critical | CH2 Important | CH3 Deferrable | CH4 Nonessential
-    CH5 USB - Low / priority-only
 
   Flash
     arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
@@ -152,18 +146,6 @@ struct ZmctReading {
 // posted are the RAW INA226 bus-pin reading, NOT mainsV and NOT busV x any
 // divider - the INA226 is the 3.3V rail monitor now (bus expected ~3.3 V) and the
 // mains figure it used to be multiplied into is a fixed constant.
-#define USB_OUTLET_ID (BRANCH_CT_COUNT + 1)      // 5
-// The USB socket must be the LAST outlet, because isMonitoredOnly() and every
-// index calculation below key off OUTLET_COUNT - 1. If that ever stops being
-// true the firmware would skip a real relay and report the socket as cut, so
-// the build stops instead.
-static_assert(USB_OUTLET_ID == OUTLET_COUNT,
-              "the monitored-only USB outlet must be the last outletId");
-// Watts for the USB outlet: the product of the two INA226 figures, taken from
-// the SAME dataMutex hold as the volts and amps they were read with, so
-// powerWatts == currentAmps * voltage holds exactly here as it does on CH1-CH4.
-static inline float usbWatts(float busV, float amps) { return busV * amps; }
-
 // Relay DESIRED state, one entry per outlet: true = contact closed = power ON.
 // This is the single source the telemetry reports from AND the state the pins
 // are driven to, so the dashboard can never claim a state the hardware is not
@@ -173,14 +155,14 @@ static inline float usbWatts(float busV, float amps) { return busV * amps; }
 //
 // The USB entry is forced true and is NOT driven to a pin (USB_OUTLET_NO_RELAY):
 // there is no relay behind the socket, so it can only ever report CLOSED.
-bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true, true };
+bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true };
 
 // The outlet status ORDINAL the backend last sent for each channel, and a
 // counter used to throttle the "config synced" line (config sync runs at
 // CONFIG_INTERVAL_MS, which is fast enough to flood the console). Purely
 // diagnostic - nothing acts on these, they exist so a mismatch between the
 // backend's view and the device's view is visible on the bench.
-int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
+int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1, -1, -1 };
 uint32_t syncCount = 0;
 
 // True for the one outlet that is monitored only and has no relay behind it.
@@ -231,14 +213,14 @@ volatile uint32_t relayStateVersion = 0;
 // Without this the boot-time write (setup() parks the pins HIGH, then calls
 // applyRelays()) would be indistinguishable from a real transition and would
 // stamp the version once for nothing.
-int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
+int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1 };
 
 // A close can still leave contact bounce or input-capacitor inrush in the next
 // complete CT window after the transition-spanning window was discarded. Keep
 // this per outlet because each sensor window is collected at a different time.
 // Core 1 sets the counters and core 0 consumes them, so guard the tiny
 // read/decrement and set operations with a FreeRTOS port mux.
-volatile uint8_t relayCloseSettleRemaining[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
+volatile uint8_t relayCloseSettleRemaining[OUTLET_COUNT] = { 0, 0, 0, 0 };
 portMUX_TYPE relaySettleMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool consumeRelayCloseSettleWindow(uint8_t outlet) {
@@ -476,9 +458,7 @@ void setup() {
     }
     Serial.print("INA226  OK  (0x");
     Serial.print(INA226_ADDR, HEX);
-    Serial.print(") - outletId ");
-    Serial.print(USB_OUTLET_ID);
-    Serial.print(" 3.3V rail monitor, ");
+    Serial.print(") - separate INA226 3.3V rail monitor, ");
     Serial.print(INA226_MAX_CURRENT_AMPS, 2);
     Serial.print("A/");
     Serial.print(INA226_SHUNT_OHM, 3);
@@ -530,7 +510,7 @@ void setup() {
   }
   Serial.println();
   Serial.print("[RELAY] tiers: CH1 Critical | CH2 Important | CH3 Deferrable | "
-               "CH4 Nonessential | CH5 USB Low/priority-only");
+               "CH4 Deferrable");
   Serial.println();
   Serial.println("[RELAY] an outlet is only PROVEN when its OWN CT current goes to");
   Serial.println("[RELAY]   0.000 A on its disconnect and returns on reconnect.");
@@ -607,8 +587,7 @@ void setup() {
     Serial.print(" | CT channels="); Serial.print(BRANCH_CT_COUNT);
     Serial.print(" (AIN0..AIN"); Serial.print(BRANCH_CT_COUNT - 1);
     Serial.print(") | outlets="); Serial.print(OUTLET_COUNT);
-    Serial.print(" (CH1-4 CT + CH"); Serial.print(USB_OUTLET_ID);
-    Serial.print(" USB on INA226) | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
+    Serial.print(" (INA226 separate sensor) | sweep="); Serial.print(METER_INTERVAL_MS / 1000);
     Serial.println(" s");
 
     // Hand the measured per-conversion cost to the sweep so it can bound itself
@@ -999,8 +978,7 @@ void printSerialTelemetry() {
   Serial.print(INA226_MAIN_VOLT_DIVIDER);
   Serial.print(" - that divider is unused history) = ");
   Serial.print(mainsV, 1);
-  Serial.print(" V (CH1-4 reference) | outlet "); Serial.print(USB_OUTLET_ID);
-  Serial.println(" USB is the RAW bus V above");
+  Serial.println(" V (CH1-4 reference); INA226 DC telemetry is separate");
   Serial.println("--------------------------------------------------");
   // The grid voltage printed here is the one every watt below was multiplied
   // by. Its VALUE is the fixed MAINS_FIXED_VOLTS constant, now 238 V (it was 228 V
@@ -1036,19 +1014,11 @@ void printSerialTelemetry() {
     }
     Serial.println();
   }
-  // ---- outletId 5: the USB socket, monitored on the INA226 ----
-  // Printed separately from the CT block because it is NOT a CT reading and
-  // comes from a different sensor on a different bus. It has no relay, so
-  // there is deliberately no "desired=/pin=" clause: there is nothing to
-  // switch, and claiming otherwise would be the firmware lying about hardware
-  // it does not have.
-  Serial.print("  CH"); Serial.print(USB_OUTLET_ID);
-  Serial.print(" (INA226, no CT) -> ");
+  Serial.print("  INA226 DC rail -> ");
   Serial.print(inaV, 3);
   Serial.print(" V | "); Serial.print(inaI, 3);
-  Serial.print(" A | "); Serial.print(usbWatts(inaV, inaI), 2);
-  Serial.print(" W | relay: NONE (monitored-only, always CLOSED) | tier: Low/priority-only");
-  Serial.println();
+  Serial.print(" A | "); Serial.print(inaP, 2);
+  Serial.println(" W (separate from the 4 outlet channels)");
 
 #if ZMCT_CALIBRATION_MODE
   // ---- CT calibration helper (config.h ZMCT_CALIBRATION_MODE 1) ----
@@ -1093,8 +1063,7 @@ void printSerialTelemetry() {
       Serial.print(" CH"); Serial.print(ch + 1); Serial.print("->AIN"); Serial.print(ch);
       if (ch + 1 < BRANCH_CT_COUNT) Serial.print(",");
     }
-    Serial.print(" | outlet "); Serial.print(USB_OUTLET_ID);
-    Serial.println(" = USB socket on INA226 (no CT, no relay) - NOT part of this calibration");
+    Serial.println(" | INA226 is separate DC telemetry, not an outlet or part of CT calibration");
     Serial.println("[CAL] PROCEDURE: clamp ONE known load onto ONE branch, measure its");
     Serial.println("[CAL]   watts with a meter, put that number in ZMCT_CAL_REF_WATTS");
     Serial.println("[CAL]   (config.h) and reflash. Read 'suggested=' below, then write");
@@ -1215,10 +1184,8 @@ bool postTelemetry() {
   // CH1-4 watt; nothing in this block feeds it any more (it used to be
   // busV * INA226_MAIN_VOLT_DIVIDER). This block only reports the sensor.
   //
-  // Since the 5-channel expansion the same two figures are ALSO the outletId 5
-  // reading below (busV = its volts, currentA = its amps), which is why they are
-  // posted raw: the dashboard can show the USB socket's numbers and the sensor
-  // block side by side and they must match exactly.
+  // These values belong only to the INA226 sensor block. They are not attached
+  // to an outlet or included in the four-outlet mains total.
   JsonObject ina = doc["ina"].to<JsonObject>();
   ina["busV"]     = inaBusV;      // V at the INA226 bus pin (~3.3 V rail)
   ina["shuntmV"]  = inaShunt;     // mV across the 0.1 Ohm shunt
@@ -1237,27 +1204,8 @@ bool postTelemetry() {
     r["energyKwh"] = 0.0;                // no cumulative counter on this rig
     totalW += watts;
   }
-  // ---- outletId 5: the USB socket, measured by the INA226 ----
-  // volts = the RAW bus-pin reading, NOT mainsV and NOT busV x the divider. The
-  // INA226 IS the 3.3V rail monitor now, so this IS the socket's voltage and
-  // is expected to read ~3.3 V; the mains figure is a separate FIXED 238 V constant
-  // (MAINS_FIXED_VOLTS) and the old INA226_MAIN_VOLT_DIVIDER is unused history.
-  // watts = the product of these same two numbers, taken from
-  // the one hold they were both read under, so powerWatts == currentAmps *
-  // voltage holds here exactly as it does on CH1-CH4.
-  {
-    JsonObject u = readings.add<JsonObject>();
-    u["outletId"] = USB_OUTLET_ID;
-    u["voltage"] = inaBusV;
-    u["currentAmps"] = inaAmps;
-    u["powerWatts"] = usbWatts(inaBusV, inaAmps);
-    u["energyKwh"] = 0.0;                // no cumulative counter on this rig
-    // Counted in the total: it is a real measurement of a real rail, so
-    // excluding it would under-report the same way a phantom channel did.
-    totalW += usbWatts(inaBusV, inaAmps);
-  }
-  // No extra entry after the loop: outletId 1..BRANCH_CT_COUNT plus USB_OUTLET_ID
-  // is the whole rig, and totalW is the sum of every reading above it.
+  // The INA226 remains available under `ina`, separate from outlet readings
+  // and excluded from the mains load total.
 
   // Push the desired contact states to the pins before reporting them, so the
   // state the backend is told about is the state the hardware is in when this

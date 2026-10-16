@@ -17,16 +17,13 @@ import { Disclosure } from './Disclosure'
  * Three facts drive this whole page, and all three have been wrong in earlier
  * revisions of this file:
  *
- *  1. The rig is FIVE channels: CH1-CH4 are 238 V AC outlets and CH5 is a 5 V
- *     USB socket. The earlier "thirteen control channels" card described the
- *     full build, not what is on the bench.
+ *  1. The rig has four controlled 238 V AC outlets. INA226 readings describe a
+ *     separate DC rail and are not an outlet channel.
  *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1220
  *     four-channel 16-bit ADC over SPI with a CT on EACH mains branch (CH1-CH4),
  *     which is why per-branch current is MEASURED rather than apportioned from a
  *     mains total. An INA226 connects to the ESP32 over I²C and measures its own DC shunt path
- *     block — it is NOT the mains reference, and nothing else on the rig is. CH5
- *     has no sensor at all — its figure is the rail's nominal rating, and is
- *     labelled as nominal wherever it appears.
+ *     block — it is NOT the mains reference, and nothing else on the rig is.
  *  3. The relay contacts are NORMALLY CLOSED. Power passes while the coil is
  *     idle, which means the pin HIGH is the energised channel and the pin LOW
  *     is the cut channel. That is the inverse of the NO relay most people wire
@@ -46,20 +43,19 @@ import { Disclosure } from './Disclosure'
  */
 
 const CHANNELS = [
-  { channel: 'CH1', rail: '238 V AC', gpio: 10, adc: 'AIN0', sensed: true },
-  { channel: 'CH2', rail: '238 V AC', gpio: 11, adc: 'AIN1', sensed: true },
-  { channel: 'CH3', rail: '238 V AC', gpio: 12, adc: 'AIN2', sensed: true },
-  { channel: 'CH4', rail: '238 V AC', gpio: 13, adc: 'AIN3', sensed: true },
-  { channel: 'CH5', rail: '5 V DC USB', gpio: 14, adc: '—', sensed: false },
+  { channel: 'CH1', rail: '238 V AC', gpio: 1, adc: 'AIN0', sensed: true },
+  { channel: 'CH2', rail: '238 V AC', gpio: 2, adc: 'AIN1', sensed: true },
+  { channel: 'CH3', rail: '238 V AC', gpio: 4, adc: 'AIN2', sensed: true },
+  { channel: 'CH4', rail: '238 V AC', gpio: 5, adc: 'AIN3', sensed: true },
 ] as const
 
 const perOutletParts = [
-  'Grounded 238 V AC outlet (CH1-CH4) or USB socket (CH5)',
+  'Grounded 238 V AC outlet',
   'Normally-closed relay contact in the live conductor',
   'Branch current sensor on its own ADS1220 analogue channel (CH1-CH4 only)',
   'Per-channel firmware state: priority, allowance, schedule, idle limit',
   'Red rocker/manual switch or switch cap',
-  'Rated-voltage label (238V mains or 5V USB)',
+  'Rated-voltage label (238V mains)',
 ]
 
 const systemParts = [
@@ -239,16 +235,16 @@ export function HardwareView() {
               <Plug size={18} className="text-on-surface-variant" aria-hidden />
             </div>
             <p className="font-metric-display text-metric-display text-on-surface flex items-baseline gap-1.5">
-              5
+              4
               <span className="font-metric-value text-metric-value font-normal text-on-surface-variant">
-                CH1–CH5
+                CH1–CH4
               </span>
             </p>
             <p className="font-metric-value text-metric-value text-on-surface-variant">
               CH1–CH4 · 238 V AC outlets
             </p>
             <p className="mt-auto font-metric-value text-metric-value text-outline">
-              CH5 · 5 V USB socket
+              INA226 · separate DC telemetry
             </p>
           </div>
         </article>
@@ -545,15 +541,14 @@ export function HardwareView() {
             </article>
             <article className="rounded-md border border-outline-variant p-space-md">
               <div className="flex items-center gap-2">
-                <h3 className="font-title-md text-title-md text-on-surface">USB rail</h3>
+                <h3 className="font-title-md text-title-md text-on-surface">INA226 monitor</h3>
                 <span className="font-label-sm text-label-sm uppercase text-on-surface-variant">
-                  No sensor fitted
+                  Separate DC sensor
                 </span>
               </div>
               <p className="mt-1 font-body-sm text-body-sm text-on-surface-variant">
-                CH5 has no current sensor. Its reading is the 5 V rail’s nominal
-                rating repeated across the window, so it must never be read as a measured zero or
-                as a measured load.
+                The INA226 measures its own DC shunt path. It is shown as sensor
+                telemetry and is not counted as an outlet or added to mains load.
               </p>
             </article>
           </div>

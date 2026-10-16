@@ -490,8 +490,8 @@ export type TelemetrySeries = {
   totals: { watts: Array<number | null>; energyKwhDelta: number | null }
 }
 
-// Testing rig: 5 wired channels (CH1-CH4 220V + CH5 USB 5V).
-const ALL_CHANNELS = 5
+// Testing rig: four 220V outlets. INA226 is separate sensor telemetry.
+const ALL_CHANNELS = 4
 
 // `channels` is omitted when nothing is filtered, so the server returns all.
 // Any other subset is sent as a sorted, comma-joined id list.
