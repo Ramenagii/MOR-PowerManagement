@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react'
 import { fetchPolicies, type PolicyItem } from '../api'
+import { FRAMEWORK_SCOPE, FRAMEWORK_TITLE, SITUATIONS } from './policyAdmin'
 
 /**
  * Framework Rules -- the rule repository, in the order the engine actually
@@ -308,25 +309,29 @@ export function PoliciesView() {
   }, [ordered])
 
   return (
-    <section className="design-main" aria-label="Framework rules">
+    <section className="design-main" aria-label="Framework">
       {/* --- Breadcrumb ------------------------------------------------------ */}
       <nav aria-label="Breadcrumb" className="mb-space-sm flex items-center gap-space-sm">
         <span className="font-body-sm text-body-sm text-on-surface-variant">Console</span>
         <span className="font-body-sm text-body-sm text-outline-variant" aria-hidden>
           /
         </span>
-        <strong className="font-body-sm text-body-sm font-semibold text-on-surface">
-          Framework Rules
-        </strong>
+        <strong className="font-body-sm text-body-sm font-semibold text-on-surface">Framework</strong>
       </nav>
 
       {/* --- Page head ------------------------------------------------------- */}
       <header className="mb-space-lg flex flex-col gap-space-md lg:flex-row lg:items-end lg:justify-between">
         <div className="flex min-w-0 flex-col gap-1">
           <h1 className="font-headline-md text-headline-md text-on-surface">
-            Event-Condition-Action control logic
+            {FRAMEWORK_TITLE}
           </h1>
-          <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">
+          {/* The scope caveat rides the title, not a footnote. A reader who
+              takes only the heading must still see that this is a prototype
+              and not a substitute for the fuse and the breaker. */}
+          <p className="font-body-md text-body-md text-on-surface-variant">
+            <span className="font-semibold text-on-surface">({FRAMEWORK_SCOPE})</span>
+          </p>
+          <p className="max-w-3xl font-body-sm text-body-sm text-on-surface-variant">
             The complete rule set the ESP32 evaluates once per tick, in the order it evaluates it.
             FR-xx is the current identifier; the earlier POL-xx codes are retained for traceability only.
           </p>
@@ -352,6 +357,94 @@ export function PoliciesView() {
           </span>
         </div>
       </header>
+
+      {/* --- Build-prioritization situations ---------------------------------
+          Placed above the rule matrix because it is what a panelist asks first:
+          "what actually happens when it trips?" The matrix below is the
+          mechanism; these four are the outcomes it produces.
+
+          These cards are descriptions, not controls. Each names the Dashboard
+          vector that produces it; the buttons that actually dispatch the real
+          ingest and activation routes live on that view, so nothing here can
+          claim a run it did not make. */}
+      <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="situations-heading">
+        <div className="ant-card-header flex-col items-stretch lg:flex-row lg:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            <Waypoints size={20} className="text-on-surface-variant" aria-hidden />
+            <h2 id="situations-heading" className="font-title-lg text-title-lg font-semibold text-on-surface">
+              Build-prioritization situations
+            </h2>
+            <code className="rounded bg-surface-container px-2 py-0.5 font-metric-value text-metric-value text-on-surface-variant">
+              {`${SITUATIONS.length} situations`}
+            </code>
+          </div>
+          <span className="font-body-sm text-body-sm text-on-surface-variant">
+            Run each on the Dashboard vectors
+          </span>
+        </div>
+
+        <div className="ant-card-body grid grid-cols-1 gap-space-md sm:grid-cols-2 xl:grid-cols-4">
+          {SITUATIONS.map((situation) => (
+            <article
+              key={situation.id}
+              className="flex flex-col gap-space-sm rounded-lg border border-outline-variant bg-surface-container-low p-space-md"
+              aria-label={`Situation ${situation.n}, ${situation.title}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="font-metric-value text-metric-value font-semibold text-outline">
+                    {String(situation.n).padStart(2, '0')}
+                  </span>
+                  <h3 className="min-w-0 font-title-md text-title-md font-semibold text-on-surface">
+                    {situation.title}
+                  </h3>
+                </div>
+                <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap">
+                  <span
+                    className={`ant-dot ${
+                      situation.tone === 'critical'
+                        ? 'ant-dot-critical'
+                        : situation.tone === 'warning'
+                          ? 'ant-dot-warning'
+                          : 'bg-outline-variant'
+                    }`}
+                    aria-hidden
+                  />
+                  <span className="font-metric-value text-metric-value text-on-surface-variant">
+                    {situation.bandLabel}
+                  </span>
+                </span>
+              </div>
+
+              <dl className="flex flex-col gap-1 font-code text-code">
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="text-outline">When</dt>
+                  <dd className="min-w-0 truncate text-right text-on-surface-variant" title={situation.condition}>
+                    {situation.condition}
+                  </dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="text-outline">Rule</dt>
+                  <dd className="font-metric-value text-metric-value text-on-surface">{situation.frame}</dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="text-outline">Vector</dt>
+                  <dd className="font-metric-value text-metric-value text-on-surface">{situation.sim}</dd>
+                </div>
+              </dl>
+
+              <p className="font-body-sm text-body-sm text-on-surface-variant">{situation.expected}</p>
+
+              <code
+                className="mt-auto block min-w-0 truncate rounded bg-surface-container-lowest px-space-sm py-1 font-code text-code text-outline"
+                title={situation.endpoint}
+              >
+                {situation.endpoint}
+              </code>
+            </article>
+          ))}
+        </div>
+      </section>
 
       {/* --- Rule matrix ----------------------------------------------------- */}
       <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="rule-matrix-heading">
@@ -740,7 +833,7 @@ export function PoliciesView() {
         </span>
         <span className="inline-flex items-center gap-1.5">
           <SlidersHorizontal size={13} aria-hidden />
-          Editing and enabling rules happen on the Policy Admin screen; this view is read-only.
+          Editing and enabling rules happen on the Framework Admin screen; this view is read-only.
         </span>
         <span className="inline-flex items-center gap-1.5">
           <Power size={13} aria-hidden />

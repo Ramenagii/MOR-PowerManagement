@@ -3,6 +3,17 @@ import { Activity, Cpu, Gauge, LayoutDashboard, Settings2, SlidersHorizontal } f
 import { useState, type ReactNode } from 'react'
 import type { AppView } from '../types/dashboard'
 
+/**
+ * Section labels.
+ *
+ * "Policy" is gone from the user-facing chrome. The engine reallocates power
+ * between outlets under a capacity ceiling — it is a demand-response control
+ * loop, not an enforcement or protection mechanism, and the old label invited
+ * the wrong reading. "Framework" is the name the thesis uses.
+ *
+ * Note: AppTopBar renders the nav that is actually on screen and keeps its own
+ * label list; this menu is the legacy fallback. Both need to agree.
+ */
 const menuItems: Array<{
   id: AppView
   label: string
@@ -11,8 +22,8 @@ const menuItems: Array<{
   { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={16} /> },
   { id: 'channels', label: 'Channel Inventory', icon: <Gauge size={16} /> },
   { id: 'telemetry', label: 'Telemetry', icon: <Activity size={16} /> },
-  { id: 'admin', label: 'Policy Administration', icon: <Settings2 size={16} /> },
-  { id: 'policies', label: 'Policies', icon: <SlidersHorizontal size={16} /> },
+  { id: 'admin', label: 'Framework Admin', icon: <Settings2 size={16} /> },
+  { id: 'policies', label: 'Framework', icon: <SlidersHorizontal size={16} /> },
   { id: 'hardware', label: 'Hardware Components', icon: <Cpu size={16} /> },
 ]
 

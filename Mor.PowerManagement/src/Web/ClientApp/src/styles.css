@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
 :root {
   color: #1b1b1c;
   background: #fcf9f8;
@@ -1390,7 +1392,7 @@ h3 {
   font-size: 11px;
 }
 
-/* Standard clip technique — NOT display:none, so the numbers stay in the
+/* Standard clip technique â€” NOT display:none, so the numbers stay in the
    accessibility tree for the chart's screen-reader data table. */
 .sr-only {
   position: absolute;
@@ -1893,7 +1895,7 @@ h3 {
     align-items: stretch;
   }
 
-  /* Only the chip strip scrolls. The chart never does — a horizontally
+  /* Only the chip strip scrolls. The chart never does â€” a horizontally
      scrolling chart at 390 px is unusable. */
   .channel-chips {
     display: flex;
@@ -3063,4 +3065,545 @@ body {
 @media (max-width: 900px) {
   .policy-table { overflow-x: auto; }
   .policy-row { min-width: 900px; }
+}
+/* ===========================================================================
+ * Stitch â€” "Soft Minimalist" design layer
+ * ---------------------------------------------------------------------------
+ * Ported from the Stitch reference screens (Channel Inventory & Sensor Matrix,
+ * Telemetry & Statistical Analytics). It is SCOPED to .stitch so the two views
+ * carrying it do not restyle the operational Dashboard, whose tokens still come
+ * from the Ant layer in ant.css.
+ *
+ * What makes this look different from the Ant layer, and why it is not just
+ * another set of colours:
+ *   - Ink is near-black warm (#181d24) and everything else is a desaturated
+ *     slate grey, not a tinted surface. The Ant palette carries a warm paper
+ *     cast (#fcf9f8 surfaces, #414755 variant ink); this one goes neutral.
+ *   - The accent is a deep slate blue (#274c77), not the bright #0057c2. Blue is
+ *     used for MEASUREMENT only, and never on a large surface.
+ *   - Cards float: a 1px #e8e8e2 border plus a 2% shadow, with generous radius,
+ *     no header rule. Depth comes from the border, not from elevation.
+ *   - Radii are small (2/4/8px) and pills are true pills â€” the reference's
+ *     rounded-full maps to 12px, which is why toggles are built here rather
+ *     than with a 9999px utility.
+ *   - One type ramp: 10/11/12/13/14/22/26px, with every figure in JetBrains
+ *     Mono and every label in Inter.
+ * =========================================================================== */
+
+.stitch {
+  /* --- ink ------------------------------------------------------------- */
+  --st-title: #1a1f26;
+  --st-ink: #181d24;
+  --st-heading: #1e2329;
+  --st-value: #20252c;
+  --st-label: #6f7782;
+  --st-body: #6b7380;
+  --st-micro: #717a86;
+  --st-chip-ink: #626c79;
+  --st-muted: #939ca8;
+  --st-faint: #8c94a0;
+  --st-fainter: #757e8c;
+  --st-white: #ffffff;
+
+  /* --- surfaces -------------------------------------------------------- */
+  --st-card: #ffffff;
+  --st-card-bd: #e8e8e2;
+  --st-card-hov: #d0d0c8;
+  --st-panel-bd: #e7e7e2;
+  --st-track: #f1f1eb;
+  --st-track-2: #efefe9;
+  --st-seg: #f4f4ee;
+  --st-matrix: #f8f8f4;
+  --st-matrix-bd: #ecece6;
+  --st-divider: #f2f2eb;
+  --st-neutral-bg: #f2f2ec;
+
+  /* --- accent (measurement only) -------------------------------------- */
+  --st-accent: #274c77;
+  --st-accent-hov: #1e3c5f;
+  --st-accent-deep: #2c537d;
+  --st-accent-soft: #355f8a;
+  --st-accent-bg: #eaf1f7;
+  --st-accent-bg-2: #ecf2f8;
+  --st-accent-bd: #d6e3ee;
+
+  /* --- status ---------------------------------------------------------- */
+  --st-ok: #2e7450;
+  --st-ok-bg: #eef7f2;
+  --st-ok-bd: #d2edd9;
+  --st-warn: #995d18;
+  --st-warn-soft: #a37442;
+  --st-danger: #b4443c;
+  --st-danger-soft: #a94a4a;
+  --st-danger-bg: #fdf1f0;
+  --st-danger-bd: #f2d8d6;
+
+  /* --- chart ----------------------------------------------------------- */
+  --st-line: #4a607a;
+  --st-grid: #f3f3ee;
+  --st-axis: #94a3b8;
+
+  /* --- heat ramp (idle -> saturated) ----------------------------------- */
+  --st-hm-0: #f4f4f0;
+  --st-hm-1: #d5e1ed;
+  --st-hm-2: #aec4db;
+  --st-hm-3: #789bbf;
+  --st-hm-4: #3b6b9b;
+
+  /* --- geometry -------------------------------------------------------- */
+  --st-r-sm: 2px;
+  --st-r-md: 4px;
+  --st-r-lg: 6px;
+  --st-r-xl: 8px;
+  --st-shadow: 0 2px 10px rgba(0, 0, 0, 0.02);
+  --st-shadow-hover: 0 2px 12px rgba(0, 0, 0, 0.03);
+
+  font-family: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: var(--st-heading);
+}
+
+/* --- type ramp ---------------------------------------------------------- */
+.st-title   { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.015em; color: var(--st-title); }
+.st-h3      { font-size: 14px; line-height: 20px; font-weight: 600; color: var(--st-heading); }
+.st-body    { font-size: 13px; line-height: 19px; color: var(--st-body); }
+.st-label   { font-size: 12px; line-height: 17px; font-weight: 500; color: var(--st-label); }
+.st-micro   { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 16px; color: var(--st-micro); }
+.st-tiny    { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; line-height: 14px; }
+.st-eyebrow { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; line-height: 14px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--st-faint); }
+.st-mono    { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+.st-figure  { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 26px; line-height: 32px; font-weight: 600; letter-spacing: -0.02em; color: var(--st-ink); font-variant-numeric: tabular-nums; }
+.st-figure-sm { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 20px; line-height: 26px; font-weight: 600; letter-spacing: -0.015em; color: var(--st-ink); font-variant-numeric: tabular-nums; }
+.st-unit    { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 13px; font-weight: 500; color: var(--st-muted); }
+.st-dash    { color: var(--st-muted); }
+.st-accent  { color: var(--st-accent); }
+.st-ok      { color: var(--st-ok); }
+.st-warn    { color: var(--st-warn); }
+.st-danger  { color: var(--st-danger); }
+
+/* --- cards ------------------------------------------------------------- */
+.st-card {
+  background: var(--st-card);
+  border: 1px solid var(--st-card-bd);
+  border-radius: var(--st-xl);
+  box-shadow: var(--st-shadow);
+}
+.st-card-pad { padding: 16px; }
+.st-card-hover { transition: border-color 200ms ease, box-shadow 200ms ease; }
+.st-card-hover:hover { border-color: var(--st-card-hov); box-shadow: var(--st-shadow-hover); }
+
+/* Stat card: header / figure / footer, with the footer pinned to the bottom so
+   four cards of differing content still share one baseline. */
+.st-stat { display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
+.st-stat-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.st-stat-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--st-divider);
+}
+
+/* --- chips ------------------------------------------------------------- */
+.st-chip {
+  display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11px; line-height: 16px;
+  padding: 2px 8px; border-radius: 9999px; border: 1px solid transparent;
+}
+.st-chip-ok { color: var(--st-ok); background: var(--st-ok-bg); border-color: var(--st-ok-bd); }
+.st-chip-info { color: var(--st-accent-soft); background: var(--st-accent-bg); border-color: var(--st-accent-bd); }
+.st-chip-neutral { color: var(--st-chip-ink); background: var(--st-neutral-bg); }
+.st-chip-warn { color: var(--st-warn); background: #fdf6ea; border-color: #f0e0c4; }
+.st-chip-danger { color: var(--st-danger); background: var(--st-danger-bg); border-color: var(--st-danger-bd); }
+
+/* Square-ish tag used for rail / priority on a channel card. */
+.st-tag {
+  display: inline-flex; align-items: center; white-space: nowrap;
+  font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 10px; line-height: 15px;
+  padding: 1px 6px; border-radius: var(--st-r-sm);
+}
+.st-tag-neutral { color: var(--st-chip-ink); background: var(--st-neutral-bg); }
+.st-tag-accent { color: var(--st-accent-deep); background: #eaf0f7; }
+.st-tag-warn { color: var(--st-warn); background: #fdf6ea; }
+.st-tag-muted { color: var(--st-muted); background: var(--st-neutral-bg); }
+
+/* --- status dot -------------------------------------------------------- */
+.st-dot { width: 8px; height: 8px; border-radius: 9999px; flex: none; display: inline-block; }
+.st-dot-ok { background: var(--st-ok); }
+.st-dot-off { background: var(--st-muted); }
+.st-dot-warn { background: var(--st-warn); }
+.st-dot-danger { background: var(--st-danger); }
+.st-dot-live { box-shadow: 0 0 0 3px rgba(46, 116, 80, 0.15); }
+
+/* --- bars -------------------------------------------------------------- */
+.st-bar { width: 100%; height: 6px; border-radius: 9999px; background: var(--st-track); overflow: hidden; }
+.st-bar-2 { height: 6px; background: var(--st-track-2); }
+.st-bar-fill { height: 100%; border-radius: 9999px; background: var(--st-accent); transition: width 500ms ease-out; }
+.st-bar-fill-ok { background: var(--st-ok); }
+.st-bar-fill-warn { background: var(--st-warn); }
+.st-bar-fill-danger { background: var(--st-danger); }
+.st-bar-fill-idle { background: var(--st-muted); }
+
+/* --- segmented control ------------------------------------------------- */
+.st-seg { display: inline-flex; align-items: center; gap: 4px; padding: 4px; background: var(--st-seg); border-radius: var(--st-r-lg); overflow-x: auto; max-width: 100%; }
+.st-seg-item {
+  white-space: nowrap; padding: 5px 14px; border: 0; border-radius: var(--st-r-md);
+  background: transparent; color: var(--st-label); font-size: 12px; font-weight: 500;
+  cursor: pointer; transition: background 200ms ease, color 200ms ease, box-shadow 200ms ease;
+}
+.st-seg-item:hover { color: var(--st-title); }
+.st-seg-item[aria-pressed='true'], .st-seg-item[aria-selected='true'] {
+  background: var(--st-card); color: #21262d; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); font-weight: 600;
+}
+
+/* --- inputs ------------------------------------------------------------ */
+.st-input, .st-select {
+  height: 32px; width: 100%; padding: 0 12px;
+  background: var(--st-card); border: 1px solid var(--st-card-bd); border-radius: var(--st-r-lg);
+  color: var(--st-heading); font-size: 12px; font-family: inherit;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.st-input::placeholder { color: var(--st-muted); }
+.st-input:focus, .st-select:focus {
+  outline: none; border-color: var(--st-accent); box-shadow: 0 0 0 3px rgba(39, 76, 119, 0.12);
+}
+.st-select { appearance: none; padding-right: 28px; cursor: pointer; }
+
+/* --- buttons ----------------------------------------------------------- */
+.st-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 32px; padding: 0 12px; border-radius: var(--st-r-lg);
+  font-size: 12px; font-weight: 500; cursor: pointer; white-space: nowrap;
+  background: var(--st-card); color: #3f4753; border: 1px solid var(--st-card-bd);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  transition: background 200ms ease, color 200ms ease, border-color 200ms ease, transform 120ms ease;
+}
+.st-btn:hover:not(:disabled) { background: #f6f6f2; color: var(--st-title); }
+.st-btn:active:not(:disabled) { transform: scale(0.97); }
+.st-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.st-btn-primary { background: var(--st-accent); color: #fff; border-color: var(--st-accent); box-shadow: 0 1px 3px rgba(39, 76, 119, 0.15); }
+.st-btn-primary:hover:not(:disabled) { background: var(--st-accent-hov); color: #fff; }
+.st-btn-icon { width: 32px; padding: 0; }
+
+/* Visible focus on every interactive control in this layer. */
+.stitch :is(button, a, input, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--st-accent);
+  outline-offset: 2px;
+  border-radius: var(--st-r-md);
+}
+
+/* --- channel card ------------------------------------------------------ */
+.st-channel { display: flex; flex-direction: column; justify-content: space-between; height: 100%; }
+.st-matrix {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
+  padding: 8px; border-radius: var(--st-r-lg);
+  background: var(--st-matrix); border: 1px solid var(--st-matrix-bd);
+  font-family: 'JetBrains Mono', ui-monospace, monospace; text-align: center;
+}
+.st-matrix-label { font-size: 9px; line-height: 13px; text-transform: uppercase; color: #7f8895; letter-spacing: 0.04em; }
+.st-matrix-value { font-size: 12px; line-height: 17px; font-weight: 500; color: var(--st-value); font-variant-numeric: tabular-nums; }
+
+/* An unwired branch is dimmed end-to-end so it can never be mistaken for a
+   channel that reported a reading. Its numbers are real zeros, not blanks. */
+.st-unwired { opacity: 0.62; }
+.st-unwired .st-matrix-value { color: var(--st-muted); }
+
+/* --- relay toggle ------------------------------------------------------ */
+.st-relay {
+  position: relative; display: inline-flex; align-items: center;
+  width: 32px; height: 18px; padding: 2px; flex: none;
+  border: 0; border-radius: 9999px; background: var(--st-track-2);
+  cursor: pointer; transition: background 200ms ease;
+}
+.st-relay::after {
+  content: ''; width: 14px; height: 14px; border-radius: 9999px;
+  background: var(--st-white); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+  transform: translateX(0); transition: transform 200ms ease-out;
+}
+.st-relay[aria-checked='true'] { background: var(--st-accent); }
+.st-relay[aria-checked='true']::after { transform: translateX(14px); }
+.st-relay:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* --- heatmap ----------------------------------------------------------- */
+.st-heat { display: grid; gap: 3px; }
+.st-heat-cell { aspect-ratio: 1 / 1; border-radius: 2px; background: var(--st-hm-0); }
+.st-hm-0 { background: var(--st-hm-0); }
+.st-hm-1 { background: var(--st-hm-1); }
+.st-hm-2 { background: var(--st-hm-2); }
+.st-hm-3 { background: var(--st-hm-3); }
+.st-hm-4 { background: var(--st-hm-4); }
+
+/* --- misc -------------------------------------------------------------- */
+.st-banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 8px; padding: 12px 16px;
+  background: var(--st-card); border: 1px solid var(--st-danger-bd);
+  border-left: 4px solid var(--st-danger); border-radius: var(--st-xl);
+}
+.st-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 20px; }
+
+/* Reference grid: 1 / 2 / 3 / 5 columns. */
+.st-channels { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 768px) { .st-channels { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .st-channels { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1280px) { .st-channels { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+
+.st-stats { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 640px) { .st-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .st-stats-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .st-stats-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+
+.st-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+@media (min-width: 1024px) { .st-split { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); } }
+
+/* --- motion ------------------------------------------------------------ */
+@keyframes st-ping {
+  0%   { transform: scale(1);   opacity: 0.55; }
+  70%  { transform: scale(2.4); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.st-ping { animation: st-ping 1800ms ease-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .stitch *, .stitch *::before, .stitch *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+  .st-ping { display: none; }
+}
+/* ===========================================================================
+ * MOR Power â€” reference dashboard design (single-file mock)
+ * ---------------------------------------------------------------------------
+ * A direct port of the supplied mock, scoped under .mp so it cannot leak into
+ * the Stitch soft-minimalist layer used by Channel Inventory and Telemetry.
+ *
+ * Port notes, all deliberate:
+ *   - Every class is namespaced. The mock used bare .card/.row/.big/.tag; left
+ *     unscoped they would restyle the other views.
+ *   - Tokens live on .mp rather than :root so the two design systems in this
+ *     app cannot fight over the same custom property names.
+ *   - The dark blocks are carried over as written, including the author's
+ *     `@media not all` guard. That guard can never match, so the dark theme is
+ *     reachable only through [data-theme="none"] and [data-theme="dark"] â€” the
+ *     second selector is added because the app's index.html actually sets
+ *     data-theme="dark", and the stock mock would have left it unreachable.
+ * =========================================================================== */
+
+.mp {
+  --bg: #FBF7F5;
+  --surface: #fff;
+  --ink: #1B1E22;
+  --mute: #70757A;
+  --line: #E7E3E0;
+  --live: #0B5ED7;
+  --live-soft: #DCE8F8;
+  --ok: #6B7075;
+  --warn: #A8820C;
+  --bad: #D6291F;
+  --ui: 'Archivo', system-ui, sans-serif;
+  --num: 'IBM Plex Mono', ui-monospace, monospace;
+  color-scheme: light;
+  color: var(--ink);
+  font: 400 14px/1.4 var(--ui);
+}
+
+@media not all {
+  :root:not([data-theme='light']) .mp {
+    --bg: #0D131A; --surface: #151D27; --ink: #E8EEF5; --mute: #8A97A6; --line: #25303D;
+    --live: #5B8CFF; --live-soft: #1A2A4D; --ok: #3CCB8C; --warn: #E8A33A; --bad: #FF6A62;
+    color-scheme: dark;
+  }
+}
+:root[data-theme='none'] .mp,
+:root[data-theme='dark'] .mp {
+  --bg: #0D131A; --surface: #151D27; --ink: #E8EEF5; --mute: #8A97A6; --line: #25303D;
+  --live: #5B8CFF; --live-soft: #1A2A4D; --ok: #3CCB8C; --warn: #E8A33A; --bad: #FF6A62;
+  color-scheme: dark;
+}
+
+/* Top padding is deliberate: the nav is a sticky bar, and without this the
+   hero card starts flush against it and reads as layered over it. */
+.mp { max-width: 1180px; margin: 0 auto; padding: 20px 20px 40px; }
+.mp .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
+.mp .mp-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+
+/* --- status dot + pulse --------------------------------------------------- */
+.mp .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.mp .dot.live { background: var(--live); animation: mp-pulse 1.6s infinite; }
+.mp .dot.bad { background: var(--bad); }
+.mp .dot.warn { background: var(--warn); }
+.mp .dot.off { background: var(--line); }
+@keyframes mp-pulse { 50% { opacity: .25; } }
+
+.mp .mp-pill {
+  border: 1px solid var(--line); background: var(--surface); border-radius: 99px;
+  padding: 5px 12px; font-size: 12px; display: inline-flex; align-items: center; gap: 7px;
+  color: var(--ink); white-space: nowrap;
+}
+
+/* --- hero ---------------------------------------------------------------- */
+.mp .hero { display: grid; grid-template-columns: minmax(220px, 300px) 1fr; overflow: hidden; }
+.mp .hero-l {
+  padding: 22px 24px; border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 14px;
+}
+.mp .lbl { color: var(--mute); font-size: 12px; }
+.mp .big {
+  font-family: var(--num); font-weight: 500; font-size: 68px; line-height: 1;
+  letter-spacing: -2px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.mp .big small { font-size: 22px; color: var(--mute); letter-spacing: 0; margin-left: 4px; }
+.mp .stats { display: flex; gap: 22px; }
+.mp .stats b { display: block; font-family: var(--num); font-size: 18px; font-weight: 500; color: var(--ink); }
+.mp .meter { height: 6px; background: var(--live-soft); border-radius: 9px; overflow: hidden; }
+.mp .meter > i { display: block; height: 100%; background: var(--live); border-radius: 9px; transition: width .6s; }
+/*
+ * The right half of the hero is a FLEX COLUMN, not a positioned box.
+ *
+ * The previous version used `position: relative` + `svg { height: 100% }` with
+ * the caption absolutely positioned over the plot. Two things went wrong:
+ *   - a percentage height against a `min-height` parent is not a definite
+ *     height, so the SVG collapsed to a thin strip that hugged the floor while
+ *     the column above it stayed empty; and
+ *   - the absolutely-positioned caption sat ON the chart, so the line ran under
+ *     the text and the two read as one overlapping layer.
+ *
+ * In normal flow, with the plot on a fixed height, neither can happen: the
+ * caption cannot overlap the SVG because it has its own row, and the plot cannot
+ * collapse because its height is a length, not a percentage of something
+ * indefinite.
+ */
+.mp .hero-r {
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0; padding: 12px 14px 12px;
+}
+
+/* The plot itself. A real fixed height, matching the reference. */
+.mp .hero-plot { position: relative; height: 170px; flex: none; min-width: 0; }
+.mp .hero-plot svg { width: 100%; height: 100%; display: block; }
+
+/* Caption: its own row under the plot, never on it. */
+.mp .chart-cap {
+  flex: none; display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; color: var(--mute); font-size: 11px;
+}
+
+/* P_limit: its own row above the plot, right-aligned. In flow it can never
+   overlap the line, which an absolutely-positioned tag could and did. */
+.mp .lim { flex: none; align-self: flex-end; font-size: 11px; color: var(--warn); }
+
+/* --- section heading ----------------------------------------------------- */
+.mp h2.mp-h {
+  font-size: 13px; font-weight: 600; color: var(--mute); margin: 26px 2px 10px;
+  display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+}
+
+/* --- channel row --------------------------------------------------------- */
+.mp .row {
+  display: grid; grid-template-columns: 200px 190px 1fr 230px 64px; align-items: center;
+  gap: 22px; padding: 18px 22px; margin-bottom: 10px; position: relative; overflow: hidden;
+}
+.mp .row::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--live); }
+.mp .row.off::before { background: var(--line); }
+.mp .row.off .w, .mp .row.off .spark { opacity: .35; }
+.mp .row.idcol { min-width: 0; }
+.mp .row.idcol > b { font-size: 15px; color: var(--ink); display: block; }
+.mp .row.idcol .meta { color: var(--mute); font-size: 12px; margin-top: 3px; }
+.mp .row .w {
+  font-family: var(--num); font-size: 48px; font-weight: 500; line-height: 1;
+  letter-spacing: -1.5px; color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.mp .row .w small { font-size: 16px; color: var(--mute); letter-spacing: 0; margin-left: 3px; }
+.mp .row .va { color: var(--mute); font-size: 12px; margin-top: 6px; }
+.mp .spark svg { width: 100%; height: 64px; display: block; }
+.mp .alloc .top { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--mute); margin-bottom: 6px; }
+.mp .alloc .top b { color: var(--ink); font-weight: 500; }
+.mp .alloc .pk { margin-top: 6px; font-size: 11px; color: var(--mute); }
+
+.mp .tag {
+  display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
+  border-radius: 99px; margin-top: 8px;
+}
+.mp .tag.crit { background: #FDE7E5; color: #B1251F; }
+.mp .tag.high { background: #FFF0D6; color: #8F5700; }
+.mp .tag.mid { background: var(--line); color: var(--mute); }
+@media not all {
+  :root:not([data-theme='light']) .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
+  :root:not([data-theme='light']) .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
+}
+:root[data-theme='none'] .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
+:root[data-theme='none'] .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
+:root[data-theme='dark'] .mp .tag.crit { background: #3B1A19; color: #FF9A94; }
+:root[data-theme='dark'] .mp .tag.high { background: #3A2B10; color: #F2BE6B; }
+
+/* --- switch -------------------------------------------------------------- */
+.mp .sw {
+  width: 56px; height: 30px; border-radius: 99px; border: 0; background: var(--live);
+  position: relative; cursor: pointer; transition: background .2s; padding: 0; flex: none;
+}
+.mp .sw::after {
+  content: ''; position: absolute; top: 3px; left: 29px; width: 24px; height: 24px;
+  border-radius: 50%; background: #fff; transition: left .2s;
+}
+.mp .sw[aria-pressed='false'] { background: var(--line); }
+.mp .sw[aria-pressed='false']::after { left: 3px; }
+.mp .sw:disabled { opacity: .45; cursor: not-allowed; }
+.mp .sw:focus-visible,
+.mp .vec button:focus-visible { outline: 2px solid var(--live); outline-offset: 3px; }
+
+/* --- vectors ------------------------------------------------------------- */
+.mp .vec { padding: 16px 22px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.mp .vec button {
+  display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); border-radius: 9px; padding: 9px 14px;
+  font: 500 13px var(--ui); cursor: pointer; transition: border-color .2s;
+}
+.mp .vec button:hover:not(:disabled) { border-color: var(--live); }
+.mp .vec button:disabled { opacity: .5; cursor: not-allowed; }
+.mp .vec button i { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.mp .vec .ep { margin-left: auto; font-size: 12px; color: var(--mute); }
+.mp .out {
+  margin: 0 22px 18px; padding: 12px 14px; border-radius: 8px; background: var(--bg);
+  border-left: 3px solid var(--mute); font-size: 12.5px; color: var(--ink);
+}
+.mp .out.run { border-color: var(--live); }
+.mp .out.alert { border-color: var(--bad); }
+.mp .out b { font-weight: 600; }
+
+/* --- offline ------------------------------------------------------------- */
+.mp .mp-banner {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 12px 14px; border-radius: 8px; margin-top: 16px;
+  background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--bad);
+  font-size: 12.5px;
+}
+.mp .mp-btn {
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 9px; padding: 7px 13px; font: 500 12px var(--ui); cursor: pointer;
+}
+.mp .mp-btn:hover:not(:disabled) { border-color: var(--live); }
+
+/* --- responsive (breakpoint is 980px in the mock, not 760) ---------------- */
+@media (max-width: 980px) {
+  .mp .hero { grid-template-columns: 1fr; }
+  .mp .hero-l { border-right: 0; border-bottom: 1px solid var(--line); }
+  .mp .row { grid-template-columns: 1fr auto; gap: 14px; }
+  .mp .row .spark, .mp .row .alloc { grid-column: 1 / -1; }
+  .mp .row .sw { grid-row: 1; grid-column: 2; }
+  .mp .big { font-size: 52px; }
+  .mp .vec .ep { margin-left: 0; }
+  /* Stacked, the plot can afford to be shorter without losing the shape. */
+  .mp .hero-plot { height: 140px; }
+}
+
+@media (max-width: 480px) {
+  .mp { padding: 0 14px 32px; }
+  .mp .big { font-size: 44px; }
+  .mp .row { padding: 14px 16px; }
+  .mp .stats { gap: 16px; }
+}
+
+/* --- reduced motion: kill the pulse AND the width/left transitions -------- */
+@media (prefers-reduced-motion: reduce) {
+  .mp .dot.live { animation: none; }
+  .mp .meter > i,
+  .mp .sw,
+  .mp .sw::after { transition: none !important; }
 }

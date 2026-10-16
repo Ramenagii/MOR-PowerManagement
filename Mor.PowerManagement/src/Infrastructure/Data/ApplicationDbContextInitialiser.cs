@@ -156,6 +156,17 @@ public class ApplicationDbContextInitialiser
             ? (TestingMaxCapacityWatts, TestingWarningThresholdWatts, TestingCriticalThresholdWatts)
             : (FullRigMaxCapacityWatts, FullRigWarningThresholdWatts, FullRigCriticalThresholdWatts);
 
+        // CriticalThresholdWatts IS the whole-system operating limit P_limit the
+        // priority-based load shedding framework runs on - the framework reads
+        // the same column rather than a second threshold, so there is exactly
+        // one P_limit in the system and an operator cannot set two that
+        // disagree. On this 2-outlet bench P_limit is 600 W (the const above),
+        // and the recovery limit the framework restores into is 540 W
+        // (600 W less the 10% hysteresis band, LoadSheddingSettings).
+        // Per-outlet allowances come from each outlet's AllowanceWatts below
+        // (300 W each); the tier-1 outlet is exempt from its own cap but is
+        // still counted in P_total.
+
         var rigConfig = await _context.PowerSystemConfigs.FirstOrDefaultAsync();
         if (rigConfig is null)
         {
@@ -187,6 +198,15 @@ public class ApplicationDbContextInitialiser
 
         // One row per channel: name, role, relay label, priority, allowance,
         // rail volts, schedule, idle limit, seeded status, seeded watts.
+        // Priority maps onto the thesis load tiers 1:1 and INVERTED (see
+        // Domain/Enums/LoadTier.cs): Critical(4)->Tier 1 Critical, High(3)->Tier 2
+        // Important, Medium(2)->Tier 3 Deferrable, Low(1)->Tier 4 Nonessential.
+        //
+        // On this 2-outlet rig that yields CH1 = Tier 1 (keep powered, exempt
+        // from its own 300 W allowance cap) and CH2 = Tier 2 (the only outlet
+        // the framework is willing to shed automatically). That is a thin demo
+        // of the ladder - the 4-channel rig below is where the ordering
+        // actually shows, but the rule is identical.
         var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
             ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
@@ -218,12 +238,21 @@ public class ApplicationDbContextInitialiser
         // which sits just under the 960 W warning threshold: the rig boots in
         // a healthy state and still reaches warning on one realistic addition.
         //
+        // TIERS on the 4+USB rig, the ladder the thesis demonstrates end to end:
+        //   CH1 Critical    -> Tier 1 Critical    keep powered, cap-exempt
+        //   CH2 High        -> Tier 2 Important   shed last of the expendable
+        //   CH3 Medium      -> Tier 3 Deferrable  shed second
+        //   CH4 Low         -> Tier 4 Nonessential shed FIRST
+        //   CH5 USB 5V Low  -> Tier 4 Nonessential shed first alongside CH4, but
+        //                              its watts are a residual of the INA226
+        //                              total, so it relieves the least real load
+        //
         // var futureTestingRigSpecs5 = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         // {
         //     ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
         //     ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-        //     ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-        //     ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+        //     ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
+        //     ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Low, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
         //     // No CT on this rail: Volt is its nominal rating, not a sample.
         //     ("USB 1", "USB charging 5V", "Relay CH5", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Standby, 7),
         // };
@@ -416,7 +445,18 @@ public class ApplicationDbContextInitialiser
         {
             _context.PowerEvents.AddRange(
                 new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the testing rig: 2x220V outlets (CH1-CH2) on a single mains feed, each metered on its own ADS1220 SPI input via a branch CT. P_limit is capped at 600 W until 31 Oct 2026.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 480 W warning threshold.", Severity = EventSeverity.Success });
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 480 W warning threshold.", Severity = EventSeverity.Success },
+                new PowerEvent
+                {
+                    Timestamp = DateTimeOffset.UtcNow,
+                    Title = "Priority-based load shedding armed",
+                    Detail = "Load tiers active on this rig: CH1 Critical (tier 1, exempt from its own 300 W allowance cap), CH2 Important (tier 2, shed first). " +
+                        "P_limit 600 W; overload must persist 3 consecutive batches before anything is shed. " +
+                        "Restoration resumes only below the 540 W recovery limit (600 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
+                        "Tier 1 is never shed automatically; an overload that survives every eligible shed raises an alarm instead of being assumed safe. " +
+                        "This is prototype software control, not a substitute for fuses and breakers.",
+                    Severity = EventSeverity.Info,
+                });
         }
 
         await _context.SaveChangesAsync();

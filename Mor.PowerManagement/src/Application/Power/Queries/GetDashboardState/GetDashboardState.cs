@@ -1,4 +1,6 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Services;
+using Mor.PowerManagement.Domain.Constants;
 using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
 using Mor.PowerManagement.Domain.Services;
@@ -20,7 +22,16 @@ public record OutletStateDto(
     OutletStatus Status,
     string Schedule,
     int? IdleLimitMinutes,
-    DateTimeOffset? LastSeen);
+    DateTimeOffset? LastSeen,
+    // Thesis-facing tier, derived from Priority. Surfaced so the dashboard can
+    // label tiers without re-implementing the mapping.
+    LoadTier Tier,
+    // True for the single tier-1 outlet, which is exempt from its own
+    // per-outlet allowance cap but is still counted in P_total.
+    bool PerOutletCapExempt,
+    // True when the framework (not the operator) shed this branch, i.e. it is
+    // on the staged-restoration ladder.
+    bool ShedByFramework);
 
 public record ThresholdsDto(
     double MaxCapacityWatts,
@@ -40,6 +51,20 @@ public record PowerEventDto(
     string Detail,
     EventSeverity Severity);
 
+public record FrameworkStateDto(
+    bool AutomaticPrioritisationEnabled,
+    bool FaultLatched,
+    // P_total must fall below this (P_limit less the hysteresis band) before
+    // anything is restored.
+    double RecoveryLimitWatts,
+    double HysteresisFraction,
+    int OverLimitConfirmationBatches,
+    int RecoveryPeriodSeconds,
+    int InterReconnectDelaySeconds,
+    int ConsecutiveOverLimitBatches,
+    DateTimeOffset? BelowRecoveryLimitSinceUtc,
+    IReadOnlyList<int> ShedOutletIds);
+
 public record DashboardStateVm(
     IReadOnlyList<OutletStateDto> Outlets,
     double TotalWatts,
@@ -50,15 +75,21 @@ public record DashboardStateVm(
     ThresholdsDto Thresholds,
     IReadOnlyList<PowerEventDto> RecentEvents,
     bool DeviceOnline,
-    DateTimeOffset? DeviceLastSeen);
+    DateTimeOffset? DeviceLastSeen,
+    FrameworkStateDto Framework,
+    // Live INA226-derived mains volts (average of recent telemetry samples).
+    // Null when no fresh device readings exist; UI falls back to rated volts.
+    double? MainsVolts);
 
 public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQuery, DashboardStateVm>
 {
     private readonly IApplicationDbContext _context;
+    private readonly LoadSheddingStateStore _framework;
 
-    public GetDashboardStateQueryHandler(IApplicationDbContext context)
+    public GetDashboardStateQueryHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
     {
         _context = context;
+        _framework = framework;
     }
 
     public async Task<DashboardStateVm> Handle(GetDashboardStateQuery request, CancellationToken cancellationToken)
@@ -72,7 +103,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             ?? new PowerSystemConfig();
 
         var snapshots = outlets
-            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts))
+            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))
             .ToList();
 
         var total = LoadResponseEvaluator.TotalLoad(snapshots);
@@ -94,11 +125,28 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             .Select(e => new PowerEventDto(e.Id, e.Timestamp, e.Title, e.Detail, e.Severity))
             .ToListAsync(cancellationToken);
 
+        var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
+        var framework = _framework.Current;
+        var shedByFramework = framework.ShedLedger.Select(r => r.OutletId).ToHashSet();
+
+        // Live INA226 mains volts: average of fresh device samples. Stale or
+        // absent readings yield null so the UI falls back to rated volts
+        // instead of presenting a dead number as live.
+        var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var mainsVolts = await _context.TelemetryReadings
+            .Where(r => r.Timestamp >= cutoff && r.Voltage > 0)
+            .Select(r => (double?)r.Voltage)
+            .DefaultIfEmpty()
+            .AverageAsync(cancellationToken);
+
         return new DashboardStateVm(
             outlets.Select(o => new OutletStateDto(
                 o.Id, o.Name, o.Role, o.MeterChannel, o.RelayChannel,
                 o.Priority, o.AllowanceWatts, o.RatedVoltageVolts, o.CurrentWatts, o.Status,
-                o.Schedule, o.IdleLimitMinutes, o.LastSeen)).ToList(),
+                o.Schedule, o.IdleLimitMinutes, o.LastSeen,
+                LoadTierMapper.ToTier(o.Priority),
+                capExempt.Contains(o.Id),
+                shedByFramework.Contains(o.Id))).ToList(),
             total,
             Math.Max(config.MaxCapacityWatts - total, 0),
             config.MaxCapacityWatts <= 0 ? 0 : Math.Min(total / config.MaxCapacityWatts * 100, 100),
@@ -113,6 +161,18 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 config.StabilizationDelayMs),
             events,
             deviceOnline,
-            hasSeen ? deviceLastSeen : null);
+            hasSeen ? deviceLastSeen : null,
+            new FrameworkStateDto(
+                !framework.ManualOverride,
+                framework.FaultLatched,
+                LoadSheddingEngine.ComputeRecoveryLimit(config.CriticalThresholdWatts),
+                LoadSheddingSettings.RecoveryHysteresisFraction,
+                LoadSheddingSettings.OverLimitConfirmationBatches,
+                LoadSheddingSettings.RecoveryPeriodSeconds,
+                LoadSheddingSettings.InterReconnectDelaySeconds,
+                framework.ConsecutiveOverLimitBatches,
+                framework.BelowRecoveryLimitSinceUtc,
+                framework.ShedLedger.Select(r => r.OutletId).ToList()),
+            mainsVolts);
     }
 }

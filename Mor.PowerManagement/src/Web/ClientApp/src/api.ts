@@ -113,6 +113,9 @@ type BackendState = {
   recentEvents: BackendEvent[]
   deviceOnline: boolean
   deviceLastSeen: string | null
+  // Live INA226-derived mains volts, averaged over fresh samples. Null when
+  // the device has nothing fresh; callers fall back to the rated rail.
+  mainsVolts: number | null
 }
 
 export type ThresholdSet = {
@@ -130,6 +133,7 @@ export type DashboardSnapshot = {
   thresholds: ThresholdSet
   deviceOnline: boolean
   deviceLastSeen: string | null
+  mainsVolts: number | null
 }
 
 function formatEventTime(timestamp: string): string {
@@ -182,6 +186,7 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
     },
     deviceOnline: state.deviceOnline ?? false,
     deviceLastSeen: state.deviceLastSeen ?? null,
+    mainsVolts: state.mainsVolts ?? null,
   }
 }
 

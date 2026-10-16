@@ -2,6 +2,8 @@ using Mor.PowerManagement.Application.Power.Commands.ApplySelectiveResponse;
 using Mor.PowerManagement.Application.Power.Commands.DisconnectOutlet;
 using Mor.PowerManagement.Application.Power.Commands.IngestTelemetry;
 using Mor.PowerManagement.Application.Power.Commands.RequestOutletActivation;
+using Mor.PowerManagement.Application.Power.Commands.RunStagedRestoration;
+using Mor.PowerManagement.Application.Power.Commands.SetManualOverride;
 using Mor.PowerManagement.Application.Power.Commands.UpdateOutletPolicy;
 using Mor.PowerManagement.Application.Power.Commands.UpdateThresholds;
 using Mor.PowerManagement.Application.Power.Queries.GetDashboardState;
@@ -37,6 +39,8 @@ public class Dashboard : IEndpointGroup
         groupBuilder.MapPost(RequestActivation, "outlets/{id}/activation");
         groupBuilder.MapPost(DisconnectOutlet, "outlets/{id}/disconnection");
         groupBuilder.MapPost(ApplySelectiveResponse, "shedding/selective");
+        groupBuilder.MapPost(RunStagedRestoration, "shedding/restore");
+        groupBuilder.MapPost(SetManualOverride, "shedding/override");
         groupBuilder.MapPut(UpdateOutletPolicy, "outlets/{id}/policy");
         groupBuilder.MapPut(UpdateThresholds, "thresholds");
         groupBuilder.MapPost(IngestScenario, "scenarios/ingest");
@@ -189,10 +193,50 @@ public class Dashboard : IEndpointGroup
     }
 
     [EndpointSummary("Apply selective load response")]
-    [EndpointDescription("Disconnects the lowest-priority energized outlets first (FR-07).")]
+    [EndpointDescription(
+        "Disconnects the most expendable energized outlets first (FR-07): lowest load tier first, " +
+        "highest current within a tier. Tier 1 (Critical) is never shed automatically. Set " +
+        "manualOverride to also latch automatic prioritisation off. Returns the shed branches with " +
+        "their tiers, plus P_limit and the recovery limit.")]
     public static async Task<Ok<SelectiveResponseResult>> ApplySelectiveResponse(ISender sender, IMemoryCache cache, ApplySelectiveResponseCommand? command)
     {
         var result = await sender.Send(command ?? new ApplySelectiveResponseCommand());
+        cache.Remove(DashboardCacheKeys.State);
+
+        return TypedResults.Ok(result);
+    }
+
+    [EndpointSummary("Run one staged-restoration step")]
+    [EndpointDescription(
+        "Runs a single step of the staged-restoration ladder: recloses the highest-priority branch " +
+        "the framework shed, once P_total has stayed below the recovery limit for the recovery " +
+        "period. Force skips the recovery-period and inter-reconnect waits (the operator is " +
+        "asserting the load is gone) but NEVER the recovery limit itself. Automatic restoration " +
+        "also runs on every telemetry batch; this endpoint drives or inspects it on demand.")]
+    public static async Task<Ok<StagedRestorationResult>> RunStagedRestoration(
+        ISender sender, IMemoryCache cache, RunStagedRestorationCommand? command)
+    {
+        var result = await sender.Send(command ?? new RunStagedRestorationCommand());
+        cache.Remove(DashboardCacheKeys.State);
+
+        return TypedResults.Ok(result);
+    }
+
+    [EndpointSummary("Enable or disable automatic prioritisation")]
+    [EndpointDescription(
+        "Operator override. While enabled, the framework keeps measuring and keeps raising alarms " +
+        "but opens and closes no relay on its own, and branches already shed are not restored " +
+        "automatically. The change is recorded as a Warning event so an override that outlives the " +
+        "shift is visible in the audit trail.")]
+    public static async Task<Results<Ok<ManualOverrideResult>, BadRequest>> SetManualOverride(
+        ISender sender, IMemoryCache cache, SetManualOverrideCommand? command)
+    {
+        if (command is null)
+        {
+            return TypedResults.BadRequest();
+        }
+
+        var result = await sender.Send(command);
         cache.Remove(DashboardCacheKeys.State);
 
         return TypedResults.Ok(result);
@@ -238,8 +282,9 @@ public class Dashboard : IEndpointGroup
     [EndpointSummary("Ingest a defense-demo telemetry batch")]
     [EndpointDescription(
         "Stores a scenario telemetry batch and returns the policy engine's own result: rows stored, " +
-        "aggregate watts, resulting system state and the events it raised. Metering mode is forced to " +
-        "Simulated because the batch is synthesised.")]
+        "aggregate watts, resulting system state, the events it raised, and the load-shedding " +
+        "framework's decision for that batch (including any branch it shed or restored). Metering mode " +
+        "is forced to Simulated because the batch is synthesised.")]
     public static async Task<Results<Ok<IngestTelemetryResult>, BadRequest>> IngestScenario(
         ISender sender,
         IngestTelemetryCommand command)

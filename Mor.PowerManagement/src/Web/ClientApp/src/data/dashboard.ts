@@ -221,6 +221,60 @@ export const BAND_RULE: Record<Exclude<LoadBand, 'normal'>, string> = {
  */
 export const UNAVAILABLE = '—'
 
+// ---------------------------------------------------------------------------
+// Framework tier defaults
+// ---------------------------------------------------------------------------
+
+/**
+ * Whole-system ceiling and its warning/critical trip points.
+ *
+ * The rig is calibrated as two 220 V branches against a 600 W ceiling: CH1 is
+ * the instructor workstation and is sized so that CH1 + CH2 together sit just
+ * under the limit, which is what makes the shed demonstration observable rather
+ * than theoretical.
+ *
+ * `CH2_ALLOCATION_WATTS` is the default the Framework admin opens with. It is a
+ * default and not an enforced value — the seeded figure the backend returns is
+ * always what the editor shows.
+ */
+export const SYSTEM_LIMIT_WATTS = 600
+export const SYSTEM_WARNING_WATTS = 480
+export const SYSTEM_CRITICAL_WATTS = 600
+export const CH2_ALLOCATION_WATTS = 300
+
+/**
+ * Tier each branch carries on the current bench, by outlet id.
+ *
+ * CH1 is Critical because it runs the instructor workstation: if it drops, the
+ * class stops. CH2 is Important — demo equipment can be interrupted without
+ * ending the session, but it should not be the first thing shed.
+ *
+ * FUTURE 4+USB: CH3 and CH4 appear here as planned assignments only. They are
+ * listed so the Framework admin can show what the full bench is being built
+ * toward, and they are rendered as DISABLED rows because the 2-outlet rig does
+ * not wire them. When CH3-CH5 are added to the backend roster they arrive from
+ * GET /Dashboard/state with their own stored priority and this table stops being
+ * the source of truth for them — at which point delete the entries below.
+ */
+export const TIER_PLAN: Record<number, 'Critical' | 'Important' | 'Deferrable' | 'Nonessential'> = {
+  1: 'Critical',
+  2: 'Important',
+  3: 'Deferrable',
+  4: 'Nonessential',
+}
+
+/**
+ * Branches the full bench is being built toward but the current rig does not
+ * wire. Shown as disabled placeholders only — never as editable rows, because a
+ * control that cannot write must not look writable.
+ *
+ * FUTURE 4+USB: delete this list once those ids appear in the live roster.
+ */
+export const UNWIRED_TIER_CHANNELS: Array<{ id: number; tier: 'Deferrable' | 'Nonessential'; volts: number }> = [
+  { id: 3, tier: 'Deferrable', volts: 220 },
+  { id: 4, tier: 'Nonessential', volts: 220 },
+]
+
 /**
  * Every explanation the dashboard used to print as a paragraph now lives here
  * and reaches the operator through a title attribute instead. The rule: a panel

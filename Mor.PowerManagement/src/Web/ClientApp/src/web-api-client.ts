@@ -351,6 +351,116 @@ export class DashboardClient {
     }
 
     /**
+     * Run one staged-restoration step
+     * @param body (optional) 
+     * @return OK
+     */
+    runStagedRestoration(body: RunStagedRestorationCommand | null | undefined): Promise<StagedRestorationResult> {
+        let url_ = this.baseUrl + "/api/Dashboard/shedding/restore";
+        url_ = url_.replace(/[?&]$/, "");
+
+        const content_ = JSON.stringify(body);
+
+        let options_: RequestInit = {
+            body: content_,
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processRunStagedRestoration(_response);
+        });
+    }
+
+    protected processRunStagedRestoration(response: Response): Promise<StagedRestorationResult> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result200 = StagedRestorationResult.fromJS(resultData200);
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<StagedRestorationResult>(null as any);
+    }
+
+    /**
+     * Enable or disable automatic prioritisation
+     * @param body (optional) 
+     * @return OK
+     */
+    setManualOverride(body: SetManualOverrideCommand | null | undefined): Promise<ManualOverrideResult> {
+        let url_ = this.baseUrl + "/api/Dashboard/shedding/override";
+        url_ = url_.replace(/[?&]$/, "");
+
+        const content_ = JSON.stringify(body);
+
+        let options_: RequestInit = {
+            body: content_,
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processSetManualOverride(_response);
+        });
+    }
+
+    protected processSetManualOverride(response: Response): Promise<ManualOverrideResult> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result200 = ManualOverrideResult.fromJS(resultData200);
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<ManualOverrideResult>(null as any);
+    }
+
+    /**
      * Update outlet policy
      * @return No Content
      */
@@ -1746,6 +1856,7 @@ export interface IAccessTokenResponse {
 
 export class ApplySelectiveResponseCommand implements IApplySelectiveResponseCommand {
     count?: number;
+    manualOverride?: boolean;
 
     [key: string]: any;
 
@@ -1765,6 +1876,7 @@ export class ApplySelectiveResponseCommand implements IApplySelectiveResponseCom
                     this[property] = _data[property];
             }
             this.count = _data["count"];
+            this.manualOverride = _data["manualOverride"];
         }
     }
 
@@ -1782,12 +1894,14 @@ export class ApplySelectiveResponseCommand implements IApplySelectiveResponseCom
                 data[property] = this[property];
         }
         data["count"] = this.count;
+        data["manualOverride"] = this.manualOverride;
         return data;
     }
 }
 
 export interface IApplySelectiveResponseCommand {
     count?: number;
+    manualOverride?: boolean;
 
     [key: string]: any;
 }
@@ -2039,6 +2153,8 @@ export class DashboardStateVm implements IDashboardStateVm {
     recentEvents!: PowerEventDto[];
     deviceOnline!: boolean;
     deviceLastSeen!: Date | undefined;
+    framework!: FrameworkStateDto;
+    mainsVolts!: number | undefined;
 
     [key: string]: any;
 
@@ -2053,6 +2169,7 @@ export class DashboardStateVm implements IDashboardStateVm {
             this.outlets = [];
             this.thresholds = new ThresholdsDto();
             this.recentEvents = [];
+            this.framework = new FrameworkStateDto();
         }
     }
 
@@ -2080,6 +2197,8 @@ export class DashboardStateVm implements IDashboardStateVm {
             }
             this.deviceOnline = _data["deviceOnline"];
             this.deviceLastSeen = _data["deviceLastSeen"] ? new Date(_data["deviceLastSeen"].toString()) : undefined as any;
+            this.framework = _data["framework"] ? FrameworkStateDto.fromJS(_data["framework"]) : new FrameworkStateDto();
+            this.mainsVolts = _data["mainsVolts"];
         }
     }
 
@@ -2114,6 +2233,8 @@ export class DashboardStateVm implements IDashboardStateVm {
         }
         data["deviceOnline"] = this.deviceOnline;
         data["deviceLastSeen"] = this.deviceLastSeen ? this.deviceLastSeen.toISOString() : undefined as any;
+        data["framework"] = this.framework ? this.framework.toJSON() : undefined as any;
+        data["mainsVolts"] = this.mainsVolts;
         return data;
     }
 }
@@ -2129,6 +2250,8 @@ export interface IDashboardStateVm {
     recentEvents: PowerEventDto[];
     deviceOnline: boolean;
     deviceLastSeen: Date | undefined;
+    framework: FrameworkStateDto;
+    mainsVolts: number | undefined;
 
     [key: string]: any;
 }
@@ -2332,6 +2455,101 @@ export class ForgotPasswordRequest implements IForgotPasswordRequest {
 
 export interface IForgotPasswordRequest {
     email: string;
+
+    [key: string]: any;
+}
+
+export class FrameworkStateDto implements IFrameworkStateDto {
+    automaticPrioritisationEnabled!: boolean;
+    faultLatched!: boolean;
+    recoveryLimitWatts!: number;
+    hysteresisFraction!: number;
+    overLimitConfirmationBatches!: number;
+    recoveryPeriodSeconds!: number;
+    interReconnectDelaySeconds!: number;
+    consecutiveOverLimitBatches!: number;
+    belowRecoveryLimitSinceUtc!: Date | undefined;
+    shedOutletIds!: number[];
+
+    [key: string]: any;
+
+    constructor(data?: IFrameworkStateDto) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.shedOutletIds = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.automaticPrioritisationEnabled = _data["automaticPrioritisationEnabled"];
+            this.faultLatched = _data["faultLatched"];
+            this.recoveryLimitWatts = _data["recoveryLimitWatts"];
+            this.hysteresisFraction = _data["hysteresisFraction"];
+            this.overLimitConfirmationBatches = _data["overLimitConfirmationBatches"];
+            this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
+            this.interReconnectDelaySeconds = _data["interReconnectDelaySeconds"];
+            this.consecutiveOverLimitBatches = _data["consecutiveOverLimitBatches"];
+            this.belowRecoveryLimitSinceUtc = _data["belowRecoveryLimitSinceUtc"] ? new Date(_data["belowRecoveryLimitSinceUtc"].toString()) : undefined as any;
+            if (Array.isArray(_data["shedOutletIds"])) {
+                this.shedOutletIds = [] as any;
+                for (let item of _data["shedOutletIds"])
+                    this.shedOutletIds!.push(item);
+            }
+        }
+    }
+
+    static fromJS(data: any): FrameworkStateDto {
+        data = typeof data === 'object' ? data : {};
+        let result = new FrameworkStateDto();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["automaticPrioritisationEnabled"] = this.automaticPrioritisationEnabled;
+        data["faultLatched"] = this.faultLatched;
+        data["recoveryLimitWatts"] = this.recoveryLimitWatts;
+        data["hysteresisFraction"] = this.hysteresisFraction;
+        data["overLimitConfirmationBatches"] = this.overLimitConfirmationBatches;
+        data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
+        data["interReconnectDelaySeconds"] = this.interReconnectDelaySeconds;
+        data["consecutiveOverLimitBatches"] = this.consecutiveOverLimitBatches;
+        data["belowRecoveryLimitSinceUtc"] = this.belowRecoveryLimitSinceUtc ? this.belowRecoveryLimitSinceUtc.toISOString() : undefined as any;
+        if (Array.isArray(this.shedOutletIds)) {
+            data["shedOutletIds"] = [];
+            for (let item of this.shedOutletIds)
+                data["shedOutletIds"].push(item);
+        }
+        return data;
+    }
+}
+
+export interface IFrameworkStateDto {
+    automaticPrioritisationEnabled: boolean;
+    faultLatched: boolean;
+    recoveryLimitWatts: number;
+    hysteresisFraction: number;
+    overLimitConfirmationBatches: number;
+    recoveryPeriodSeconds: number;
+    interReconnectDelaySeconds: number;
+    consecutiveOverLimitBatches: number;
+    belowRecoveryLimitSinceUtc: Date | undefined;
+    shedOutletIds: number[];
 
     [key: string]: any;
 }
@@ -2609,6 +2827,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
     state!: number;
     readingsStored!: number;
     eventsRaised!: string[];
+    shedding?: LoadSheddingResult | undefined;
 
     [key: string]: any;
 
@@ -2638,6 +2857,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
                 for (let item of _data["eventsRaised"])
                     this.eventsRaised!.push(item);
             }
+            this.shedding = _data["shedding"] ? LoadSheddingResult.fromJS(_data["shedding"]) : undefined as any;
         }
     }
 
@@ -2662,6 +2882,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
             for (let item of this.eventsRaised)
                 data["eventsRaised"].push(item);
         }
+        data["shedding"] = this.shedding ? this.shedding.toJSON() : undefined as any;
         return data;
     }
 }
@@ -2671,6 +2892,114 @@ export interface IIngestTelemetryResult {
     state: number;
     readingsStored: number;
     eventsRaised: string[];
+    shedding?: LoadSheddingResult | undefined;
+
+    [key: string]: any;
+}
+
+export class LoadSheddingResult implements ILoadSheddingResult {
+    action!: string;
+    outletId!: number | undefined;
+    outletName!: string | undefined;
+    tier!: string | undefined;
+    detail!: string;
+    pLimitWatts!: number;
+    recoveryLimitWatts!: number;
+    consecutiveOverLimitBatches!: number;
+    overLimitConfirmationBatches!: number;
+    recoveryPeriodSeconds!: number;
+    shedOutletIds!: number[];
+    manualOverride!: boolean;
+    faultLatched!: boolean;
+
+    [key: string]: any;
+
+    constructor(data?: ILoadSheddingResult) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.shedOutletIds = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.action = _data["action"];
+            this.outletId = _data["outletId"];
+            this.outletName = _data["outletName"];
+            this.tier = _data["tier"];
+            this.detail = _data["detail"];
+            this.pLimitWatts = _data["pLimitWatts"];
+            this.recoveryLimitWatts = _data["recoveryLimitWatts"];
+            this.consecutiveOverLimitBatches = _data["consecutiveOverLimitBatches"];
+            this.overLimitConfirmationBatches = _data["overLimitConfirmationBatches"];
+            this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
+            if (Array.isArray(_data["shedOutletIds"])) {
+                this.shedOutletIds = [] as any;
+                for (let item of _data["shedOutletIds"])
+                    this.shedOutletIds!.push(item);
+            }
+            this.manualOverride = _data["manualOverride"];
+            this.faultLatched = _data["faultLatched"];
+        }
+    }
+
+    static fromJS(data: any): LoadSheddingResult {
+        data = typeof data === 'object' ? data : {};
+        let result = new LoadSheddingResult();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["action"] = this.action;
+        data["outletId"] = this.outletId;
+        data["outletName"] = this.outletName;
+        data["tier"] = this.tier;
+        data["detail"] = this.detail;
+        data["pLimitWatts"] = this.pLimitWatts;
+        data["recoveryLimitWatts"] = this.recoveryLimitWatts;
+        data["consecutiveOverLimitBatches"] = this.consecutiveOverLimitBatches;
+        data["overLimitConfirmationBatches"] = this.overLimitConfirmationBatches;
+        data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
+        if (Array.isArray(this.shedOutletIds)) {
+            data["shedOutletIds"] = [];
+            for (let item of this.shedOutletIds)
+                data["shedOutletIds"].push(item);
+        }
+        data["manualOverride"] = this.manualOverride;
+        data["faultLatched"] = this.faultLatched;
+        return data;
+    }
+}
+
+export interface ILoadSheddingResult {
+    action: string;
+    outletId: number | undefined;
+    outletName: string | undefined;
+    tier: string | undefined;
+    detail: string;
+    pLimitWatts: number;
+    recoveryLimitWatts: number;
+    consecutiveOverLimitBatches: number;
+    overLimitConfirmationBatches: number;
+    recoveryPeriodSeconds: number;
+    shedOutletIds: number[];
+    manualOverride: boolean;
+    faultLatched: boolean;
 
     [key: string]: any;
 }
@@ -2787,12 +3116,85 @@ export interface ILookupDto {
     [key: string]: any;
 }
 
+export class ManualOverrideResult implements IManualOverrideResult {
+    enabled!: boolean;
+    detail!: string;
+    shedOutletCount!: number;
+    shedOutletIds!: number[];
+
+    [key: string]: any;
+
+    constructor(data?: IManualOverrideResult) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.shedOutletIds = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.enabled = _data["enabled"];
+            this.detail = _data["detail"];
+            this.shedOutletCount = _data["shedOutletCount"];
+            if (Array.isArray(_data["shedOutletIds"])) {
+                this.shedOutletIds = [] as any;
+                for (let item of _data["shedOutletIds"])
+                    this.shedOutletIds!.push(item);
+            }
+        }
+    }
+
+    static fromJS(data: any): ManualOverrideResult {
+        data = typeof data === 'object' ? data : {};
+        let result = new ManualOverrideResult();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["enabled"] = this.enabled;
+        data["detail"] = this.detail;
+        data["shedOutletCount"] = this.shedOutletCount;
+        if (Array.isArray(this.shedOutletIds)) {
+            data["shedOutletIds"] = [];
+            for (let item of this.shedOutletIds)
+                data["shedOutletIds"].push(item);
+        }
+        return data;
+    }
+}
+
+export interface IManualOverrideResult {
+    enabled: boolean;
+    detail: string;
+    shedOutletCount: number;
+    shedOutletIds: number[];
+
+    [key: string]: any;
+}
+
 export class OutletActivationResult implements IOutletActivationResult {
     outletId!: number;
     allowed!: boolean;
     policyCode!: string;
     reason!: string;
     status!: number;
+    tier!: number;
+    perOutletCapExempt!: boolean;
 
     [key: string]: any;
 
@@ -2816,6 +3218,8 @@ export class OutletActivationResult implements IOutletActivationResult {
             this.policyCode = _data["policyCode"];
             this.reason = _data["reason"];
             this.status = _data["status"];
+            this.tier = _data["tier"];
+            this.perOutletCapExempt = _data["perOutletCapExempt"];
         }
     }
 
@@ -2837,6 +3241,8 @@ export class OutletActivationResult implements IOutletActivationResult {
         data["policyCode"] = this.policyCode;
         data["reason"] = this.reason;
         data["status"] = this.status;
+        data["tier"] = this.tier;
+        data["perOutletCapExempt"] = this.perOutletCapExempt;
         return data;
     }
 }
@@ -2847,6 +3253,8 @@ export interface IOutletActivationResult {
     policyCode: string;
     reason: string;
     status: number;
+    tier: number;
+    perOutletCapExempt: boolean;
 
     [key: string]: any;
 }
@@ -2865,6 +3273,9 @@ export class OutletStateDto implements IOutletStateDto {
     schedule!: string;
     idleLimitMinutes!: number | undefined;
     lastSeen!: Date | undefined;
+    tier!: number;
+    perOutletCapExempt!: boolean;
+    shedByFramework!: boolean;
 
     [key: string]: any;
 
@@ -2896,6 +3307,9 @@ export class OutletStateDto implements IOutletStateDto {
             this.schedule = _data["schedule"];
             this.idleLimitMinutes = _data["idleLimitMinutes"];
             this.lastSeen = _data["lastSeen"] ? new Date(_data["lastSeen"].toString()) : undefined as any;
+            this.tier = _data["tier"];
+            this.perOutletCapExempt = _data["perOutletCapExempt"];
+            this.shedByFramework = _data["shedByFramework"];
         }
     }
 
@@ -2925,6 +3339,9 @@ export class OutletStateDto implements IOutletStateDto {
         data["schedule"] = this.schedule;
         data["idleLimitMinutes"] = this.idleLimitMinutes;
         data["lastSeen"] = this.lastSeen ? this.lastSeen.toISOString() : undefined as any;
+        data["tier"] = this.tier;
+        data["perOutletCapExempt"] = this.perOutletCapExempt;
+        data["shedByFramework"] = this.shedByFramework;
         return data;
     }
 }
@@ -2943,6 +3360,9 @@ export interface IOutletStateDto {
     schedule: string;
     idleLimitMinutes: number | undefined;
     lastSeen: Date | undefined;
+    tier: number;
+    perOutletCapExempt: boolean;
+    shedByFramework: boolean;
 
     [key: string]: any;
 }
@@ -3267,10 +3687,63 @@ export interface IResetPasswordRequest {
     [key: string]: any;
 }
 
+export class RunStagedRestorationCommand implements IRunStagedRestorationCommand {
+    force?: boolean;
+
+    [key: string]: any;
+
+    constructor(data?: IRunStagedRestorationCommand) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.force = _data["force"];
+        }
+    }
+
+    static fromJS(data: any): RunStagedRestorationCommand {
+        data = typeof data === 'object' ? data : {};
+        let result = new RunStagedRestorationCommand();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["force"] = this.force;
+        return data;
+    }
+}
+
+export interface IRunStagedRestorationCommand {
+    force?: boolean;
+
+    [key: string]: any;
+}
+
 export class SelectiveResponseResult implements ISelectiveResponseResult {
     shedOutletIds!: number[];
     totalWatts!: number;
     state!: number;
+    shed!: ShedDecisionDto[];
+    pLimitWatts!: number;
+    recoveryLimitWatts!: number;
+    automaticPrioritisationEnabled!: boolean;
+    manualOverrideActive!: boolean;
 
     [key: string]: any;
 
@@ -3283,6 +3756,7 @@ export class SelectiveResponseResult implements ISelectiveResponseResult {
         }
         if (!data) {
             this.shedOutletIds = [];
+            this.shed = [];
         }
     }
 
@@ -3299,6 +3773,15 @@ export class SelectiveResponseResult implements ISelectiveResponseResult {
             }
             this.totalWatts = _data["totalWatts"];
             this.state = _data["state"];
+            if (Array.isArray(_data["shed"])) {
+                this.shed = [] as any;
+                for (let item of _data["shed"])
+                    this.shed!.push(ShedDecisionDto.fromJS(item));
+            }
+            this.pLimitWatts = _data["pLimitWatts"];
+            this.recoveryLimitWatts = _data["recoveryLimitWatts"];
+            this.automaticPrioritisationEnabled = _data["automaticPrioritisationEnabled"];
+            this.manualOverrideActive = _data["manualOverrideActive"];
         }
     }
 
@@ -3322,6 +3805,15 @@ export class SelectiveResponseResult implements ISelectiveResponseResult {
         }
         data["totalWatts"] = this.totalWatts;
         data["state"] = this.state;
+        if (Array.isArray(this.shed)) {
+            data["shed"] = [];
+            for (let item of this.shed)
+                data["shed"].push(item ? item.toJSON() : undefined as any);
+        }
+        data["pLimitWatts"] = this.pLimitWatts;
+        data["recoveryLimitWatts"] = this.recoveryLimitWatts;
+        data["automaticPrioritisationEnabled"] = this.automaticPrioritisationEnabled;
+        data["manualOverrideActive"] = this.manualOverrideActive;
         return data;
     }
 }
@@ -3330,6 +3822,230 @@ export interface ISelectiveResponseResult {
     shedOutletIds: number[];
     totalWatts: number;
     state: number;
+    shed: ShedDecisionDto[];
+    pLimitWatts: number;
+    recoveryLimitWatts: number;
+    automaticPrioritisationEnabled: boolean;
+    manualOverrideActive: boolean;
+
+    [key: string]: any;
+}
+
+export class SetManualOverrideCommand implements ISetManualOverrideCommand {
+    enabled?: boolean;
+    reason?: string | undefined;
+
+    [key: string]: any;
+
+    constructor(data?: ISetManualOverrideCommand) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.enabled = _data["enabled"];
+            this.reason = _data["reason"];
+        }
+    }
+
+    static fromJS(data: any): SetManualOverrideCommand {
+        data = typeof data === 'object' ? data : {};
+        let result = new SetManualOverrideCommand();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["enabled"] = this.enabled;
+        data["reason"] = this.reason;
+        return data;
+    }
+}
+
+export interface ISetManualOverrideCommand {
+    enabled?: boolean;
+    reason?: string | undefined;
+
+    [key: string]: any;
+}
+
+export class ShedDecisionDto implements IShedDecisionDto {
+    outletId!: number;
+    name!: string;
+    tier!: string;
+    priority!: number;
+    wattsAtShed!: number;
+
+    [key: string]: any;
+
+    constructor(data?: IShedDecisionDto) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.outletId = _data["outletId"];
+            this.name = _data["name"];
+            this.tier = _data["tier"];
+            this.priority = _data["priority"];
+            this.wattsAtShed = _data["wattsAtShed"];
+        }
+    }
+
+    static fromJS(data: any): ShedDecisionDto {
+        data = typeof data === 'object' ? data : {};
+        let result = new ShedDecisionDto();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["outletId"] = this.outletId;
+        data["name"] = this.name;
+        data["tier"] = this.tier;
+        data["priority"] = this.priority;
+        data["wattsAtShed"] = this.wattsAtShed;
+        return data;
+    }
+}
+
+export interface IShedDecisionDto {
+    outletId: number;
+    name: string;
+    tier: string;
+    priority: number;
+    wattsAtShed: number;
+
+    [key: string]: any;
+}
+
+export class StagedRestorationResult implements IStagedRestorationResult {
+    action!: string;
+    restoredOutletId!: number | undefined;
+    restoredOutletName!: string | undefined;
+    tier!: string | undefined;
+    detail!: string;
+    pLimitWatts!: number;
+    recoveryLimitWatts!: number;
+    totalWatts!: number;
+    recoveryPeriodSeconds!: number;
+    interReconnectDelaySeconds!: number;
+    remainingShedOutletIds!: number[];
+    manualOverrideActive!: boolean;
+
+    [key: string]: any;
+
+    constructor(data?: IStagedRestorationResult) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.remainingShedOutletIds = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.action = _data["action"];
+            this.restoredOutletId = _data["restoredOutletId"];
+            this.restoredOutletName = _data["restoredOutletName"];
+            this.tier = _data["tier"];
+            this.detail = _data["detail"];
+            this.pLimitWatts = _data["pLimitWatts"];
+            this.recoveryLimitWatts = _data["recoveryLimitWatts"];
+            this.totalWatts = _data["totalWatts"];
+            this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
+            this.interReconnectDelaySeconds = _data["interReconnectDelaySeconds"];
+            if (Array.isArray(_data["remainingShedOutletIds"])) {
+                this.remainingShedOutletIds = [] as any;
+                for (let item of _data["remainingShedOutletIds"])
+                    this.remainingShedOutletIds!.push(item);
+            }
+            this.manualOverrideActive = _data["manualOverrideActive"];
+        }
+    }
+
+    static fromJS(data: any): StagedRestorationResult {
+        data = typeof data === 'object' ? data : {};
+        let result = new StagedRestorationResult();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["action"] = this.action;
+        data["restoredOutletId"] = this.restoredOutletId;
+        data["restoredOutletName"] = this.restoredOutletName;
+        data["tier"] = this.tier;
+        data["detail"] = this.detail;
+        data["pLimitWatts"] = this.pLimitWatts;
+        data["recoveryLimitWatts"] = this.recoveryLimitWatts;
+        data["totalWatts"] = this.totalWatts;
+        data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
+        data["interReconnectDelaySeconds"] = this.interReconnectDelaySeconds;
+        if (Array.isArray(this.remainingShedOutletIds)) {
+            data["remainingShedOutletIds"] = [];
+            for (let item of this.remainingShedOutletIds)
+                data["remainingShedOutletIds"].push(item);
+        }
+        data["manualOverrideActive"] = this.manualOverrideActive;
+        return data;
+    }
+}
+
+export interface IStagedRestorationResult {
+    action: string;
+    restoredOutletId: number | undefined;
+    restoredOutletName: string | undefined;
+    tier: string | undefined;
+    detail: string;
+    pLimitWatts: number;
+    recoveryLimitWatts: number;
+    totalWatts: number;
+    recoveryPeriodSeconds: number;
+    interReconnectDelaySeconds: number;
+    remainingShedOutletIds: number[];
+    manualOverrideActive: boolean;
 
     [key: string]: any;
 }

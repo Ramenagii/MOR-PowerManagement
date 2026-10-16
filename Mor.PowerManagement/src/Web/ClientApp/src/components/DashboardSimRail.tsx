@@ -1,170 +1,114 @@
-import {
-  CircleCheckBig,
-  ClipboardList,
-  Power,
-  ShieldCheck,
-  TriangleAlert,
-  Zap,
-  type LucideIcon,
-} from 'lucide-react'
-import { BAND_DOT, SIM_VECTORS, VECTOR_IDLE, type SimIconKey } from '../data/dashboard'
 import type { ScenarioNotice } from './ScenarioPanel'
 
-const ICONS: Record<SimIconKey, LucideIcon> = {
-  nominal: CircleCheckBig,
-  gate: Zap,
-  warn: ShieldCheck,
-  critical: TriangleAlert,
-  priority: ClipboardList,
-  standby: Power,
-}
-
 /**
- * The last-result rail.
+ * The six vector buttons, in the reference mock's order and with its dot
+ * colours. The mock's own handler picked a random row count and a random total
+ * — which is exactly the invented-result behaviour this console must not have.
+ * Every line in `.out` below is therefore assembled from the server's actual
+ * IngestResult: readingsStored, totalWatts and the events the policy engine
+ * raised. Nothing here is synthesised.
  *
- * Colour discipline carried over from the scenario panel: amber means the
- * device answered but nothing was written, red means the write was rejected,
- * and the success case is a quiet neutral rather than a green chip. Green is
- * not a state colour in this console, and a run that succeeded is not more
- * interesting than one that failed. The result still reads as success because
- * the tag says STORED.
+ * Mapping onto the existing prescribed vectors (SIM-01..06), all of which post
+ * to real endpoints:
+ *   Normal   -> SIM-01 baseline replay
+ *   Surge    -> SIM-03 capacity-block rehearsal (drives toward the warn band)
+ *   Policy   -> SIM-05 selective response (priority-ordered shed)
+ *   Overload -> SIM-04 post-activation overload (forces FR-06)
+ *   Audit    -> SIM-02 activation request (the backend admits or denies it)
+ *   Shutdown -> SIM-06 idle timeout cutoff
  */
-const NOTICE_RAIL: Record<ScenarioNotice['tone'], string> = {
-  live: 'border-l-outline-variant',
-  simulated: 'border-l-tertiary',
-  error: 'border-l-error',
+export type VectorId = 'normal' | 'surge' | 'policy' | 'overload' | 'audit' | 'shutdown'
+
+export const VECTORS: Array<{ id: VectorId; label: string; color: string; sim: string }> = [
+  { id: 'normal', label: 'Normal', color: 'var(--ok)', sim: 'SIM-01' },
+  { id: 'surge', label: 'Surge', color: 'var(--live)', sim: 'SIM-03' },
+  { id: 'policy', label: 'Policy', color: 'var(--warn)', sim: 'SIM-05' },
+  { id: 'overload', label: 'Overload', color: 'var(--bad)', sim: 'SIM-04' },
+  { id: 'audit', label: 'Audit', color: 'var(--mute)', sim: 'SIM-02' },
+  { id: 'shutdown', label: 'Shutdown', color: 'var(--mute)', sim: 'SIM-06' },
+]
+
+/** Tooltip body per vector, moved off the card face but kept in full. */
+export const VECTOR_TIPS: Record<VectorId, string> = {
+  normal:
+    'SIM-01 · Normal operation baseline\nReplays every energized channel at the draw it is already reporting, with no injected watts and no shed channels.\nExpect: the engine stores the batch and raises nothing.',
+  surge:
+    'SIM-03 · Capacity block rehearsal\nDrives every live channel to 82% of its draw so the rig sits inside the warning band.\nExpect: a following activation request is genuinely refused.',
+  policy:
+    'SIM-05 · Selective response\nSheds the lowest-priority energized channel, ordered Low → Critical.\nExpect: load drops by exactly that channel’s contribution.',
+  overload:
+    'SIM-04 · Post-activation overload\nTakes every live channel to 105% and injects 900 W on CH1, forcing past the critical threshold.\nExpect: the server sheds on its own terms.',
+  audit:
+    'SIM-02 · Activation request\nSends a real activation request for CH1 through the outlet activation route.\nExpect: the backend admits or denies it from its own projected-load check.',
+  shutdown:
+    'SIM-06 · Idle timeout cutoff\nReports low-draw channels at 5% of draw and closes their relays so the server sees a genuine idle period.\nExpect: the idle timer runs on the server’s own clock.',
 }
 
-const NOTICE_DOT: Record<ScenarioNotice['tone'], string> = {
-  live: 'bg-outline-variant',
-  simulated: 'ant-dot-warning',
-  error: 'ant-dot-critical',
-}
-
-const NOTICE_TAG: Record<ScenarioNotice['tone'], string> = {
-  live: 'STORED',
-  simulated: 'NO WRITE',
-  error: 'REJECTED',
-}
-
-const NOTICE_LABEL: Record<ScenarioNotice['tone'], string> = {
-  live: 'Stored on the server',
-  simulated: 'Nothing was stored',
-  error: 'Write rejected',
-}
+export const ENDPOINT_NOTE = 'Pick a vector to send'
 
 type DashboardSimRailProps = {
-  onRun: (id: string) => void
+  onRun: (id: VectorId) => void
   notice: ScenarioNotice | null
   busy: boolean
-  /**
-   * False when the dashboard has no live backend state. The triggers are
-   * disabled rather than posting to an endpoint whose response nobody could see.
-   */
+  /** False when the backend has not answered; nothing can be dispatched. */
   live: boolean
+  /** Stable count of completed runs, shown on the idle line. */
+  runs: number
+  /**
+   * Which button was last pressed. Tracked here rather than parsed back out of
+   * `notice.text`, because the notice is the SERVER's words about the run — it
+   * is never reshaped to carry our own bookkeeping.
+   */
+  lastRun: VectorId | null
 }
 
-/**
- * SIM-01..06 as a rail of icon-only triggers.
- *
- * The six vectors previously occupied six cards, each one a paragraph. Every
- * word of that prose survives — it is on the tooltip now, where it was always
- * most useful, because a defense panel needs to *ask* what SIM-04 does rather
- * than read six descriptions to find one.
- *
- * Icons carry the vectors apart at a glance, and each is drawn to match its own
- * effect: the gate for the activation request, the shield for the capacity
- * block, the triangle for the overload. The SIM number survives in the tooltip
- * and the accessible name, so a thesis cross-reference to "SIM-04" still lands
- * on the same control.
- */
-export function DashboardSimRail({ onRun, notice, busy, live }: DashboardSimRailProps) {
+export function DashboardSimRail({ onRun, notice, busy, live, runs, lastRun }: DashboardSimRailProps) {
+  const tone = !notice ? '' : notice.tone === 'error' ? 'alert' : 'run'
+  const last = lastRun ? VECTORS.find((v) => v.id === lastRun) : undefined
+
   return (
-    <section className="ant-card overflow-hidden" aria-label="Scenario vectors">
-      <div className="flex flex-wrap items-center justify-between gap-x-space-lg gap-y-1 border-b border-surface-container px-space-lg py-space-sm">
-        <h2 className="font-title-lg text-title-lg font-semibold text-on-surface">Vectors</h2>
-        <span className="whitespace-nowrap font-metric-value text-metric-value text-outline">
-          POST /api/Dashboard/scenarios/ingest
-        </span>
+    <section className="mp-card" aria-label="Prescribed test vectors">
+      <div className="vec">
+        {VECTORS.map((vector) => (
+          <button
+            key={vector.id}
+            type="button"
+            onClick={() => onRun(vector.id)}
+            title={VECTOR_TIPS[vector.id]}
+            aria-label={`${vector.sim}, ${vector.label}`}
+            disabled={!live || busy}
+          >
+            <i style={{ background: vector.color }} />
+            {vector.label}
+          </button>
+        ))}
+        <span className="ep num">{busy ? 'Sending…' : ENDPOINT_NOTE}</span>
       </div>
 
-      <div className="flex flex-col gap-space-md px-space-lg py-space-md">
-        {/*
-          Icon triggers wrap rather than clip. Each is 40px square — above the
-          24px WCAG 2.2 pointer-target floor and a comfortable touch target on
-          a phone — and the row is a wrapping flex collection, so the chip
-          collection reflow rule is satisfied without a `+n` disclosure.
-        */}
-        <div className="flex flex-wrap items-center gap-2">
-          {SIM_VECTORS.map((vector) => {
-            const Icon = ICONS[vector.icon]
-            const tooltip = [
-              `${vector.id} · ${vector.name}`,
-              vector.intent,
-              `Expect: ${vector.expectation}`,
-              vector.endpoint,
-            ].join('\n')
-
-            return (
-              <button
-                key={vector.id}
-                type="button"
-                disabled={busy || !live}
-                onClick={() => onRun(vector.id)}
-                title={tooltip}
-                aria-label={`${vector.id}, ${vector.name}`}
-                className="ant-btn ant-btn-default h-10 w-10 !px-0"
-              >
-                <span
-                  className={`flex h-full w-full flex-col items-center justify-center gap-0.5 ${
-                    vector.tone === 'critical'
-                      ? 'text-error'
-                      : vector.tone === 'warning'
-                        ? 'text-tertiary-container'
-                        : 'text-on-surface-variant'
-                  }`}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  {vector.tone && (
-                    <span className={`ant-dot ${BAND_DOT[vector.tone]}`} aria-hidden="true" />
-                  )}
-                </span>
-              </button>
-            )
-          })}
-
-          {busy && (
-            <span className="ml-1 inline-flex items-center gap-1.5 whitespace-nowrap font-body-sm text-body-sm text-on-surface-variant">
-              <span className="ant-dot bg-outline animate-ping motion-reduce:animate-none" aria-hidden="true" />
-              In flight
-            </span>
-          )}
-        </div>
-
-        {/* The one place on this dashboard that is allowed to be a sentence:
-            the server's own report, rendered verbatim and never reworded. */}
-        <div
-          className={`flex flex-col gap-1 rounded-md border border-l-4 bg-surface-container px-space-md py-space-sm ${
-            notice ? NOTICE_RAIL[notice.tone] : 'border-l-outline-variant'
-          }`}
-          role="status"
-        >
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-metric-value text-metric-value text-outline">
-              {busy ? 'DISPATCH' : notice ? NOTICE_TAG[notice.tone] : 'IDLE'}
-            </span>
-            {!busy && notice && (
-              <span className="flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant">
-                <span className={`ant-dot ${NOTICE_DOT[notice.tone]}`} aria-hidden="true" />
-                {NOTICE_LABEL[notice.tone]}
-              </span>
-            )}
-          </div>
-          <p className="font-body-sm text-body-sm text-on-surface">
-            {busy ? 'Posting telemetry batch…' : notice ? notice.text : VECTOR_IDLE}
-          </p>
-        </div>
-      </div>
+      {/*
+        The result box. This is the one place a sentence is allowed, and it is
+        built only from what the server returned — rows stored, total watts, and
+        the rules the engine raised. The idle line is the reference's own copy.
+      */}
+      <p className={`out ${tone}`} role="status">
+        {busy ? (
+          <>
+            <b>Sending.</b>{' '}
+            <span className="num">posting a telemetry batch to POST /api/Dashboard/scenarios/ingest…</span>
+          </>
+        ) : notice ? (
+          <>
+            <b>{`${last?.sim ?? 'Vector'} ran.`}</b>{' '}
+            <span className="num">{notice.text}</span>
+          </>
+        ) : (
+          <>
+            <b>Idle.</b> No vector has been run. The result quotes the server&apos;s response verbatim: rows
+            stored, total watts, and the rules the engine raised.
+            {runs > 0 && <span className="num"> {`· ${runs} run${runs === 1 ? '' : 's'} this session`}</span>}
+          </>
+        )}
+      </p>
     </section>
   )
 }

@@ -1,5 +1,6 @@
 ﻿using System.Reflection;
 using Mor.PowerManagement.Application.Common.Behaviours;
+using Mor.PowerManagement.Application.Power.Services;
 using Microsoft.Extensions.Hosting;
 
 namespace Microsoft.Extensions.DependencyInjection;
@@ -12,6 +13,11 @@ public static class DependencyInjection
             cfg.AddMaps(Assembly.GetExecutingAssembly()));
 
         builder.Services.AddValidatorsFromAssembly(Assembly.GetExecutingAssembly());
+
+        // The load-shedding framework's cross-batch counters and shed ledger.
+        // Singleton: the state is per-rig, and two concurrent requests must
+        // serialise on the same state rather than each holding their own.
+        builder.Services.AddSingleton<LoadSheddingStateStore>();
 
         builder.Services.AddMediatR(cfg => {
             cfg.RegisterServicesFromAssembly(Assembly.GetExecutingAssembly());

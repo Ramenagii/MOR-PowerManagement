@@ -2,7 +2,20 @@ using Mor.PowerManagement.Domain.Enums;
 
 namespace Mor.PowerManagement.Domain.Services;
 
-public record OutletLoadSnapshot(int Id, OutletPriority Priority, OutletStatus Status, double Watts, double AllowanceWatts);
+public record OutletLoadSnapshot(
+    int Id,
+    OutletPriority Priority,
+    OutletStatus Status,
+    double Watts,
+    double AllowanceWatts,
+    // Optional so every existing 5-argument construction keeps compiling. Only
+    // the framework's sensor-health check reads it: a branch that reports no
+    // fresh sample is UNKNOWN, not zero (LoadSheddingSettings.SensorStalenessSeconds).
+    DateTimeOffset? LastSeen = null,
+
+    // Optional, default empty so existing construction sites keep compiling.
+    // Used only for operator-facing messages; identity is always Id.
+    string Name = "");
 
 public enum ActivationVerdict
 {
@@ -58,15 +71,16 @@ public static class LoadResponseEvaluator
             $"{outletName} passed pre-activation assessment; relay may close.");
     }
 
-    // POL-05 load shedding level 1: lowest-priority energized outlets first.
+    // POL-05 load shedding level 1: lowest-tier energized outlets first.
+    //
+    // Ordering is delegated to LoadSheddingEngine.SelectNextShed so there is
+    // exactly ONE shed-ordering rule in the codebase. It used to live here as
+    // OrderBy(Priority).ThenBy(Watts) ascending - i.e. shed the SMALLEST load
+    // first - which is backwards for the thesis: within one tier the biggest
+    // draw relieves the most overload per relay operation, so the tie-break is
+    // highest current first.
     public static IReadOnlyList<int> SelectSheddingCandidates(IEnumerable<OutletLoadSnapshot> outlets, int count)
-        => outlets
-            .Where(o => IsEnergized(o.Status))
-            .OrderBy(o => o.Priority)
-            .ThenBy(o => o.Watts)
-            .Take(count)
-            .Select(o => o.Id)
-            .ToList();
+        => LoadSheddingEngine.SelectNextShed(outlets, count).Select(o => o.Id).ToList();
 
     // POL-08 standby load management / idle shutdown: standby channels,
     // plus energized channels sitting at or below the standby threshold.

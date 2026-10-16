@@ -76,6 +76,7 @@ function App() {
   const [userEmail, setUserEmail] = useState<string | null>(null)
   const [backendOnline, setBackendOnline] = useState(false)
   const [deviceOnline, setDeviceOnline] = useState(false)
+  const [mainsVolts, setMainsVolts] = useState<number | null>(null)
   const [introDone, setIntroDone] = useState(false)
   const [introKey, setIntroKey] = useState(0)
   const [activeView, setActiveView] = useState<AppView>('dashboard')
@@ -95,6 +96,7 @@ function App() {
     setEvents(snapshot.events)
     setThresholds(snapshot.thresholds)
     setDeviceOnline(snapshot.deviceOnline)
+    setMainsVolts(snapshot.mainsVolts)
     setBackendOnline(true)
   }, [])
 
@@ -418,14 +420,21 @@ function App() {
             transition={{ duration: ROUTE_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
           >
             {/*
-              ChannelInventoryView ships its own legacy `.design-main` frame — it
-              was ported first and is not editable here — so it opts out of the
-              shared page padding rather than stacking 24px twice. Every other
-              view gets the same 24px margin and 1440px column.
+              Two views opt out of the shared page frame and own their own
+              container instead:
+
+              - 'channels' ships its own legacy `.design-main` frame, ported
+                first and not editable here.
+              - 'dashboard' is the MOR Power reference design, which specifies
+                its own 1180px column and 20px gutters. Giving it the shared
+                1440px/24px wrapper would both widen it past the reference and
+                stack the padding twice.
+
+              Every other view keeps the same 24px margin and 1440px column.
             */}
             <div
               className={
-                activeView === 'channels'
+                activeView === 'channels' || activeView === 'dashboard'
                   ? 'w-full'
                   : 'mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg'
               }
@@ -437,6 +446,7 @@ function App() {
                   events={events}
                   deviceOnline={deviceOnline}
                   backendOnline={backendOnline}
+                  mainsVolts={mainsVolts}
                   scenario={{
                     onNormal: scenarioNormal,
                     onActivate: requestActivation,

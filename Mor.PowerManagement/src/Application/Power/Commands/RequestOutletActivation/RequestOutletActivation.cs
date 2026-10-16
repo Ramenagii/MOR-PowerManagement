@@ -16,7 +16,11 @@ public record OutletActivationResult(
     bool Allowed,
     string PolicyCode,
     string Reason,
-    OutletStatus Status);
+    OutletStatus Status,
+    // Tier the activation was judged against, and whether this outlet is the
+    // one exempt from its per-outlet cap.
+    LoadTier Tier,
+    bool PerOutletCapExempt);
 
 public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutletActivationCommand, OutletActivationResult>
 {
@@ -40,11 +44,29 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
 
         var outlets = await _context.Outlets.ToListAsync(cancellationToken);
 
-        var total = LoadResponseEvaluator.TotalLoad(outlets.Select(o =>
-            new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts)));
+        var snapshots = outlets
+            .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))
+            .ToList();
 
-        var assessment = LoadResponseEvaluator.AssessActivation(
+        var total = LoadResponseEvaluator.TotalLoad(snapshots);
+
+        // Per-outlet allowance cap (FR-04 / FR-05, tier-aware). The tier-1
+        // outlet is exempt from its OWN cap - not from P_limit, which is
+        // checked separately below and still counts it.
+        var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
+        var allowance = LoadSheddingEngine.AssessOutletAllowance(
+            new OutletLoadSnapshot(outlet.Id, outlet.Priority, outlet.Status, outlet.CurrentWatts, outlet.AllowanceWatts, outlet.LastSeen, outlet.Name),
+            outlet.CurrentWatts,
+            capExempt);
+
+        // Whole-system limit. Checked even for the cap-exempt outlet: "no
+        // per-outlet limit" must never read as "no limit at all".
+        var systemLimit = LoadResponseEvaluator.AssessActivation(
             total, outlet.AllowanceWatts, config.CriticalThresholdWatts, outlet.Name);
+
+        var assessment = allowance.Verdict == ActivationVerdict.Blocked
+            ? allowance
+            : systemLimit;
 
         var now = DateTimeOffset.UtcNow;
 
@@ -87,6 +109,8 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
             assessment.Verdict == ActivationVerdict.Allowed,
             assessment.PolicyCode,
             assessment.Reason,
-            outlet.Status);
+            outlet.Status,
+            LoadTierMapper.ToTier(outlet.Priority),
+            capExempt.Contains(outlet.Id));
     }
 }

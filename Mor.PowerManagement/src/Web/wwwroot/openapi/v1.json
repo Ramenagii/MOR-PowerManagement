@@ -227,7 +227,7 @@
           "Dashboard"
         ],
         "summary": "Apply selective load response",
-        "description": "Disconnects the lowest-priority energized outlets first (FR-07).",
+        "description": "Disconnects the most expendable energized outlets first (FR-07): lowest load tier first, highest current within a tier. Tier 1 (Critical) is never shed automatically. Set manualOverride to also latch automatic prioritisation off. Returns the shed branches with their tiers, plus P_limit and the recovery limit.",
         "operationId": "ApplySelectiveResponse",
         "requestBody": {
           "content": {
@@ -252,6 +252,100 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SelectiveResponseResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/Dashboard/shedding/restore": {
+      "post": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Run one staged-restoration step",
+        "description": "Runs a single step of the staged-restoration ladder: recloses the highest-priority branch the framework shed, once P_total has stayed below the recovery limit for the recovery period. Force skips the recovery-period and inter-reconnect waits (the operator is asserting the load is gone) but NEVER the recovery limit itself. Automatic restoration also runs on every telemetry batch; this endpoint drives or inspects it on demand.",
+        "operationId": "RunStagedRestoration",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RunStagedRestorationCommand"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StagedRestorationResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          }
+        }
+      }
+    },
+    "/api/Dashboard/shedding/override": {
+      "post": {
+        "tags": [
+          "Dashboard"
+        ],
+        "summary": "Enable or disable automatic prioritisation",
+        "description": "Operator override. While enabled, the framework keeps measuring and keeps raising alarms but opens and closes no relay on its own, and branches already shed are not restored automatically. The change is recorded as a Warning event so an override that outlives the shift is visible in the audit trail.",
+        "operationId": "SetManualOverride",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/SetManualOverrideCommand"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualOverrideResult"
                 }
               }
             }
@@ -357,7 +451,7 @@
           "Dashboard"
         ],
         "summary": "Ingest a defense-demo telemetry batch",
-        "description": "Stores a scenario telemetry batch and returns the policy engine's own result: rows stored, aggregate watts, resulting system state and the events it raised. Metering mode is forced to Simulated because the batch is synthesised.",
+        "description": "Stores a scenario telemetry batch and returns the policy engine's own result: rows stored, aggregate watts, resulting system state, the events it raised, and the load-shedding framework's decision for that batch (including any branch it shed or restored). Metering mode is forced to Simulated because the batch is synthesised.",
         "operationId": "IngestScenario",
         "requestBody": {
           "content": {
@@ -1297,6 +1391,9 @@
               "string"
             ],
             "format": "int32"
+          },
+          "manualOverride": {
+            "type": "boolean"
           }
         }
       },
@@ -1414,7 +1511,9 @@
           "thresholds",
           "recentEvents",
           "deviceOnline",
-          "deviceLastSeen"
+          "deviceLastSeen",
+          "framework",
+          "mainsVolts"
         ],
         "type": "object",
         "properties": {
@@ -1477,6 +1576,18 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "framework": {
+            "$ref": "#/components/schemas/FrameworkStateDto"
+          },
+          "mainsVolts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
           }
         }
       },
@@ -1615,6 +1726,95 @@
         "properties": {
           "email": {
             "type": "string"
+          }
+        }
+      },
+      "FrameworkStateDto": {
+        "required": [
+          "automaticPrioritisationEnabled",
+          "faultLatched",
+          "recoveryLimitWatts",
+          "hysteresisFraction",
+          "overLimitConfirmationBatches",
+          "recoveryPeriodSeconds",
+          "interReconnectDelaySeconds",
+          "consecutiveOverLimitBatches",
+          "belowRecoveryLimitSinceUtc",
+          "shedOutletIds"
+        ],
+        "type": "object",
+        "properties": {
+          "automaticPrioritisationEnabled": {
+            "type": "boolean"
+          },
+          "faultLatched": {
+            "type": "boolean"
+          },
+          "recoveryLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "hysteresisFraction": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "overLimitConfirmationBatches": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "recoveryPeriodSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "interReconnectDelaySeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "consecutiveOverLimitBatches": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "belowRecoveryLimitSinceUtc": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "date-time"
+          },
+          "shedOutletIds": {
+            "type": "array",
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
           }
         }
       },
@@ -1772,8 +1972,125 @@
             "items": {
               "type": "string"
             }
+          },
+          "shedding": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LoadSheddingResult"
+              }
+            ]
           }
         }
+      },
+      "LoadSheddingResult": {
+        "required": [
+          "action",
+          "outletId",
+          "outletName",
+          "tier",
+          "detail",
+          "pLimitWatts",
+          "recoveryLimitWatts",
+          "consecutiveOverLimitBatches",
+          "overLimitConfirmationBatches",
+          "recoveryPeriodSeconds",
+          "shedOutletIds",
+          "manualOverride",
+          "faultLatched"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "outletId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "outletName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "tier": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "pLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "recoveryLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "consecutiveOverLimitBatches": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "overLimitConfirmationBatches": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "recoveryPeriodSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "shedOutletIds": {
+            "type": "array",
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          "manualOverride": {
+            "type": "boolean"
+          },
+          "faultLatched": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LoadTier": {
+        "type": "integer"
       },
       "LoginRequest": {
         "required": [
@@ -1821,6 +2138,42 @@
           }
         }
       },
+      "ManualOverrideResult": {
+        "required": [
+          "enabled",
+          "detail",
+          "shedOutletCount",
+          "shedOutletIds"
+        ],
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "shedOutletCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "shedOutletIds": {
+            "type": "array",
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        }
+      },
       "MeteringMode": {
         "type": "integer"
       },
@@ -1830,7 +2183,9 @@
           "allowed",
           "policyCode",
           "reason",
-          "status"
+          "status",
+          "tier",
+          "perOutletCapExempt"
         ],
         "type": "object",
         "properties": {
@@ -1853,6 +2208,12 @@
           },
           "status": {
             "$ref": "#/components/schemas/OutletStatus"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/LoadTier"
+          },
+          "perOutletCapExempt": {
+            "type": "boolean"
           }
         }
       },
@@ -1873,7 +2234,10 @@
           "status",
           "schedule",
           "idleLimitMinutes",
-          "lastSeen"
+          "lastSeen",
+          "tier",
+          "perOutletCapExempt",
+          "shedByFramework"
         ],
         "type": "object",
         "properties": {
@@ -1945,6 +2309,15 @@
               "string"
             ],
             "format": "date-time"
+          },
+          "tier": {
+            "$ref": "#/components/schemas/LoadTier"
+          },
+          "perOutletCapExempt": {
+            "type": "boolean"
+          },
+          "shedByFramework": {
+            "type": "boolean"
           }
         }
       },
@@ -2059,11 +2432,24 @@
           }
         }
       },
+      "RunStagedRestorationCommand": {
+        "type": "object",
+        "properties": {
+          "force": {
+            "type": "boolean"
+          }
+        }
+      },
       "SelectiveResponseResult": {
         "required": [
           "shedOutletIds",
           "totalWatts",
-          "state"
+          "state",
+          "shed",
+          "pLimitWatts",
+          "recoveryLimitWatts",
+          "automaticPrioritisationEnabled",
+          "manualOverrideActive"
         ],
         "type": "object",
         "properties": {
@@ -2088,6 +2474,185 @@
           },
           "state": {
             "$ref": "#/components/schemas/SystemState"
+          },
+          "shed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShedDecisionDto"
+            }
+          },
+          "pLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "recoveryLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "automaticPrioritisationEnabled": {
+            "type": "boolean"
+          },
+          "manualOverrideActive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetManualOverrideCommand": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "ShedDecisionDto": {
+        "required": [
+          "outletId",
+          "name",
+          "tier",
+          "priority",
+          "wattsAtShed"
+        ],
+        "type": "object",
+        "properties": {
+          "outletId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string"
+          },
+          "priority": {
+            "$ref": "#/components/schemas/OutletPriority"
+          },
+          "wattsAtShed": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "StagedRestorationResult": {
+        "required": [
+          "action",
+          "restoredOutletId",
+          "restoredOutletName",
+          "tier",
+          "detail",
+          "pLimitWatts",
+          "recoveryLimitWatts",
+          "totalWatts",
+          "recoveryPeriodSeconds",
+          "interReconnectDelaySeconds",
+          "remainingShedOutletIds",
+          "manualOverrideActive"
+        ],
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "restoredOutletId": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "restoredOutletName": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "tier": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "pLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "recoveryLimitWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "totalWatts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "recoveryPeriodSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "interReconnectDelaySeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "remainingShedOutletIds": {
+            "type": "array",
+            "items": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          },
+          "manualOverrideActive": {
+            "type": "boolean"
           }
         }
       },

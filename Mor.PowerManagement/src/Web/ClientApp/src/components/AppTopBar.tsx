@@ -22,8 +22,8 @@ const TABS: Array<{ id: AppView; label: string }> = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'channels', label: 'Channel Inventory' },
   { id: 'telemetry', label: 'Telemetry' },
-  { id: 'admin', label: 'Policy Admin' },
-  { id: 'policies', label: 'Policies' },
+  { id: 'admin', label: 'Framework Admin' },
+  { id: 'policies', label: 'Framework' },
   { id: 'hardware', label: 'Hardware' },
 ]
 

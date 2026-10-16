@@ -21,6 +21,10 @@ import type { DashboardSnapshot } from '../api'
 import type { Outlet, Priority } from '../types/dashboard'
 import {
   PRIORITY_RANK,
+  TIERS,
+  NO_CAP_NOTE,
+  tierHasCap,
+  tierOf,
   draftFrom,
   sameDraft,
   thresholdDiff,
@@ -28,9 +32,10 @@ import {
   type SaveState,
   type ThresholdsForm,
 } from './policyAdmin'
+import { UNWIRED_TIER_CHANNELS } from '../data/dashboard'
 
 /**
- * Policy Administration -- the management half the thesis promises (roadmap M3).
+ * Framework Administration -- the management half the thesis promises (roadmap M3).
  *
  * The backend already exposed both writes (PUT /Dashboard/thresholds and
  * PUT /Dashboard/outlets/{id}/policy); nothing in the client called them. This
@@ -88,13 +93,16 @@ function formatSeen(value: string): string {
   return parsed.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })
 }
 
-/** Option copy states what the tier actually DOES under FR-07, not a label. */
-const PRIORITY_OPTIONS: Array<{ value: Priority; label: string }> = [
-  { value: 'Low', label: 'Low — shed first' },
-  { value: 'Medium', label: 'Medium — secondary' },
-  { value: 'High', label: 'High — protected' },
-  { value: 'Critical', label: 'Critical — protected last' },
-]
+/**
+ * Tier option copy. Each entry states what the tier DOES under FR-07 rather
+ * than repeating its own name, so the dropdown explains the shed order without
+ * needing a legend beside it.
+ *
+ * The `value` is the Priority enum the backend stores, so picking a tier is the
+ * same PUT that the priority selector always issued — a relabelling of one
+ * write, not a second field and not a migration.
+ */
+const TIER_OPTIONS = TIERS.map((tier) => ({ value: tier.priority, label: `${tier.id} — ${tier.blurb}` }))
 
 /**
  * Row state is reported as a dot plus a word, never as a filled pill: a table
@@ -410,7 +418,7 @@ export function PolicyAdminView() {
         if (updated) setDrafts((current) => ({ ...current, [outlet.id]: draftFrom(updated) }))
       }
       setRowState((current) => ({ ...current, [outlet.id]: 'saved' }))
-      setRowMessage((current) => ({ ...current, [outlet.id]: 'Policy saved.' }))
+      setRowMessage((current) => ({ ...current, [outlet.id]: 'Framework saved.' }))
     } catch (cause) {
       setRowState((current) => ({ ...current, [outlet.id]: 'error' }))
       setRowMessage((current) => ({
@@ -462,7 +470,7 @@ export function PolicyAdminView() {
       unsavedEdits: pending,
       note:
         pending > 0
-          ? 'Includes unsaved on-screen drafts. Save the policies before treating this file as current.'
+          ? 'Includes unsaved on-screen drafts. Save the framework changes before treating this file as current.'
           : 'Matches the stored configuration.',
       thresholds: {
         maxCapacityWatts: thresholdForm.max,
@@ -495,7 +503,7 @@ export function PolicyAdminView() {
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = 'mor-policy-config.json'
+    link.download = 'mor-framework-config.json'
     document.body.appendChild(link)
     link.click()
     link.remove()
@@ -601,12 +609,12 @@ export function PolicyAdminView() {
   // ----- states before any data exists -----
 
   const pageFrame = (body: ReactNode, title: string, subtitle: ReactNode) => (
-    <section className="flex flex-col gap-space-lg" aria-label="Policy Administration">
+    <section className="flex flex-col gap-space-lg" aria-label="Framework Administration">
       <div className="flex flex-col gap-1">
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 font-body-sm text-body-sm text-on-surface-variant">
           <span>Console</span>
           <span className="text-outline">/</span>
-          <span className="font-medium text-on-surface">Policy Admin</span>
+          <span className="font-medium text-on-surface">Framework Admin</span>
         </nav>
         <h1 className="font-headline-md text-headline-md tracking-tight text-on-surface">{title}</h1>
         <p className="max-w-3xl font-body-md text-body-md text-on-surface-variant">{subtitle}</p>
@@ -647,7 +655,7 @@ export function PolicyAdminView() {
         </div>
       </div>,
       'Configuration unavailable',
-      'The console could not reach the policy API, so no stored configuration is loaded and nothing can be written.',
+      'The console could not reach the framework API, so no stored configuration is loaded and nothing can be written.',
     )
   }
 
@@ -656,11 +664,11 @@ export function PolicyAdminView() {
       <div className="ant-card">
         <div className="ant-card-body flex items-center gap-space-sm font-body-md text-body-md text-on-surface-variant">
           <LoaderCircle size={16} className="animate-spin text-primary" />
-          Reading the current thresholds and outlet policies from the dashboard state endpoint...
+          Reading the current thresholds and channel tiers from the dashboard state endpoint...
         </div>
       </div>,
       'Loading configuration',
-      'Fetching P_limit, the FR-05/FR-06 thresholds and every channel policy before the forms are seeded.',
+      'Fetching P_limit, the FR-05/FR-06 thresholds and every channel tier before the forms are seeded.',
     )
   }
 
@@ -670,7 +678,7 @@ export function PolicyAdminView() {
   const orderingBroken = thresholdForm.max <= 0 || thresholdForm.warning >= thresholdForm.critical
 
   return (
-    <section className="flex flex-col gap-space-lg" aria-label="Policy Administration">
+    <section className="flex flex-col gap-space-lg" aria-label="Framework Administration">
       {/* Operational breadcrumb, title and page-level toolbar */}
       <div className="flex flex-col gap-space-md lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-col gap-1">
@@ -680,11 +688,11 @@ export function PolicyAdminView() {
           >
             <span>Console</span>
             <span className="text-body-sm text-outline">/</span>
-            <span className="font-medium text-on-surface">Policy Admin</span>
+            <span className="font-medium text-on-surface">Framework Admin</span>
           </nav>
           <div className="mt-1 flex flex-wrap items-center gap-space-sm">
             <h1 className="font-headline-md text-headline-md tracking-tight text-on-surface">
-              Policy &amp; Threshold Admin
+              Framework &amp; Threshold Admin
             </h1>
             <span className="inline-flex items-center gap-1.5 rounded bg-surface-container-high px-2 py-0.5 font-body-sm text-body-sm font-medium text-on-surface-variant">
               {/* In sync is the ordinary state, so it gets the neutral outline
@@ -923,13 +931,13 @@ export function PolicyAdminView() {
         </div>
       </section>
 
-      {/* SECTION 2 — Granular Channel Policy Table */}
+      {/* SECTION 2 — Channel tier + allocation table */}
       <section className="ant-card overflow-hidden" aria-labelledby="policy-heading">
         <div className="ant-card-header flex-col items-stretch md:flex-row md:items-center">
           <div className="flex flex-wrap items-center gap-2">
             <Power size={20} className="text-primary" aria-hidden="true" />
             <h2 id="policy-heading" className="font-title-lg text-title-lg font-semibold text-on-surface">
-              Granular Channel Policy Table ({rows.length} {rows.length === 1 ? 'channel' : 'channels'})
+              Channel Tier &amp; Allocation ({rows.length} {rows.length === 1 ? 'channel' : 'channels'})
             </h2>
             <code className="font-metric-value text-metric-value text-on-surface-variant">
               PUT /api/Dashboard/outlets/&#123;id&#125;/policy
@@ -1068,41 +1076,62 @@ export function PolicyAdminView() {
                     <td className="px-3 py-2.5 align-middle">
                       <select
                         value={draft.priority}
-                        aria-label={`Priority for ${outlet.name}`}
+                        aria-label={`Build-prioritization tier for ${outlet.name}`}
                         onChange={(event) =>
                           setDraftField(outlet.id, 'priority', event.target.value as Priority)
                         }
                         className="h-8 w-full rounded-md border border-outline-variant bg-surface-container-lowest px-2 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary"
                       >
-                        {PRIORITY_OPTIONS.map((option) => (
+                        {TIER_OPTIONS.map((option) => (
                           <option key={option.value} value={option.value}>
                             {option.label}
                           </option>
                         ))}
                       </select>
+                      <span className="mt-1 block font-code text-code text-outline">
+                        {tierOf(draft.priority)}
+                      </span>
                     </td>
 
+                    {/*
+                      Per-outlet cap. A Critical branch has no private budget by
+                      design — it draws on the whole-system ceiling instead, so
+                      the cell says so rather than showing a number that would
+                      look enforced and is not. The note replaces the input
+                      entirely, so the row height stays stable as tiers change.
+                    */}
                     <td className="px-3 py-2.5 align-middle">
-                      <div className="flex h-8 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
-                        <input
-                          type="number"
-                          min={0}
-                          step={5}
-                          value={draft.allowanceWatts}
-                          aria-label={`Allowance watts for ${outlet.name}`}
-                          onChange={(event) =>
-                            setDraftField(
-                              outlet.id,
-                              'allowanceWatts',
-                              event.target.value === '' ? 0 : Number(event.target.value),
-                            )
-                          }
-                          className="ant-table-num min-w-0 flex-1 bg-transparent px-2 text-on-surface outline-none"
-                        />
-                        <span className="flex h-full shrink-0 select-none items-center bg-surface-container px-1.5 font-metric-value text-metric-value text-on-surface-variant">
-                          W
-                        </span>
-                      </div>
+                      {tierHasCap(tierOf(draft.priority)) ? (
+                        <div className="flex h-8 overflow-hidden rounded-md border border-outline-variant bg-surface-container-lowest shadow-sm focus-within:border-primary">
+                          <input
+                            type="number"
+                            min={0}
+                            step={5}
+                            value={draft.allowanceWatts}
+                            aria-label={`Allowance watts for ${outlet.name}`}
+                            onChange={(event) =>
+                              setDraftField(
+                                outlet.id,
+                                'allowanceWatts',
+                                event.target.value === '' ? 0 : Number(event.target.value),
+                              )
+                            }
+                            className="ant-table-num min-w-0 flex-1 bg-transparent px-2 text-on-surface outline-none"
+                          />
+                          <span className="flex h-full shrink-0 select-none items-center bg-surface-container px-1.5 font-metric-value text-metric-value text-on-surface-variant">
+                            W
+                          </span>
+                        </div>
+                      ) : (
+                        <div
+                          className="flex h-8 items-center rounded-md border border-dashed border-outline-variant bg-surface-container-low px-2"
+                          title="A Critical branch is protected rather than capped. It claims headroom on the whole-system limit instead of a private allowance, so unused capacity on other branches stays available to it."
+                        >
+                          <span className="min-w-0 truncate font-code text-code text-outline">
+                            {NO_CAP_NOTE}
+                          </span>
+                        </div>
+                      )}
                     </td>
 
                     <td className="px-3 py-2.5 align-middle">
@@ -1220,6 +1249,94 @@ export function PolicyAdminView() {
                   </td>
                 </tr>
               )}
+
+              {/*
+                Unwired branches, shown so the build target is visible next to
+                what is actually wired.
+
+                Every control is disabled and every value is the literal em dash:
+                these ids are not in GET /Dashboard/state, so there is no stored
+                priority, no stored allowance and no route to PUT to. Rendering
+                them as live rows would imply a write that cannot happen. The
+                tier shown is the PLANNED assignment from TIER_PLAN, which is why
+                it is labelled as planned rather than presented as current.
+
+                FUTURE 4+USB: these rows disappear on their own once CH3-CH5
+                arrive in the roster from the backend; delete UNWIRED_TIER_CHANNELS
+                in data/dashboard.ts at that point.
+              */}
+              {UNWIRED_TIER_CHANNELS.map((branch) => (
+                <tr key={`unwired-${branch.id}`} className="ant-table-row border-l-2 border-l-transparent">
+                  <td className="px-3 py-2.5 align-middle">
+                    <input
+                      type="checkbox"
+                      disabled
+                      checked={false}
+                      readOnly
+                      aria-label={`${channelLabel(branch.id)} is not wired on this bench`}
+                      className="h-4 w-4 cursor-not-allowed align-middle accent-primary"
+                    />
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <div className="flex flex-col">
+                      <span className="flex items-center gap-1.5 font-title-md text-title-md font-semibold text-outline">
+                        <span className="font-metric-value text-metric-value">
+                          {channelLabel(branch.id)}
+                        </span>
+                        <span>Not wired</span>
+                      </span>
+                      <span className="font-metric-value text-metric-value text-outline">
+                        Planned branch · no relay fitted
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <span className="font-metric-value text-metric-value text-outline">
+                      {`${branch.volts}V AC`}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <div
+                      className="flex h-8 items-center rounded-md border border-dashed border-outline-variant bg-surface-container-low px-2"
+                      title={`Planned tier for the full bench. Not stored: ${channelLabel(branch.id)} is not in the live roster, so there is nothing to write.`}
+                    >
+                      <span className="min-w-0 truncate font-metric-value text-metric-value text-outline">
+                        {`${branch.tier} (planned)`}
+                      </span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <div
+                      className="flex h-8 items-center rounded-md border border-dashed border-outline-variant bg-surface-container-low px-2"
+                      title="No allowance is stored for a branch that is not wired."
+                    >
+                      <span className="min-w-0 truncate font-code text-code text-outline">—</span>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <span className="font-code text-code text-outline">—</span>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <span className="font-code text-code text-outline">—</span>
+                  </td>
+                  <td className="px-3 py-2.5 align-middle">
+                    <span className="flex items-center gap-1.5 font-code text-code text-outline">
+                      <span className="ant-dot bg-outline-variant" aria-hidden />
+                      Unwired
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-right align-middle">
+                    <button
+                      type="button"
+                      className="ant-btn ant-btn-default"
+                      disabled
+                      title="This branch is not wired on the 2-outlet bench, so there is no outlet route to write."
+                    >
+                      Save
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
@@ -1278,7 +1395,7 @@ export function PolicyAdminView() {
                 value={batchPriority}
                 onChange={(event) => applyBatchPriority(event.target.value)}
                 disabled={selected.size === 0 || batchBusy}
-                aria-label="Set priority for the selected channels"
+                aria-label="Set build-prioritization tier for the selected channels"
                 className="h-8 rounded-md border border-outline-variant bg-surface-container-lowest pl-3 pr-8 text-body-sm text-on-surface shadow-sm outline-none focus:border-primary disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <option value="" disabled>
@@ -1286,9 +1403,9 @@ export function PolicyAdminView() {
                     ? 'Select channels to batch-edit'
                     : `Set priority for ${selected.size} selected...`}
                 </option>
-                {PRIORITY_OPTIONS.map((option) => (
+                {TIER_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>
-                    {`Set to ${option.label}`}
+                    {`Set tier to ${option.label}`}
                   </option>
                 ))}
               </select>
@@ -1339,7 +1456,7 @@ export function PolicyAdminView() {
                 PUT /Dashboard/outlets/&#123;id&#125;/policy
               </code>
               . Both are partial updates and both are validated server-side. Saving writes to the same database the
-              policies read from, so there is no local-only shadow state.
+              framework settings read from, so there is no local-only shadow state.
             </p>
           </div>
         </article>
