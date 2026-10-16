@@ -641,6 +641,55 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 6 };
 // the board wants it.
 #define USB_OUTLET_NO_RELAY 1
 
+// ---- Relay-transition window drop (2026-10-16) ----
+// NO NEW TUNABLE. This block documents a mechanism that lives entirely in
+// applyRelays() + sensorTask() in the .ino, precisely because it must NOT be a
+// knob: every knob that touches the measurement chain (the window length, the
+// EMA weights, the noise floor, ZMCT_CAL_FACTOR) is a calibration constant, and
+// none of them is what was wrong.
+//
+// THE FAULT (observed live on this rig, 2026-10-16): toggling CH1 through the
+// dashboard posted a phantom 792 W / 3.33 A on a branch whose entire peak
+// history was 127 W. The 792 W was never measured. readChannel() computes a
+// MEAN-SUBTRACTED variance over a 150-sample window, and if that window spans a
+// relay open/close then it contains samples from two different steady states.
+// The variance of two levels joined by a step is dominated by the step itself,
+// not by the AC ripple, so the window reports an RMS of the transition. Two
+// things then made it worse: the adaptive EMA snaps through any step larger
+// than ZMCT_ADAPTIVE_STEP_AMPS, so the fake value passes the filter untouched
+// and then lingers; and watts = amps x MAINS_FIXED_VOLTS scales it straight to a
+// number no electrician would believe, on the dashboard, as a real spike.
+//
+// THE MECHANISM (three lines of behaviour, in the .ino):
+//   1. applyRelays() bumps a version counter whenever a pin level ACTUALLY
+//      changes (writing the same level again is not a transition and costs
+//      nothing).
+//   2. sensorTask() samples that counter before opening each channel window and
+//      compares it after the window closes.
+//   3. If it moved, that channel's window is DISCARDED: the previous amps are
+//      posted, the raw chain is zeroed and flagged stale, and the next sweep -
+//      the first clean window after the transition - publishes normally.
+//
+// WHAT THIS DELIBERATELY DOES NOT DO, because each of these was considered and
+// rejected:
+//   - It does NOT lengthen the window, so ZMCT_DEDICATED_SAMPLES stays at 150
+//     and the core-0 occupancy argument above is untouched. A longer window
+//     would smooth the step across itself rather than refuse to measure it.
+//   - It does NOT latch, delay or retry. One clean window per transition is all
+//     the physics needs; anything more turns a 141 ms window into a mechanism
+//     for hiding real load changes.
+//   - It does NOT change the noise floor, the piecewise curve, the EMA weights
+//     or ZMCT_CAL_FACTOR. Every one of those numbers is calibrated against
+//     steady-state loads, and a step is not a steady state - the bug was never
+//     in them.
+//
+// COST: one dropped CT reading per channel that transitions mid-window, visible
+// on the serial line as "raw STALE-DROPPED" next to the held amps. That is a
+// stale-but-true number for ~141 ms, which is strictly better than a wrong one.
+// If a real transient ever has to be caught faster than the 2 s
+// METER_INTERVAL_MS sweep already allows, that is a sampling-period question for
+// the watchdog budget above - not a reason to publish step-contaminated RMS.
+
 // NC (normally closed) contact wiring, as built on the bench:
 //   power PASSES while the relay coil is idle  (pin HIGH)
 //   driving LOW energises the coil, the NC contact OPENS, power is CUT

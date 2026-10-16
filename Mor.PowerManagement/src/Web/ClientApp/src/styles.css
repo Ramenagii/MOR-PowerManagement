@@ -3517,6 +3517,45 @@ body {
 .mp .alloc .top b { color: var(--ink); font-weight: 500; }
 .mp .alloc .pk { margin-top: 6px; font-size: 11px; color: var(--mute); }
 
+/* --- channel row entrance: once per mount, never on a data tick ------------ */
+/*
+ * WHY THIS IS CSS AND NOT A MOTION COMPONENT.
+ *
+ * The rule the dashboard has to hold is that a row's entrance runs exactly once
+ * per mount and never again while the page is merely being polled. A JS-driven
+ * animation has to be told when to start, and every mechanism for telling it
+ * is something a data tick can disturb: a re-keyed list restarts it, an
+ * `AnimatePresence` child whose identity churned remounts it, a `key` built
+ * from the payload remounts it, and a re-render that was never meant to skip
+ * walks it from zero. All of those are ways of saying "this row is new again",
+ * and none of them are true.
+ *
+ * A CSS animation is bound to the element's lifetime instead of to the render.
+ * It begins when the node is created and cannot be restarted by anything React
+ * does to that node afterwards — not a re-render, not a new prop object, not a
+ * changed className, not a poll. So the guarantee is structural rather than
+ * something to be re-established every time the data path is touched, and the
+ * only thing that can make it play again is a row genuinely being created
+ * again, which is what "once per mount" is supposed to mean.
+ *
+ * That makes the identity work upstream load-bearing: this animation is safe
+ * precisely because `key={outlet.id}` holds the node across polls and
+ * `DashboardOutlet` compares by value. Break either and the entrance genuinely
+ * is a new mount.
+ *
+ * The stagger is 45 ms per row, capped by the roster's own length, so five
+ * branches land as one gesture instead of five. `--row-index` is set inline on
+ * the row and read once here; nothing re-writes it, so nothing re-stages it.
+ */
+@keyframes mp-row-in {
+  from { opacity: 0; transform: translate3d(0, 10px, 0); }
+  to   { opacity: 1; transform: none; }
+}
+.mp .row {
+  animation: mp-row-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--row-index, 0) * 45ms);
+}
+
 .mp .tag {
   display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 8px;
   border-radius: 99px; margin-top: 8px;
@@ -3731,6 +3770,15 @@ body {
 /* --- reduced motion: kill the pulse AND the width/left transitions -------- */
 @media (prefers-reduced-motion: reduce) {
   .mp .dot.live { animation: none; }
+  /*
+    `animation: none` rather than a 1 ms duration. The global block above
+    collapses durations but leaves `animation-delay` alone, so a staggered row
+    would sit at opacity 0 for its delay and then snap in — a delayed fade is
+    still motion, and it is the one an operator asking for reduced motion would
+    notice first. Dropping the animation drops the fill too, so the row is at
+    its resting state from the first frame.
+  */
+  .mp .row { animation: none !important; }
   .mp .meter > i,
   .mp .shunt-track > i,
   .mp .sw,

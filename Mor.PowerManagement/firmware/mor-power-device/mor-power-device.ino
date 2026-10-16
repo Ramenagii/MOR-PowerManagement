@@ -200,16 +200,62 @@ static inline bool isMonitoredOnly(uint8_t idx) {
 // state is still tracked and still reported when it is 0, so the dashboard
 // never sees a silent device claim a relay state it is not enforcing.
 //
+// RELAY-STATE VERSION STAMP (2026-10-16, step-spike suppression)
+//
+// An RMS window that spans a relay open/close contains samples from TWO steady
+// states. Mean-subtracted variance across a step is dominated by the step, not
+// by the AC ripple, so such a window reports an RMS far above anything the branch
+// can actually draw: observed live as 792 W / 3.33 A on CH1, whose whole peak
+// history was 127 W. That phantom reading then lands on the dashboard as a real
+// power spike, and the adaptive EMA snaps to it (a step larger than
+// ZMCT_ADAPTIVE_STEP_AMPS passes through untouched), so one transition
+// contaminates the next several sweeps as well.
+//
+// Fix, and it is deliberately the SMALLEST one that works: a window is only
+// valid if no relay pin moved while it was being collected. relayStateVersion
+// below is the stamp that says whether that was true; sensorTask() compares the
+// stamp from before a channel window with the stamp after it and DISCARDS the
+// window if it moved. Nothing is latched, no sweep is delayed, and the next
+// window after the transition is published normally - one clean window per
+// transition is all the physics needs.
+//
+// The counter is written by core 1 (applyRelays, from loop()/syncConfig/
+// postTelemetry) and read by core 0 (sensorTask). It is a single 32-bit word, so
+// every read and write of it is atomic on this core and no mutex is needed for
+// the stamp itself; a torn value is impossible, and a value that changed
+// between the two reads is exactly the condition being detected.
+volatile uint32_t relayStateVersion = 0;
+// Last level actually driven to each pin, -1 until the first applyRelays().
+// Without this the boot-time write (setup() parks the pins HIGH, then calls
+// applyRelays()) would be indistinguishable from a real transition and would
+// stamp the version once for nothing.
+int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
+
 // The monitored-only channel (the USB socket) is SKIPPED: RELAY_PINS[idx] there
 // is a reserved placeholder, not a wired relay, and driving it would switch a
 // pin that goes nowhere while the dashboard implied the socket had been cut.
 void applyRelays() {
 #if RELAY_OUTPUT_ENABLED
+  bool changed = false;
   for (uint8_t i = 0; i < OUTLET_COUNT; i++) {
     if (isMonitoredOnly(i)) continue;
-    digitalWrite(RELAY_PINS[i],
-                 relayClosedDesired[i] ? RELAY_POWER_ON_LEVEL : RELAY_POWER_OFF_LEVEL);
+    const int8_t target = relayClosedDesired[i] ? (int8_t)RELAY_POWER_ON_LEVEL
+                                                : (int8_t)RELAY_POWER_OFF_LEVEL;
+    // The level actually on the pin BEFORE the write, so the stamp tracks a
+    // real transition rather than an intention. A pin that is already where it
+    // is being asked to go does not stamp the version - re-writing the same
+    // level is not a transition and must not cost a CT window.
+    const int8_t before = (int8_t)digitalRead(RELAY_PINS[i]);
+    digitalWrite(RELAY_PINS[i], target);
+    if (relayAppliedLevel[i] < 0 || before != target) {
+      relayAppliedLevel[i] = target;
+      changed = true;
+    }
   }
+  // One bump per applyRelays() pass, whatever the number of pins that moved: the
+  // stamp is a "did anything move while you were sampling" flag, not a count of
+  // pins, and a pass that moved nothing must leave it untouched.
+  if (changed) relayStateVersion++;
 #endif
   // A monitored-only outlet can never be open. Forcing the bit here rather than
   // only at post time means every reader of relayClosedDesired[] - serial, sync,
@@ -275,6 +321,15 @@ float branchAmps[BRANCH_CT_COUNT] = {0.0f};
 // Last raw sweep per channel, so the calibration mode can print the un-
 // calibrated chain without disturbing sampling. Same mutex as everything else.
 ZmctReading branchRaw[BRANCH_CT_COUNT];
+
+// TRUE for a channel whose last raw window straddled a relay transition and was
+// therefore discarded (see relayStateVersion). branchAmps[] for that channel is
+// left at its PREVIOUS value on purpose: the amps a CT reports while the branch
+// is switching between two loads is a real measurement of neither, and the step
+// in it is what posts the phantom spike. Holding the last good reading for one
+// sweep is a stale-but-true number; publishing the contaminated one is a wrong
+// one. Read under dataMutex alongside branchRaw[].
+bool branchRawStale[BRANCH_CT_COUNT] = { false, false, false, false };
 
 // FreeRTOS Handles
 SemaphoreHandle_t dataMutex = NULL;
@@ -677,8 +732,19 @@ void sensorTask(void *pvParameters) {
     // on this rig, so BRANCH_CT_COUNT drives the loop.
     ZmctReading raw[BRANCH_CT_COUNT];
     float calibrated[BRANCH_CT_COUNT];
+    // Per-channel: this window straddled a relay transition and is therefore not
+    // a measurement of any steady state. Set below, acted on under dataMutex.
+    bool staleDrop[BRANCH_CT_COUNT] = { false, false, false, false };
+    bool anyStaleDrop = false;
 
     for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+      // The relay-state stamp, read BEFORE the window opens. applyRelays() on
+      // core 1 bumps it the moment any pin level actually changes, so a
+      // difference at the end of the window means a transition happened inside
+      // it - and a window containing a step is not an RMS of anything, it is the
+      // step (see relayStateVersion for the 792 W phantom this exists to stop).
+      const uint32_t stampAtWindowStart = relayStateVersion;
+
       // The SPI lock is taken PER CHANNEL, not around the whole sweep. Each
       // channel window is ~300 ms, so releasing between channels lets anything
       // else that needs SPI get in during the gaps instead of being starved for
@@ -694,7 +760,31 @@ void sensorTask(void *pvParameters) {
       } else {
         raw[ch] = ZmctReading{0.0f, 0.0f, 0.0f};
       }
-      calibrated[ch] = applyPiecewiseCalibration(raw[ch].amps);
+
+      if (relayStateVersion != stampAtWindowStart) {
+        // Discard the window. The previous amps are what gets posted this sweep
+        // (they are left untouched below), the raw chain is marked stale so the
+        // calibration view cannot present the contaminated numbers as real, and
+        // calibrated[] is left zero so a stale channel cannot slip into the EMA
+        // either. Deliberately NOT latched and NOT retried: the very next
+        // window is clean, so one drop per transition is the whole cost.
+        staleDrop[ch] = true;
+        anyStaleDrop = true;
+      } else {
+        calibrated[ch] = applyPiecewiseCalibration(raw[ch].amps);
+      }
+    }
+
+    if (anyStaleDrop) {
+      Serial.print("[SWEEP] relay transition inside the window on CH");
+      for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
+        if (staleDrop[ch]) {
+          Serial.print(ch + 1);
+          if (ch + 1 < BRANCH_CT_COUNT) Serial.print(",");
+        }
+      }
+      Serial.println(" - window DISCARDED (a step is not an RMS): holding the");
+      Serial.println("[SWEEP]   previous amps, raw marked stale. Next sweep is clean.");
     }
 
     // The sweep must leave IDLE0 a scheduler slot inside every period, or the
@@ -727,8 +817,18 @@ void sensorTask(void *pvParameters) {
     // Safely update shared global states under mutex protection
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
-        branchAmps[ch] = updateFilteredAmps(calibrated[ch], branchAmps[ch]);
-        branchRaw[ch] = raw[ch];
+        if (staleDrop[ch]) {
+          // Publish NOTHING from this channel: branchAmps[ch] keeps its previous
+          // value (a stale-but-true number, which is the honest thing to post
+          // while the branch is changing state) and the raw chain is zeroed and
+          // flagged so the calibration print cannot read a step as signal.
+          branchRaw[ch] = ZmctReading{0.0f, 0.0f, 0.0f};
+          branchRawStale[ch] = true;
+        } else {
+          branchAmps[ch] = updateFilteredAmps(calibrated[ch], branchAmps[ch]);
+          branchRaw[ch] = raw[ch];
+          branchRawStale[ch] = false;
+        }
       }
       xSemaphoreGive(dataMutex);
     }
@@ -823,6 +923,7 @@ void printSerialTelemetry() {
   float inaV, mainsV, inaShunt, inaI, inaP;
   float amps[BRANCH_CT_COUNT];
   ZmctReading raw[BRANCH_CT_COUNT];
+  bool stale[BRANCH_CT_COUNT];
 
   if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     inaV     = inaBusVoltage_V;
@@ -834,6 +935,7 @@ void printSerialTelemetry() {
     for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ch++) {
       amps[ch] = branchAmps[ch];
       raw[ch]  = branchRaw[ch];
+      stale[ch] = branchRawStale[ch];
     }
     xSemaphoreGive(dataMutex);
   } else {
@@ -881,6 +983,14 @@ void printSerialTelemetry() {
     // the pin will read exactly as commanded whether or not a module is
     // attached to it, so only the CT current proves the wiring.
     Serial.print("="); Serial.print(digitalRead(RELAY_PINS[ch]) ? "HIGH" : "LOW");
+    // The amps above are HELD, not freshly measured, when the last window for
+    // this channel was discarded because a relay moved during it. Say so on the
+    // same line as the number it qualifies, so a held reading is never read as a
+    // fresh one - this is the one-frame-at-a-time artefact the step-drop causes
+    // and it is the price paid for never posting a phantom spike.
+    if (stale[ch]) {
+      Serial.print(" | raw STALE-DROPPED (relay moved mid-window, previous amps held)");
+    }
     Serial.println();
   }
   // ---- outletId 5: the USB socket, monitored on the INA226 ----

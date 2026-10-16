@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { memo, useMemo, type CSSProperties } from 'react'
 import type { Outlet } from '../types/dashboard'
 import {
   DASHBOARD_TIPS,
@@ -13,6 +13,13 @@ type DashboardOutletProps = {
   outlet: Outlet
   /** Recorded watt buckets for this branch, oldest first. */
   history: Array<number | null>
+  /**
+   * Position in the roster, 0-based. Carried only so the first-paint stagger in
+   * styles.css can be offset per row; it is applied as `--row-index`, never as a
+   * React key — the key is the outlet id, which is the only identity that
+   * survives a poll.
+   */
+  rowIndex: number
   live: boolean
   /** Live INA226 mains volts; null when the device has nothing fresh. */
   mainsVolts: number | null
@@ -153,7 +160,7 @@ export function branchBand(watts: number, allowance: number, live: boolean): Bra
  * look writable, and POSTing a disconnection for a branch with no relay would
  * return a success that changed nothing on the bench.
  */
-export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
+function DashboardOutletRow({ outlet, history, rowIndex, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
   const monitorOnly = isMonitoredOnlyChannel(outlet.id)
   const latched = live && isLatchedOutlet(outlet.status)
   const on = live && (monitorOnly || isEnergizedOutlet(outlet.status))
@@ -171,14 +178,6 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   const stateWord = state?.word ?? UNAVAILABLE
   const stateDetail = state ? state.detail : DASHBOARD_TIPS.offline
 
-  const peak = useMemo(() => {
-    let max = 0
-    for (const value of history) {
-      if (value !== null && Number.isFinite(value) && value > max) max = value
-    }
-    return max
-  }, [history])
-
   /*
    * The allocation denominator, and it is whatever the server says it is. The
    * reference caps each branch at 1100 W against a 4400 W ceiling, but those
@@ -192,6 +191,45 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   const effWatts = live ? outlet.watts : 0
   const usedPercent = allowance > 0 ? (effWatts / allowance) * 100 : 0
   const over = live && allowance > 0 && outlet.watts > allowance
+
+  /*
+   * THE PEAK IS THE MAXIMUM OF WHAT IS LIVE AND WHAT WAS RECORDED.
+   *
+   * This used to be the maximum of the history buckets alone, with the live
+   * reading left out of it. That is not an approximation, it is a row that
+   * contradicts itself: close a relay on a branch whose last fifteen minutes
+   * topped out at 127 W and the same card renders 792 W in the watts column,
+   * 792 / 1100 W in the allocation line, and "Peak 127 W" underneath them. Two
+   * of those three numbers are measuring the instant and one is measuring the
+   * window, and the label does not say which is which — so an operator watching
+   * a toggle cannot tell whether the console believes the branch went to 792 W
+   * or whether the 792 W is the stale one. A peak that sits below the reading it
+   * is supposed to bound is not a peak. It is the best of a subset wearing a
+   * summary's clothes.
+   *
+   * So the rule here is absolute rather than approximate: the displayed peak is
+   * `max(buckets, live)`, which makes peak < live unrepresentable on screen
+   * rather than merely unlikely. Offline both sources are empty and it reads 0,
+   * like every other measured figure on this page.
+   *
+   * The percentage beside it is derived from THIS figure, not from the live one.
+   * That is the second half of the same bug: a line reading "Peak 792 W · 72%
+   * used" pairs a peak with the instantaneous utilisation and reports the two as
+   * if they were one measurement. Peak-percent is peak / allowance, so the pair
+   * is always the same arithmetic — and it is allowed to exceed 100, because a
+   * peak above the allocation is the single most useful thing this line says.
+   * The meter above it keeps the live figure and stays clamped; the two answer
+   * different questions and neither borrows the other's number.
+   */
+  const bucketPeak = useMemo(() => {
+    let max = 0
+    for (const value of history) {
+      if (value !== null && Number.isFinite(value) && value > max) max = value
+    }
+    return max
+  }, [history])
+  const peakWatts = live ? Math.max(bucketPeak, effWatts) : 0
+  const peakPercent = allowance > 0 ? (peakWatts / allowance) * 100 : 0
 
   // The badge's band and the tooltip sentence that explains it are derived from
   // the same three numbers as the meter below, so the chip can never disagree
@@ -211,7 +249,14 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   // Sparkline is scaled against the branch's own allocation, so a 40 W branch
   // and a 1100 W branch each fill their own box proportionally and the operator
   // reads utilisation rather than absolute size.
-  const sparkScale = Math.max(allowance, peak, 1)
+  //
+  // The floor is `peakWatts`, not the bucket peak, and that is the same fix as
+  // the label's: the live reading is part of this branch's range whether or not
+  // a bucket has caught up to it yet. Scaling on the buckets alone drew a fresh
+  // spike off the top of the plot, which is the one thing a trend line must not
+  // do — it clips the highest point of the trace and leaves the operator reading
+  // a branch that never went above its old maximum.
+  const sparkScale = Math.max(allowance, peakWatts, 1)
 
   const hasSpark = history.some((v) => v !== null && Number.isFinite(v))
   // The sparkline keeps its own 0-based domain against the branch allocation.
@@ -254,6 +299,19 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   const wattsText = Math.round(effWatts).toLocaleString()
   const vaText = `${shownVolts.toFixed(1)} V · ${amps.toFixed(2)} A`
 
+  // The peak line carries its own arithmetic, because a figure that cannot be
+  // re-derived from the two numbers above it is how "Peak 127 W" next to a live
+  // 792 W survived review in the first place.
+  const peakTitle = !live
+    ? 'GET /api/Dashboard/state did not answer, so there is neither a live reading nor a window to take a peak from.'
+    : `Peak is the larger of this branch's live reading (${wattsText} W) and every watt bucket recorded in the last 15 minutes (${Math.round(
+        bucketPeak,
+      ).toLocaleString()} W), so the peak can never print below the live figure above it. ${
+        allowance > 0
+          ? `That peak is ${Math.round(peakPercent)}% of this branch's ${Math.round(allowance).toLocaleString()} W allocation.`
+          : 'No allocation is configured for this branch, so there is no percentage to quote against it.'
+      }`
+
   const vaTitle = monitorOnly
     ? DASHBOARD_TIPS.usb
     : voltsLive
@@ -263,6 +321,13 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
   return (
     <article
       className={`mp-card row ${on ? '' : 'off'}${latched ? ' latched' : ''}`}
+      /*
+        `--row-index` offsets the first-paint stagger in styles.css. It is a
+        plain custom property on a DOM node that React never re-creates, so it
+        is read once when the animation starts and cannot restart it. Changing
+        it on a poll would do nothing visible, which is the point.
+      */
+      style={{ '--row-index': rowIndex } as CSSProperties}
       aria-label={`${outlet.name}, ${
         monitorOnly ? 'monitored only, no relay' : state ? state.word.toLowerCase() : 'relay state not reported'
       }, ${BAND_WORD[band].toLowerCase()}, ${wattsText} watts`}
@@ -359,10 +424,10 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
         >
           <i style={{ width: `${Math.min(usedPercent, 100)}%`, background: over ? 'var(--bad)' : undefined }} />
         </div>
-        <div className="pk num">
+        <div className="pk num" title={peakTitle}>
           {allowance > 0
-            ? `Peak ${Math.round(live ? peak : 0).toLocaleString()} W · ${Math.round(usedPercent)}% used`
-            : `Peak ${Math.round(live ? peak : 0).toLocaleString()} W · no allocation set`}
+            ? `Peak ${Math.round(peakWatts).toLocaleString()} W · ${Math.round(peakPercent)}% used`
+            : `Peak ${Math.round(peakWatts).toLocaleString()} W · no allocation set`}
         </div>
       </div>
 
@@ -411,3 +476,70 @@ export function DashboardOutlet({ outlet, history, live, mainsVolts, busy, onTog
     </article>
   )
 }
+
+/*
+ * EQUALITY, NOT IDENTITY — and that distinction is the whole fix for the rows
+ * replaying their entrance on every data tick.
+ *
+ * A poll every 500 ms hands this component a brand-new `outlet` object and a
+ * brand-new `history` array even when nothing about the branch has changed, so
+ * any check written as `prev === next` fails on every tick. That failure is
+ * cheap while the row is inert. It stops being cheap the moment the row carries
+ * motion: a re-render that React could have skipped is a re-render that walks
+ * the row's animation from zero, which is how a page that only polls ended up
+ * looking like it was reloading. So the row is compared by VALUE and a poll that
+ * changes nothing produces no render at all.
+ *
+ * `onToggle` is deliberately NOT compared. Dashboard passes a stable wrapper
+ * that resolves the live callback through a ref, so ignoring the prop cannot
+ * leave the switch holding a stale roster — which is the failure a naive
+ * "ignore the function props" memo introduces, and the reason that wrapper
+ * exists rather than the raw handler being passed straight through.
+ *
+ * Every field of `Outlet` is compared rather than only the ones this file reads
+ * today. A row that went stale because someone added a field to the type and not
+ * to this list would be a far worse bug than the re-renders it prevents.
+ */
+function sameOutlet(a: Outlet, b: Outlet): boolean {
+  if (a === b) return true
+  return (
+    a.id === b.id &&
+    a.name === b.name &&
+    a.role === b.role &&
+    a.meter === b.meter &&
+    a.relay === b.relay &&
+    a.priority === b.priority &&
+    a.allowance === b.allowance &&
+    a.volts === b.volts &&
+    a.watts === b.watts &&
+    a.status === b.status &&
+    a.schedule === b.schedule &&
+    a.idleLimit === b.idleLimit
+  )
+}
+
+/**
+ * Bucket-by-bucket, because `history` is rebuilt from the poll response on every
+ * tick. Length is compared first: the server resizes the window's grid, and a
+ * row whose window genuinely changed must render even if the leading values
+ * happen to match.
+ */
+function sameHistory(a: Array<number | null>, b: Array<number | null>): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+export const DashboardOutlet = memo(DashboardOutletRow, (prev, next) => {
+  return (
+    prev.rowIndex === next.rowIndex &&
+    prev.live === next.live &&
+    prev.mainsVolts === next.mainsVolts &&
+    prev.busy === next.busy &&
+    sameOutlet(prev.outlet, next.outlet) &&
+    sameHistory(prev.history, next.history)
+  )
+})
