@@ -5,12 +5,12 @@ using Mor.PowerManagement.Domain.Enums;
 // Singleton row holding the system thresholds (P_limit and friends).
 public class PowerSystemConfig : BaseAuditableEntity
 {
-    public double MaxCapacityWatts { get; set; } = 2200;
+    public double MaxCapacityWatts { get; set; } = 1300;
 
-    public double WarningThresholdWatts { get; set; } = 1800;
+    public double WarningThresholdWatts { get; set; } = 1040;
 
     // P_limit: the operating limit driving POL-02..POL-07.
-    public double CriticalThresholdWatts { get; set; } = 2000;
+    public double CriticalThresholdWatts { get; set; } = 1300;
 
     // Branches at or below this draw count as standby load (POL-08 / idle shutdown).
     public double StandbyThresholdWatts { get; set; } = 80;

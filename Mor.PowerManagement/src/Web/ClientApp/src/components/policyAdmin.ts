@@ -18,7 +18,6 @@ export type SaveState = 'idle' | 'saving' | 'saved' | 'error'
  * mechanism, which it is not. The framework name carries the prototype caveat
  * into the same line, because that caveat is the whole point.
  */
-export const FRAMEWORK_TITLE = 'Priority-Based Load Shedding and Staged Restoration Framework'
 export const FRAMEWORK_SCOPE =
   'prototype — does not replace fuses/breakers'
 
@@ -80,89 +79,6 @@ export function tierHasCap(id: TierId): boolean {
 // ---------------------------------------------------------------------------
 // Build-prioritization situations
 // ---------------------------------------------------------------------------
-
-export type SituationId = 'normal' | 'warning' | 'overload' | 'recovery'
-
-export type Situation = {
-  id: SituationId
-  n: number
-  title: string
-  /** Band this situation sits in, for the dot. */
-  tone: 'normal' | 'warning' | 'critical'
-  bandLabel: string
-  /** The prescribed vector on the Dashboard that demonstrates it. */
-  sim: string
-  endpoint: string
-  condition: string
-  /** What the engine is expected to do, in its own terms. */
-  expected: string
-  /** The framework rule that owns the behaviour. */
-  frame: string
-}
-
-/**
- * The four situations the rig is built to demonstrate, in the order they occur.
- *
- * These are descriptions, not controls. Each names the vector on the Dashboard
- * that produces it and states what the engine is expected to answer, but the
- * buttons themselves live on the Dashboard where the real ingest and activation
- * routes are wired. Nothing here dispatches anything, so nothing here can
- * claim to have run.
- */
-export const SITUATIONS: Situation[] = [
-  {
-    id: 'normal',
-    n: 1,
-    title: 'Within limit',
-    tone: 'normal',
-    bandLabel: 'Normal',
-    sim: 'SIM-01',
-    endpoint: 'POST /api/Dashboard/scenarios/ingest',
-    condition: 'P_total < 480 W',
-    expected:
-      'Batch stored, nothing raised. No relay moves and every branch keeps its state.',
-    frame: 'FR-04',
-  },
-  {
-    id: 'warning',
-    n: 2,
-    title: 'Warning band — deny the next activation',
-    tone: 'warning',
-    bandLabel: 'Warning',
-    sim: 'SIM-03',
-    endpoint: 'POST /api/Dashboard/scenarios/ingest → activation',
-    condition: '480 W ≤ P_total < 600 W',
-    expected:
-      'Batch stored, warning raised. The next activation request is denied because the projected total would breach P_limit; the reason returns in the event log.',
-    frame: 'FR-05',
-  },
-  {
-    id: 'overload',
-    n: 3,
-    title: 'Overload sustained — shed lowest tier first',
-    tone: 'critical',
-    bandLabel: 'Critical',
-    sim: 'SIM-04',
-    endpoint: 'POST /api/Dashboard/scenarios/ingest',
-    condition: 'P_total ≥ 600 W',
-    expected:
-      'The server sheds on its own terms, newest activation first. Nonessential opens before Deferrable; Critical is preserved.',
-    frame: 'FR-06',
-  },
-  {
-    id: 'recovery',
-    n: 4,
-    title: 'Recovery — staged restore, highest tier first',
-    tone: 'normal',
-    bandLabel: 'Normal',
-    sim: 'SIM-05',
-    endpoint: 'POST /api/Dashboard/outlets/{id}/activation',
-    condition: 'P_total falls back below 480 W',
-    expected:
-      'Shed branches return one at a time, most important first, each held by the stabilization delay before the next is admitted. An activation is refused while the projected total would still breach P_limit.',
-    frame: 'FR-04',
-  },
-]
 
 /** Mirrors ThresholdSet from api.ts, which is the shape the GET returns. */
 export type ThresholdsForm = {

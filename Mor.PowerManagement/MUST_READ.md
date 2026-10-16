@@ -30,7 +30,7 @@ branch load.
 | **FR-xx** | Framework Rule. Replaces `POL-xx` everywhere (code, seeds, dashboard, thesis text). Crosswalk in §6. |
 | **ECA** | Event → Condition → Action rule body, evaluated every loop tick. |
 | **P_total** | Sum of the four measured mains outlet branches; INA226 DC readings are separate. |
-| **P_limit** | The critical system threshold that drives shedding. **1200 W during testing.** |
+| **P_limit** | The critical system threshold that drives shedding. **1300 W during testing.** |
 | **P_branch** | One outlet channel's measured watts. |
 
 Two engines, one framework. The DP (backend) evaluates on every telemetry batch and is
@@ -113,7 +113,7 @@ not exempt an outlet from its own allowance.
 - Firmware uses `OUTLET_COUNT 4`, `BRANCH_CT_COUNT 4`, and `RELAY_PINS[] = {1, 2, 4, 5}`.
 - INA226 uses its own I2C connection (SDA 8, SCL 9). Its readings are sent under the separate `ina` telemetry object, never as outlet ID 5.
 - Backend testing seed and dashboard roster contain exactly outlets 1–4. Stale rows above outlet 4 are removed while the first four outlets and their telemetry history are retained.
-- System capacity is 4400 W, with 3520 W warning and 4400 W critical thresholds.
+- System capacity is 1300 W, with 1040 W warning and 1300 W critical thresholds.
 ## 3. The Framework rules (FR-01 .. FR-12)
 
 Ordered by precedence. **Precedence resolves conflicts: the lowest-numbered rule that
@@ -144,7 +144,7 @@ fires wins for a given branch in a given tick.** Every rule body is ECA.
 
 | ID | Condition | Action | Target |
 |---|---|---|---|
-| **FR-07** | `P_total > P_limit`, hysteresis-clear at 900 W, after 2 consecutive ticks | `ACT_SHED` the **lowest-priority energized** branch, one branch per cycle, re-assess every cycle | Lowest priority (Low → up) |
+| **FR-07** | `P_total > P_limit`, hysteresis-clear at 1170 W, after 2 consecutive ticks | `ACT_SHED` the **lowest-priority energized** branch, one branch per cycle, re-assess every cycle | Lowest priority (Low → up) |
 | **FR-08** | Overload persists after **all** Low and Medium are shed | `ACT_SHED` next Medium priority; Critical/High still preserved | Medium |
 | **FR-09** | Any shed cycle while a High/Critical branch is energized | `ACT_PRESERVE(i)` — High/Critical are **never** shed candidates in FR-07/08 | High + Critical |
 
@@ -240,7 +240,7 @@ in `TESTING_LOG.md` per run.
 | FR-02 | post readings with V=180 on CH3 | CH3 shed + latched, deny further activation | PowerEvent + audit row |
 | FR-03 | post I > 1.25× rating on CH2 for 2 ticks | CH2 shed + latched | audit row |
 | FR-04 | P_total 300 W, request CH4 | allowed, relay closes after 500 ms | config sync shows Active |
-| FR-05 | P_total ≥ 1200 W, request CH4 | denied, relay open, Warning event | audit row |
+| FR-05 | P_total ≥ 1300 W, request CH4 | denied, relay open, Warning event | audit row |
 | FR-06 | activate CH4 while over cap | CH4 shed again (newest first) | audit row |
 | FR-07 | push P_total above limit | lowest-priority eligible outlet shed; Critical/High untouched | serial + dashboard |
 | FR-08 | keep overload after Low/Medium shed | Medium shed next; Critical preserved | audit rows |
@@ -250,7 +250,7 @@ in `TESTING_LOG.md` per run.
 | FR-12 | any of the above | one audit row per firing with trigger snapshot | `GET /api/Dashboard/rules/audit` |
 
 **L3 — Loop / integration (live rig, COM10)**
-- Serial @115200: `IP:` → `config synced: P_limit=4400 W, 4 channels` → `telemetry: HTTP 200` every 5 s.
+- Serial @115200: `IP:` → `config synced: P_limit=1300 W, 4 channels` → `telemetry: HTTP 200` every 5 s.
 - Dashboard `ESP32 online` pill (telemetry within 30 s).
 - **End-to-end relay drop:** trigger an overload (heavy load or scenario) and physically
   confirm the relay(s) open within 20 s and the outlet card flips to Disconnected with the
@@ -348,7 +348,7 @@ arduino-cli compile --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
 arduino-cli board list
 # 3. flash
 arduino-cli upload -p COM10 --fqbn esp32:esp32:esp32s3 firmware/mor-power-device
-# 4. watch serial @115200: IP → config synced (P_limit=4400, 4 channels) → telemetry 200
+# 4. watch serial @115200: IP → config synced (P_limit=1300, 4 channels) → telemetry 200
 arduino-cli monitor -p COM10 -b 115200
 # 5. run the backend for the LAN
 dotnet run --project src/Web --urls http://0.0.0.0:5211
@@ -391,7 +391,7 @@ What the rig actually does right now, as opposed to what the design intends.
 **Working, measured on the bench:**
 - INA226 online at 0x40, reading 227.6 V after the 9.46 divider
 - ADS1015 online at 0x48, four CT channels reading 0.059 / 0.029 / 0.024 / 0.025 A
-- Telemetry HTTP 200 at 1 Hz; dashboard total 30.81 W against a 1200 W limit
+- Telemetry HTTP 200 at 1 Hz; dashboard total 30.81 W against a 1300 W limit
 - Relays and rules are disabled (RELAY_OUTPUT_ENABLED 0, RULES_ENABLED 0), so nothing can shed or trip
 
 **Three honest gaps to resolve before the write-up:**

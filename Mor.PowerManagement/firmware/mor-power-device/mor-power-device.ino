@@ -386,8 +386,8 @@ const unsigned long SERIAL_PRINT_INTERVAL_MS = 250; // 4 Hz refresh for responsi
 // measurement code above stays exactly as validated.
 unsigned long lastTelemetryAt = 0;
 unsigned long lastConfigAt = 0;
-float cfgLimit = 1200.0f;
-float cfgWarning = 960.0f;
+float cfgLimit = 1300.0f;
+float cfgWarning = 1040.0f;
 unsigned long missedPosts = 0;
 
 // Function Prototypes

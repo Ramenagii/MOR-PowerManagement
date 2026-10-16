@@ -139,27 +139,11 @@ public class ApplicationDbContextInitialiser
         // -------------------------------------------------------------------
         const bool TestingRig = true;
 
-        // Seeded outlet load is 260 + 180 + 120 + 0 = 560 W, so a 4400 W P_limit leaves ~3840 W of headroom above
-        // the seeded state and the rig boots healthy, while still reaching the
-        // 3520 W warning threshold on one realistic added load.
-        // Thresholds are 80% / 100% of capacity, matching the full-rig ratios.
-        //
-        // The live rig uses a 4400 W whole-system ceiling, with warning at 80%
-        // (3520 W). Each outlet separately starts with an editable 300 W
-        // allowance; changing a branch allowance does not change P_limit.
-        //
-        // WHAT THIS CHANGES ON THE BENCH, stated plainly: the seeded 567 W used
-        // to sit at 47% of a 1200 W P_limit, i.e. the rig booted ALREADY inside
-        // the warning band, and one ordinary added load tripped it. At 4400 W
-        // the same seed sits at 13% and the rig boots comfortably below warning.
-        //
-        // Note this is now BELOW the full-rig 4000 W capacity below, which is
-        // correct and intentional: this four-outlet bench panel is rated 4400 W by
-        // the operator's own figures, and the full-rig numbers describe the
-        // 13-channel final panel, which is a different machine.
-        const double TestingMaxCapacityWatts = 4400.0;
-        const double TestingWarningThresholdWatts = 3520.0;
-        const double TestingCriticalThresholdWatts = 4400.0;
+        // The four-outlet rig starts with a 1300 W system limit and an 80%
+        // warning threshold. Framework Admin can revise these values.
+        const double TestingMaxCapacityWatts = 1300.0;
+        const double TestingWarningThresholdWatts = 1040.0;
+        const double TestingCriticalThresholdWatts = 1300.0;
 
         const double FullRigMaxCapacityWatts = 4000.0;
         const double FullRigWarningThresholdWatts = 3240.0;
@@ -173,9 +157,9 @@ public class ApplicationDbContextInitialiser
         // priority-based load shedding framework runs on - the framework reads
         // the same column rather than a second threshold, so there is exactly
         // one P_limit in the system and an operator cannot set two that
-        // disagree. On this four-outlet bench P_limit is 4400 W (the const
-        // above), and the recovery limit the framework restores into is
-        // 3960 W (4400 W less the 10% hysteresis band, LoadSheddingSettings).
+        // disagree. On this four-outlet bench P_limit starts at 1300 W (the
+        // const above), and the recovery limit starts at 1170 W (1300 W less
+        // the 10% hysteresis band, LoadSheddingSettings).
         // Per-outlet allowances come from each outlet's independently editable
         // AllowanceWatts field; priority does not exempt a branch from its cap.
 
@@ -198,15 +182,7 @@ public class ApplicationDbContextInitialiser
                 MeteringModeUpdatedAt = DateTimeOffset.UtcNow,
             });
         }
-        else
-        {
-            rigConfig.MaxCapacityWatts = maxCapacity;
-            rigConfig.WarningThresholdWatts = warning;
-            rigConfig.CriticalThresholdWatts = critical;
-            rigConfig.StandbyThresholdWatts = 80;
-            rigConfig.StandbyIdleMinutes = 30;
-            rigConfig.StabilizationDelayMs = 500;
-        }
+        // Existing Framework Admin threshold settings are preserved on startup.
 
         // One row per channel: name, role, relay label, priority, allowance,
         // rail volts, schedule, idle limit, seeded status, seeded watts.
@@ -409,15 +385,15 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules FR-01..FR-12 loaded for the four-outlet testing rig: four 220V outlets, each metered by a branch CT, with editable 300 W per-outlet allowances. INA226 is separate DC rail telemetry. P_limit is 4400 W.", Severity = EventSeverity.Info },
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 3520 W warning threshold.", Severity = EventSeverity.Success },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules loaded for the four-outlet testing rig: four 220V outlets, each metered by a branch CT, with editable 300 W per-outlet allowances. INA226 is separate DC rail telemetry. P_limit is 1300 W.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 1040 W warning threshold.", Severity = EventSeverity.Success },
                 new PowerEvent
                 {
                     Timestamp = DateTimeOffset.UtcNow,
                     Title = "Priority-based load shedding armed",
                     Detail = "Load tiers active on this rig: CH1 Critical (tier 1), CH2 Important (tier 2), CH3 and CH4 Deferrable (tier 3). Each outlet has its own editable 300 W allowance. " +
-                        "P_limit 4400 W; overload must persist 3 consecutive batches before anything is shed. " +
-                        "Restoration resumes only below the 3960 W recovery limit (4400 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
+                        "P_limit 1300 W; overload must persist 3 consecutive batches before anything is shed. " +
+                        "Restoration resumes only below the 1170 W recovery limit (1300 W less the 10% hysteresis band) held for 30 s, one branch at a time with a 5 s reconnect stagger. " +
                         "Tier 1 is never shed automatically; an overload that survives every eligible shed raises an alarm instead of being assumed safe. " +
                         "This is prototype software control, not a substitute for fuses and breakers.",
                     Severity = EventSeverity.Info,
