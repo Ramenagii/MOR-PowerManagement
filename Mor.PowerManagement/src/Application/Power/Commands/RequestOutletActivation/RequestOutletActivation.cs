@@ -68,6 +68,17 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
 
         var now = DateTimeOffset.UtcNow;
 
+        // F3 switch debounce: do not replace an in-flight command. The device
+        // must acknowledge the current relay state and send its settled sample
+        // before another manual switch request can be issued.
+        if (outlet.PendingCommandId.HasValue)
+        {
+            return new OutletActivationResult(
+                outlet.Id, false, "COMMAND_PENDING",
+                "A relay command is still being confirmed. Wait for the relay state to settle before switching again.",
+                outlet.Status, LoadTierMapper.ToTier(outlet.Priority), capExempt.Contains(outlet.Id));
+        }
+
         if (outlet.FaultHold || outlet.RecoveryLockout || outlet.CommandNeedsReview)
         {
             var holdReason = outlet.FaultHold ? "fault hold" : outlet.RecoveryLockout ? "recovery lockout" : "unresolved relay response";

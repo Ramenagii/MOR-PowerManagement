@@ -133,13 +133,13 @@ public class ApplicationDbContextInitialiser
         }
 
         // -------------------------------------------------------------------
-        // TESTING RIG — four 220V outlets, each measured by its own CT.
-        // INA226 readings are separate DC telemetry and never become an outlet.
+        // TESTING RIG — four 220V CT outlets plus one monitored USB/DC outlet
+        // whose live reading comes from the INA226 (no relay or CT).
         // Set false to restore the full 13-channel rig for the final panel.
         // -------------------------------------------------------------------
-        const bool TestingRig = true;
+        var isTestingRig = true;
 
-        // The four-outlet rig starts with a 1300 W system limit and an 80%
+        // The four-branch + USB rig starts with a 1300 W system limit and an 80%
         // warning threshold. Framework Admin can revise these values.
         const double TestingMaxCapacityWatts = 1300.0;
         const double TestingWarningThresholdWatts = 1040.0;
@@ -149,7 +149,7 @@ public class ApplicationDbContextInitialiser
         const double FullRigWarningThresholdWatts = 3240.0;
         const double FullRigCriticalThresholdWatts = 3600.0;
 
-        var (maxCapacity, warning, critical) = TestingRig
+        var (maxCapacity, warning, critical) = isTestingRig
             ? (TestingMaxCapacityWatts, TestingWarningThresholdWatts, TestingCriticalThresholdWatts)
             : (FullRigMaxCapacityWatts, FullRigWarningThresholdWatts, FullRigCriticalThresholdWatts);
 
@@ -190,11 +190,12 @@ public class ApplicationDbContextInitialiser
         // Domain/Enums/LoadTier.cs): Critical(4)->Tier 1 Critical, High(3)->Tier 2
         // Important, Medium(2)->Tier 3 Deferrable, Low(1)->Tier 4 Nonessential.
         //
-        // On this four-outlet rig the ladder the thesis demonstrates end to end is:
+        // On this four-branch rig the relay ladder is:
         //   CH1 Critical -> Tier 1 Critical    keep powered, still has a 300 W allowance
         //   CH2 High     -> Tier 2 Important   shed last of the expendable
         //   CH3 Medium   -> Tier 3 Deferrable  shed with CH4
         //   CH4 Medium   -> Tier 3 Deferrable  shed with CH3 (seeded down)
+        //   CH5 USB      -> monitored by INA226, never switched by a relay
         var testingRigSpecs = new (string Name, string Role, string Relay, OutletPriority Priority, double Allowance, int Volts, string Schedule, int? Idle, OutletStatus Status, double Watts)[]
         {
             // 300 W is the editable default per-outlet allowance for this 4-channel rig.
@@ -209,10 +210,11 @@ public class ApplicationDbContextInitialiser
             // Every seeded CH1-3 figure is within its 300 W allowance
             // (87% / 60% / 40%), which is what a bench panel actually sitting idle
             // looks like.
-            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 220, "Class hours + override", null, OutletStatus.Active, 260),
-            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 180),
-            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 220, "08:00-18:00", 20, OutletStatus.Active, 120),
-            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 220, "Class hours", 15, OutletStatus.Disconnected, 0),
+            ("Outlet 1", "Instructor workstation", "Relay CH1", OutletPriority.Critical, 300, 228, "Class hours + override", null, OutletStatus.Active, 260),
+            ("Outlet 2", "Demo equipment", "Relay CH2", OutletPriority.High, 300, 228, "08:00-18:00", 20, OutletStatus.Active, 180),
+            ("Outlet 3", "Lab instrument", "Relay CH3", OutletPriority.Medium, 300, 228, "08:00-18:00", 20, OutletStatus.Active, 120),
+            ("Outlet 4", "Student workstation", "Relay CH4", OutletPriority.Medium, 300, 228, "Class hours", 15, OutletStatus.Disconnected, 0),
+            ("USB 1", "USB rail monitored by INA226", "INA226 monitor", OutletPriority.Low, 10, 5, "Monitored only", null, OutletStatus.Standby, 0),
         };
 
         // Full 13-channel rig (8x220V + 1x110V + 4xUSB, single mains PZEM).
@@ -233,77 +235,35 @@ public class ApplicationDbContextInitialiser
             ("USB 4", "USB charging 5V", "Relay CH13", OutletPriority.Low, 10, 5, "Class hours", null, OutletStatus.Disconnected, 0),
         };
 
-        var outletSpecs = TestingRig ? testingRigSpecs : fullRigSpecs;
+        var outletSpecs = isTestingRig ? testingRigSpecs : fullRigSpecs;
 
-        // Idempotent rig sync: add missing channels and refresh hardware identity
-        // on existing ones, while preserving operator-edited outlet allowances.
-        foreach (var spec in outletSpecs)
+        // The full production rig keeps its name-keyed seeding path. The testing
+        // rig is synchronized by fixed IDs below so stale full-rig rows cannot
+        // survive and a pending USB insert cannot be counted twice.
+        if (!isTestingRig)
         {
-            var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Name == spec.Name);
-            if (outlet is null)
+            foreach (var spec in outletSpecs)
             {
-                _context.Outlets.Add(new Outlet
+                var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Name == spec.Name);
+                if (outlet is null)
                 {
-                    Name = spec.Name,
-                    Role = spec.Role,
-                    MeterChannel = "PZEM-01 · mains bus",
-                    RelayChannel = spec.Relay,
-                    Priority = spec.Priority,
-                    AllowanceWatts = spec.Allowance,
-                    RatedVoltageVolts = spec.Volts,
-                    Schedule = spec.Schedule,
-                    IdleLimitMinutes = spec.Idle,
-                    Status = spec.Status,
-                    CurrentWatts = spec.Watts,
-                });
-            }
-            else
-            {
-                outlet.Role = spec.Role;
-                outlet.MeterChannel = "PZEM-01 · mains bus";
-                outlet.RelayChannel = spec.Relay;
-                outlet.Priority = spec.Priority;
-                outlet.RatedVoltageVolts = spec.Volts;
-                outlet.Schedule = spec.Schedule;
-                outlet.IdleLimitMinutes = spec.Idle;
-            }
-        }
-
-        if (TestingRig)
-        {
-            // This board has four physical outlets, addressed as outletId 1..4.
-            // Keep those rows and their telemetry intact, remove stale channels
-            // above four, then align the four policy rows by id. INA226 data is
-            // carried separately and is not an outlet.
-            var existing = await _context.Outlets.OrderBy(o => o.Id).ToListAsync();
-            var matches = existing.Count == testingRigSpecs.Length
-                && testingRigSpecs.Select((spec, i) =>
-                        existing[i].RelayChannel == spec.Relay && existing[i].Id == i + 1 && existing[i].Name == spec.Name)
-                    .All(matched => matched);
-
-            if (!matches)
-            {
-                var stale = existing.Where(outlet => outlet.Id > testingRigSpecs.Length || outlet.Id < 1).ToList();
-                _context.Outlets.RemoveRange(stale);
-                await _context.SaveChangesAsync();
-
-                for (var i = 0; i < testingRigSpecs.Length; i++)
-                {
-                    var spec = testingRigSpecs[i];
-                    var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Id == i + 1);
-                    if (outlet is null)
+                    _context.Outlets.Add(new Outlet
                     {
-                        outlet = new Outlet
-                        {
-                            Id = i + 1,
-                            Status = spec.Status,
-                            CurrentWatts = spec.Watts,
-                            AllowanceWatts = spec.Allowance,
-                        };
-                        _context.Outlets.Add(outlet);
-                    }
-
-                    outlet.Name = spec.Name;
+                        Name = spec.Name,
+                        Role = spec.Role,
+                        MeterChannel = "PZEM-01 · mains bus",
+                        RelayChannel = spec.Relay,
+                        Priority = spec.Priority,
+                        AllowanceWatts = spec.Allowance,
+                        RatedVoltageVolts = spec.Volts,
+                        Schedule = spec.Schedule,
+                        IdleLimitMinutes = spec.Idle,
+                        Status = spec.Status,
+                        CurrentWatts = spec.Watts,
+                    });
+                }
+                else
+                {
                     outlet.Role = spec.Role;
                     outlet.MeterChannel = "PZEM-01 · mains bus";
                     outlet.RelayChannel = spec.Relay;
@@ -312,16 +272,79 @@ public class ApplicationDbContextInitialiser
                     outlet.Schedule = spec.Schedule;
                     outlet.IdleLimitMinutes = spec.Idle;
                 }
-
-                await _context.SaveChangesAsync();
-
-                // Rewind identity after removing old rig channels.
-                await _context.Database.ExecuteSqlRawAsync(
-                    "SELECT setval(pg_get_serial_sequence('\"Outlets\"', 'Id'), (SELECT COALESCE(MAX(\"Id\"), 0) FROM \"Outlets\"), true);");
-
-                _logger.LogInformation(
-                    "Four-outlet rig active: removed {Count} stale outlet rows above channel 4.", stale.Count);
             }
+        }
+
+        if (isTestingRig)
+        {
+            // This board has four physical relay/CT branches plus monitored USB
+            // at outletId 5. Keep this exact five-row roster and remove stale
+            // full-rig channels above it. The USB row has no relay or CT.
+            var existing = await _context.Outlets.OrderBy(o => o.Id).ToListAsync();
+            var stale = existing.Where(outlet => outlet.Id > testingRigSpecs.Length || outlet.Id < 1).ToList();
+            if (stale.Count > 0)
+            {
+                _context.Outlets.RemoveRange(stale);
+                await _context.SaveChangesAsync();
+            }
+
+            for (var i = 0; i < testingRigSpecs.Length; i++)
+            {
+                var spec = testingRigSpecs[i];
+                var outlet = await _context.Outlets.FirstOrDefaultAsync(o => o.Id == i + 1);
+                var isNew = outlet is null;
+                outlet ??= new Outlet
+                {
+                    Id = i + 1,
+                    AllowanceWatts = spec.Allowance,
+                    Status = spec.Status,
+                    CurrentWatts = spec.Watts,
+                    IsProtected = spec.Relay == "INA226 monitor",
+                };
+
+                var identityChanged = !isNew &&
+                    (outlet.Name != spec.Name || outlet.RelayChannel != spec.Relay);
+                if (identityChanged)
+                {
+                    // Outlet 5 used to be a mains branch in the larger rig. Drop
+                    // its old branch history before reusing that ID for USB, so
+                    // the chart cannot label AC data as INA226 data.
+                    if (spec.Relay == "INA226 monitor")
+                    {
+                        var oldReadings = await _context.TelemetryReadings
+                            .Where(reading => reading.OutletId == outlet.Id)
+                            .ToListAsync();
+                        _context.TelemetryReadings.RemoveRange(oldReadings);
+                    }
+                    outlet.AllowanceWatts = spec.Allowance;
+                    outlet.Status = spec.Status;
+                    outlet.CurrentWatts = spec.Watts;
+                    outlet.LastSeen = null;
+                }
+
+                if (isNew) _context.Outlets.Add(outlet);
+                outlet.Name = spec.Name;
+                outlet.Role = spec.Role;
+                outlet.MeterChannel = spec.Relay == "INA226 monitor"
+                    ? "INA226 — USB rail"
+                    : "ADS1220 — branch CT";
+                outlet.RelayChannel = spec.Relay;
+                outlet.Priority = spec.Priority;
+                outlet.RatedVoltageVolts = spec.Volts;
+                outlet.Schedule = spec.Schedule;
+                outlet.IdleLimitMinutes = spec.Idle;
+                if (spec.Relay == "INA226 monitor") outlet.IsProtected = true;
+            }
+
+            await _context.SaveChangesAsync();
+
+            // Rewind identity after removing old rig channels and adding any
+            // missing rows with their fixed bench IDs.
+            await _context.Database.ExecuteSqlRawAsync(
+                "SELECT setval(pg_get_serial_sequence('\"Outlets\"', 'Id'), (SELECT COALESCE(MAX(\"Id\"), 0) FROM \"Outlets\"), true);");
+
+            _logger.LogInformation(
+                "Four-outlet + USB rig active: removed {Count} stale outlet rows above channel 5.", stale.Count);
         }
 
         // Framework rules FR-01..FR-12 (see MUST_READ.md section 3).
@@ -385,7 +408,7 @@ public class ApplicationDbContextInitialiser
         if (!_context.PowerEvents.Any())
         {
             _context.PowerEvents.AddRange(
-                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules loaded for the four-outlet testing rig: four 220V outlets, each metered by a branch CT, with editable 300 W per-outlet allowances. INA226 is separate DC rail telemetry. P_limit is 1300 W.", Severity = EventSeverity.Info },
+                new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Dashboard synchronized", Detail = "Framework rules loaded for the four-outlet + USB testing rig: four 220V CT outlets with editable 300 W allowances and one monitored USB/DC rail measured by the INA226. P_limit is 1300 W.", Severity = EventSeverity.Info },
                 new PowerEvent { Timestamp = DateTimeOffset.UtcNow, Title = "Normal operating state", Detail = "Total load is below the 1040 W warning threshold.", Severity = EventSeverity.Success },
                 new PowerEvent
                 {

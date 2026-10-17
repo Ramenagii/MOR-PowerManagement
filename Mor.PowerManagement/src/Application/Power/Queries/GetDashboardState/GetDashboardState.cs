@@ -38,7 +38,8 @@ public record OutletStateDto(
     bool RecoveryLockout,
     int AutomaticRecoveryAttempts,
     DateTimeOffset? NextRecoveryAtUtc,
-    bool CommandNeedsReview);
+    bool CommandNeedsReview,
+    bool CommandPending);
 
 public record ThresholdsDto(
     double MaxCapacityWatts,
@@ -199,7 +200,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 capExempt.Contains(o.Id),
                 shedByFramework.Contains(o.Id), o.IsProtected, o.ManualHold, o.FaultHold,
                 o.RecoveryLockout, o.AutomaticRecoveryAttempts, o.NextRecoveryAtUtc,
-                o.CommandNeedsReview)).ToList(),
+                o.CommandNeedsReview, o.PendingCommandId.HasValue)).ToList(),
             total,
             Math.Max(config.MaxCapacityWatts - total, 0),
             config.MaxCapacityWatts <= 0 ? 0 : Math.Min(total / config.MaxCapacityWatts * 100, 100),

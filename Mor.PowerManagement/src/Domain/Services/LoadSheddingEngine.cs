@@ -269,9 +269,9 @@ public static class LoadSheddingEngine
                 LoadSheddingSettings.OverLimitConfirmationBatches);
         }
 
-        // An outlet that exceeds its own configured allowance is disconnected
-        // regardless of priority. Require two fresh batches to reject a single
-        // noisy sample, then track the trip in the same timed restore ledger.
+        // An outlet at or above its own configured allowance is disconnected
+        // on the first fresh batch, regardless of priority, then tracked in the
+        // same timed restore ledger.
         var outletCounters = new Dictionary<int, int>();
         foreach (var outlet in outlets)
         {
@@ -280,7 +280,7 @@ public static class LoadSheddingEngine
             var overAllowance = !state.ManualOverride
                 && LoadResponseEvaluator.IsEnergized(outlet.Status)
                 && fresh
-                && outlet.Watts > outlet.AllowanceWatts;
+                && outlet.Watts >= outlet.AllowanceWatts;
             outletCounters[outlet.Id] = overAllowance
                 ? state.ConsecutiveOutletOverLimitBatches.GetValueOrDefault(outlet.Id) + 1
                 : 0;
@@ -322,8 +322,7 @@ public static class LoadSheddingEngine
                     LoadSheddingAction.Shed,
                     overAllowance.Id,
                     tier,
-                    $"{Display(overAllowance)} drew {overAllowance.Watts:F0} W, above its {overAllowance.AllowanceWatts:F0} W outlet limit for " +
-                    $"{LoadSheddingSettings.OutletAllowanceConfirmationBatches} consecutive readings. Opening its relay.",
+                    $"{Display(overAllowance)} drew {overAllowance.Watts:F0} W, at or above its {overAllowance.AllowanceWatts:F0} W outlet limit. Opening its relay.",
                     shedState,
                     recoveryLimit,
                     outletCounters[overAllowance.Id],

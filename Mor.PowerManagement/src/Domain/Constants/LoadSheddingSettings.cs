@@ -33,9 +33,9 @@ public abstract class LoadSheddingSettings
     // is ~3 s. Re-measure this at any site with a different scan rate.
     public const int OverLimitConfirmationBatches = 3;
 
-    // Per-outlet protection reacts after two consecutive fresh readings above
+    // Per-outlet protection reacts on the first fresh reading at or above
     // that outlet's admin-configured allowance, independent of its priority.
-    public const int OutletAllowanceConfirmationBatches = 2;
+    public const int OutletAllowanceConfirmationBatches = 1;
 
     // ---- Recovery hysteresis --------------------------------------------
     // Fraction of P_limit subtracted to get the restoration limit.

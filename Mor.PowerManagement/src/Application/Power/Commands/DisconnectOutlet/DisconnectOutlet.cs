@@ -26,6 +26,22 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
 
         Guard.Against.NotFound(request.OutletId, outlet);
 
+        // Debounce repeat clicks while the device is still applying the
+        // current command. Replacing its command ID here makes the ESP32's
+        // acknowledgement refer to an obsolete ID and can pause all automatic
+        // switching until an Admin clears the resulting review hold.
+        if (outlet.PendingCommandId.HasValue || outlet.CommandNeedsReview)
+        {
+            return outlet.Id;
+        }
+
+        // OFF is idempotent. Do not mint a new command for an outlet that is
+        // already open; repeated switch presses must not restart the handshake.
+        if (outlet.Status is OutletStatus.Disconnected or OutletStatus.Restricted)
+        {
+            return outlet.Id;
+        }
+
         outlet.Status = OutletStatus.Disconnected;
         // Preserve the last measurement until a new sample arrives; relay OFF
         // does not make the meter read zero synchronously.

@@ -241,6 +241,30 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 CurrentA = ina.CurrentA,
                 PowerW = ina.PowerW,
             });
+
+            // On this four-branch bench, outlet 5 is the monitored USB/DC rail.
+            // It has no relay or CT: mirror the INA226 sample into that outlet's
+            // telemetry/history row so the dashboard shows five rows with live
+            // USB watts while keeping the sensor's raw values in InaReadings too.
+            var usbOutlet = outlets.FirstOrDefault(o => o.RelayChannel == "INA226 monitor");
+            if (usbOutlet is not null)
+            {
+                var usbPower = ina.PowerW ?? (ina.BusV.HasValue && ina.CurrentA.HasValue
+                    ? ina.BusV.Value * ina.CurrentA.Value
+                    : 0.0);
+                usbOutlet.CurrentWatts = usbPower;
+                usbOutlet.LastSeen = now;
+                _context.TelemetryReadings.Add(new TelemetryReading
+                {
+                    OutletId = usbOutlet.Id,
+                    Timestamp = now,
+                    Voltage = ina.BusV ?? usbOutlet.RatedVoltageVolts,
+                    CurrentAmps = ina.CurrentA ?? 0.0,
+                    PowerWatts = usbPower,
+                    EnergyKwh = 0.0,
+                });
+                readingsStored++;
+            }
         }
 
         foreach (var report in request.RelayStates)
@@ -254,7 +278,12 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             if (outlet.PendingCommandId is { } pendingId && report.CommandId == pendingId
                 && outlet.PendingRelayClosed == report.RelayClosed)
             {
-                outlet.PendingCommandAcknowledgedAtUtc = now;
+                // The ESP32 repeats the same command ID in every telemetry
+                // batch until the backend clears it. Preserve the first ACK
+                // time so a later fresh post-settle batch can clear the
+                // pending command; refreshing this timestamp on every report
+                // made the F3 wait condition impossible to satisfy.
+                outlet.PendingCommandAcknowledgedAtUtc ??= now;
                 if (outlet.PendingCommandOrigin is "automatic-shed" or "recovery-retry-off")
                 {
                     outlet.NextRecoveryAtUtc = now.AddSeconds(LoadSheddingSettings.RecoveryPeriodSeconds);
