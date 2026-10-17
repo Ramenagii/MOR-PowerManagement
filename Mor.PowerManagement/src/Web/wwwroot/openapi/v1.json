@@ -2523,7 +2523,8 @@
           "recoveryLockout",
           "automaticRecoveryAttempts",
           "nextRecoveryAtUtc",
-          "commandNeedsReview"
+          "commandNeedsReview",
+          "commandPending"
         ],
         "type": "object",
         "properties": {
@@ -2633,6 +2634,9 @@
             "format": "date-time"
           },
           "commandNeedsReview": {
+            "type": "boolean"
+          },
+          "commandPending": {
             "type": "boolean"
           }
         }

@@ -112,7 +112,7 @@ export class DashboardClient {
             let result400: any = null;
             let resultData400 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
                 result400 = resultData400 !== undefined ? resultData400 : null as any;
-
+    
             return throwException("Bad Request", status, _responseText, _headers, result400);
             });
         } else if (status === 401) {
@@ -272,7 +272,7 @@ export class DashboardClient {
             let result200: any = null;
             let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
                 result200 = resultData200 !== undefined ? resultData200 : null as any;
-
+    
             return result200;
             });
         } else if (status === 400) {
@@ -325,7 +325,7 @@ export class DashboardClient {
             let result200: any = null;
             let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
                 result200 = resultData200 !== undefined ? resultData200 : null as any;
-
+    
             return result200;
             });
         } else if (status === 400) {
@@ -3553,6 +3553,7 @@ export class OutletStateDto implements IOutletStateDto {
     automaticRecoveryAttempts!: number;
     nextRecoveryAtUtc!: Date | undefined;
     commandNeedsReview!: boolean;
+    commandPending!: boolean;
 
     [key: string]: any;
 
@@ -3594,6 +3595,7 @@ export class OutletStateDto implements IOutletStateDto {
             this.automaticRecoveryAttempts = _data["automaticRecoveryAttempts"];
             this.nextRecoveryAtUtc = _data["nextRecoveryAtUtc"] ? new Date(_data["nextRecoveryAtUtc"].toString()) : undefined as any;
             this.commandNeedsReview = _data["commandNeedsReview"];
+            this.commandPending = _data["commandPending"];
         }
     }
 
@@ -3633,6 +3635,7 @@ export class OutletStateDto implements IOutletStateDto {
         data["automaticRecoveryAttempts"] = this.automaticRecoveryAttempts;
         data["nextRecoveryAtUtc"] = this.nextRecoveryAtUtc ? this.nextRecoveryAtUtc.toISOString() : undefined as any;
         data["commandNeedsReview"] = this.commandNeedsReview;
+        data["commandPending"] = this.commandPending;
         return data;
     }
 }
@@ -3661,6 +3664,7 @@ export interface IOutletStateDto {
     automaticRecoveryAttempts: number;
     nextRecoveryAtUtc: Date | undefined;
     commandNeedsReview: boolean;
+    commandPending: boolean;
 
     [key: string]: any;
 }

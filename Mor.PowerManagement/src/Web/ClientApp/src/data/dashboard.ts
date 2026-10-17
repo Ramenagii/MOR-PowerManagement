@@ -1,7 +1,7 @@
 import type { EventLog, Outlet, Priority } from '../types/dashboard'
 
-// Testing rig: four 238 V mains outlets. INA226 is separate DC telemetry, not
-// an outlet or a fifth channel.
+// Testing rig: four 238 V mains outlets plus one monitored USB/DC outlet fed
+// by the INA226. The USB row is excluded from relay controls.
 //
 // The reference device is 4400 W total across four branches capped at 1100 W
 // each (4400 / 1100 / 1100 / 1100), with the mains at 238 V and a separate
@@ -14,7 +14,8 @@ import type { EventLog, Outlet, Priority } from '../types/dashboard'
 //
 // The seeded rig values themselves live in ApplicationDbContextInitialiser.cs —
 // change them together or the live dashboard will disagree with this roster.
-export const RIG_CHANNEL_COUNT = 4
+// Total displayed rows: four relay/CT outlets plus the monitored USB rail.
+export const RIG_CHANNEL_COUNT = 5
 
 /**
  * Pre-first-response roster SHAPE. Not a measurement, not a simulation.
@@ -47,7 +48,7 @@ export const baseOutlets: Outlet[] = [
     schedule: 'Class hours + override',
     idleLimit: 'Exempt',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
   },
   {
     id: 2,
@@ -63,7 +64,7 @@ export const baseOutlets: Outlet[] = [
     schedule: '08:00-18:00',
     idleLimit: '20 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
   },
   {
     id: 3,
@@ -79,7 +80,7 @@ export const baseOutlets: Outlet[] = [
     schedule: '08:00-18:00',
     idleLimit: '20 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
   },
   {
     id: 4,
@@ -95,7 +96,23 @@ export const baseOutlets: Outlet[] = [
     schedule: 'Class hours',
     idleLimit: '15 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+  },
+  {
+    id: 5,
+    name: 'USB 1',
+    role: 'USB rail monitored by INA226',
+    meter: 'INA226 · USB rail',
+    relay: 'Monitored only',
+    priority: 'Low',
+    allowance: 10,
+    volts: 0,
+    watts: 0,
+    status: 'Standby',
+    schedule: 'Monitored only',
+    idleLimit: 'Exempt',
+    isProtected: true, manualHold: false, faultHold: false, recoveryLockout: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
   },
 ]
 
@@ -181,7 +198,7 @@ export function relayGpio(outletId: number): string {
  *   - it is never nominated for an overload injection, because 900 W on a 5 V
  *     rail is not a harsher version of the same scenario, it is a false one.
  */
-export const MONITORED_ONLY_CHANNEL_IDS: readonly number[] = []
+export const MONITORED_ONLY_CHANNEL_IDS: readonly number[] = [5]
 
 export function isMonitoredOnlyChannel(outletId: number): boolean {
   return MONITORED_ONLY_CHANNEL_IDS.includes(outletId)
@@ -356,7 +373,7 @@ export const DASHBOARD_TIPS = {
     'Relay state as the server sends it. OPEN means the relay is open — which is also exactly what a firmware trip and a policy shed look like from here, because DisconnectOutlet and the shed paths write the same value and the wire carries no way to tell them apart. LATCHED is the one state the switch cannot clear: the engine ignores relay reports for a restricted outlet.',
   outlet:
     'Branch current comes from an ADS1220 SPI front end on a CT clamped to this branch. The volts shown is the live mains reference reading and the amps are derived from it; with no fresh bus volts the pair reads 0 rather than falling back to the rated rail.',
-  usb: 'INA226 is separate DC sensor telemetry. It is not an outlet and is not added to the mains total.',
+  usb: 'The INA226 measures the USB/DC row directly. It has no relay and is not part of the mains-voltage average.',
   relay:
     'Closed passes current to the branch; open isolates it. The API reports this as an outlet status, not as a pin level.',
   amps:

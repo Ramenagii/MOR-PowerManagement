@@ -7,7 +7,7 @@ type OutletLimit = Pick<Outlet, 'id' | 'name' | 'allowance' | 'isProtected'>
 
 const FRAMEWORKS = [
   ['F1 · Acquire & monitor', 'Every fresh device batch', 'Validate measurements, relay reports, sensor health and the 1,300 W operating threshold. Stale or missing data is unknown, never zero.'],
-  ['F2 · Selective disconnect', 'Above 1,300 W for 3 batches', 'Open one lowest-priority eligible relay at a time. Protected outlets are excluded; unresolved overloads raise an alert.'],
+  ['F2 · Selective disconnect', 'System overload or individual outlet cap', 'A system overload sheds the lowest-priority eligible outlet after 3 batches. Separately, an unprotected outlet opens its own relay on the first fresh reading at or above its admin allowance, even when total load is below the system limit.'],
   ['F3 · Verify switching', 'After each relay command', 'Wait for device state feedback and a fresh sample before another automatic switch. A timeout needs operator review.'],
   ['F4 · Timed recovery', '55 seconds after automatic OFF', 'Trial reconnect one outlet, then reassess. If load again exceeds threshold, trip that same outlet and restart its wait; maximum five attempts per episode.'],
 ] as const
@@ -90,7 +90,7 @@ export function PoliciesView() {
       <div className="ant-card-body grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {outlets.map((outlet, index) => <article key={outlet.id} className="rounded-lg border border-outline-variant p-3">
           <div className="flex justify-between gap-2"><strong>CH{index + 1} · {outlet.name}</strong><span className="text-xs text-on-surface-variant">{outlet.status.toUpperCase()}</span></div>
-          <p className="mt-2 text-sm text-on-surface-variant">{outlet.commandNeedsReview ? 'Relay response needs review' : outlet.faultHold ? 'Fault hold' : outlet.manualHold ? 'Manual OFF hold' : outlet.recoveryLockout ? 'Recovery locked' : outlet.nextRecoveryAtUtc ? `Recovery in ${Math.max(0, Math.ceil((Date.parse(outlet.nextRecoveryAtUtc) - Date.now()) / 1000))} s` : outlet.recoveryTrialPending ? `Trial ${outlet.automaticRecoveryAttempts}/5 · verifying` : outlet.isProtected ? 'Protected outlet' : `Priority ${outlet.priority}`}</p>
+          <p className="mt-2 text-sm text-on-surface-variant">{outlet.commandNeedsReview ? 'Relay response needs review' : outlet.commandPending ? 'Waiting for relay confirmation' : outlet.faultHold ? 'Fault hold' : outlet.manualHold ? 'Manual OFF hold' : outlet.recoveryLockout ? 'Recovery locked' : outlet.nextRecoveryAtUtc ? `Recovery in ${Math.max(0, Math.ceil((Date.parse(outlet.nextRecoveryAtUtc) - Date.now()) / 1000))} s` : outlet.recoveryTrialPending ? `Trial ${outlet.automaticRecoveryAttempts}/5 · verifying` : outlet.isProtected ? 'Protected outlet' : `Priority ${outlet.priority}`}</p>
           {outlet.automaticRecoveryAttempts > 0 && <p className="mt-1 font-metric-value text-xs text-outline">Automatic recovery {outlet.automaticRecoveryAttempts}/5</p>}
           {(outlet.recoveryLockout || outlet.commandNeedsReview) && <button type="button" className="ant-btn mt-2" disabled={clearingId !== null} onClick={async () => { setClearingId(outlet.id); try { await clearOutletRecovery(outlet.id) } catch { setError('Admin clearance failed. Check your role and backend connection.') } finally { setClearingId(null) } }}>{clearingId === outlet.id ? 'Clearing…' : 'Admin: clear after review'}</button>}
           {outlet.faultHold && <button type="button" className="ant-btn mt-2" disabled={clearingId !== null} onClick={async () => { setClearingId(outlet.id); try { await acknowledgeOutletFault(outlet.id) } catch { setError('Fault acknowledgement failed. Check your role and backend connection.') } finally { setClearingId(null) } }}>{clearingId === outlet.id ? 'Acknowledging…' : 'Admin: acknowledge fault'}</button>}
@@ -103,7 +103,7 @@ export function PoliciesView() {
       <div className="ant-card-body grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {FRAMEWORKS.map(([title, trigger, response], index) => <article key={title} className="flex flex-col gap-3 rounded-lg border border-outline-variant bg-surface-container-low p-4">
           <div className="flex items-center justify-between"><h3 className="font-title-md font-semibold">{title}</h3><span className="font-metric-value text-outline">0{index + 1}</span></div>
-          <p className="font-code text-sm text-primary">{trigger}</p><p className="text-sm leading-6 text-on-surface-variant">{response}</p>
+          <p className="font-code text-sm text-primary">{index === 1 ? `System > ${systemLimit === null ? 'configured limit' : `${Math.round(systemLimit).toLocaleString()} W`} for 3 batches · outlet ≥ own cap once` : trigger}</p><p className="text-sm leading-6 text-on-surface-variant">{response}</p>
         </article>)}
       </div>
     </section>

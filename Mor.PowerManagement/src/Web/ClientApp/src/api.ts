@@ -89,6 +89,7 @@ type BackendOutlet = {
   automaticRecoveryAttempts: number
   nextRecoveryAtUtc: string | null
   commandNeedsReview: boolean
+  commandPending: boolean
 }
 
 type BackendEvent = {
@@ -235,6 +236,7 @@ function mapOutlet(outlet: BackendOutlet): Outlet {
     automaticRecoveryAttempts: outlet.automaticRecoveryAttempts,
     nextRecoveryAtUtc: outlet.nextRecoveryAtUtc,
     commandNeedsReview: outlet.commandNeedsReview,
+    commandPending: outlet.commandPending,
   }
 }
 
@@ -516,7 +518,7 @@ export type TelemetrySeries = {
   totals: { watts: Array<number | null>; energyKwhDelta: number | null }
 }
 
-// Testing rig: four 220V outlets. INA226 is separate sensor telemetry.
+// Testing rig: four 220V CT outlets plus one USB/DC row measured by INA226.
 const ALL_CHANNELS = 4
 
 // `channels` is omitted when nothing is filtered, so the server returns all.

@@ -18,7 +18,7 @@ import { Disclosure } from './Disclosure'
  * revisions of this file:
  *
  *  1. The rig has four controlled 238 V AC outlets. INA226 readings describe a
- *     separate DC rail and are not an outlet channel.
+ *     separate sensor for the monitored USB/DC outlet row.
  *  2. The PZEM-004T v3.0 is RETIRED. What is fitted now is an ADS1220
  *     four-channel 16-bit ADC over SPI with a CT on EACH mains branch (CH1-CH4),
  *     which is why per-branch current is MEASURED rather than apportioned from a

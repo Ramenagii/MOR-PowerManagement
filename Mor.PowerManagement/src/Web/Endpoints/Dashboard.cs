@@ -24,7 +24,7 @@ public class Dashboard : IEndpointGroup
         public const string State = "dashboard:state";
     }
 
-    // Testing rig: 4x220V wired channels + 1xUSB 5V monitored rail
+    // Testing rig: 4x220V CT/relay channels + 1xUSB/DC monitored rail
     // (CH1-CH5) - MUST_READ.md, until 31 Oct 2026.
     // Restore to 13 with the full rig.
     // DONE: the 4+USB bump (2 -> 5) landed with the five-row testing rig seed.

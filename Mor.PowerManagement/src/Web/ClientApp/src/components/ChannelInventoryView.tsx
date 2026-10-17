@@ -160,6 +160,8 @@ type Row = {
   name: string
   priority: Priority | null
   status: OutletStatus | null
+  commandPending: boolean
+  commandNeedsReview: boolean
   gpio: string
   ratedVolts: number
   allowance: number
@@ -221,6 +223,8 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
       name: outlet.name,
       priority: outlet.priority,
       status: outlet.status,
+      commandPending: outlet.commandPending,
+      commandNeedsReview: outlet.commandNeedsReview,
       gpio: relayGpio(outlet.id) ?? '—',
       ratedVolts: outlet.volts,
       allowance: outlet.allowance,
@@ -245,6 +249,8 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
       name: 'Not wired on this bench',
       priority: null,
       status: null,
+      commandPending: false,
+      commandNeedsReview: false,
       gpio: '—',
       ratedVolts: branch.rail === '5V USB' ? 5 : 220,
       allowance: 0,
@@ -357,7 +363,7 @@ export function ChannelInventoryView() {
    * rather than optimistically flipping. A refusal is surfaced, not swallowed.
    */
   const toggleRelay = async (row: Row) => {
-    if (!row.wired || row.status === null) return
+    if (!row.wired || row.status === null || row.commandPending || row.commandNeedsReview) return
 
     setBusyId(row.id)
     try {
@@ -803,6 +809,10 @@ function ChannelCard({
             <span className="st-micro st-warn" role="status">
               Posting…
             </span>
+          ) : row.commandNeedsReview ? (
+            <span className="st-micro st-danger" role="status">REVIEW</span>
+          ) : row.commandPending ? (
+            <span className="st-micro st-warn" role="status">WAIT</span>
           ) : (
             <span className={`st-tiny font-medium ${on ? 'st-ok' : 'text-[#939ca8]'}`}>
               {row.wired ? (on ? 'ON' : 'OFF') : 'NO WIRING'}
@@ -813,15 +823,19 @@ function ChannelCard({
             className="st-relay"
             role="switch"
             aria-checked={on}
-            aria-label={`${on ? 'Disconnect' : 'Activate'} CH${String(row.id).padStart(2, '0')} relay`}
+            aria-label={row.commandNeedsReview ? `CH${String(row.id).padStart(2, '0')} relay needs review` : row.commandPending ? `Wait for CH${String(row.id).padStart(2, '0')} relay confirmation` : `${on ? 'Disconnect' : 'Activate'} CH${String(row.id).padStart(2, '0')} relay`}
             title={
               !row.wired
                 ? 'No relay is wired on this branch, so this control cannot dispatch a command.'
+                : row.commandNeedsReview
+                  ? 'Relay response needs Admin review before another command can be sent.'
+                  : row.commandPending
+                    ? 'Wait for the ESP32 to acknowledge this relay command and send a settled reading.'
                 : on
                   ? `POST /api/Dashboard/outlets/${row.id}/disconnection`
                   : `POST /api/Dashboard/outlets/${row.id}/activation`
             }
-            disabled={!row.wired || busy || !live}
+            disabled={!row.wired || busy || !live || row.commandPending || row.commandNeedsReview}
             onClick={onToggle}
           />
         </div>
