@@ -70,16 +70,14 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <Wire.h>
-#include <INA226.h>
+#include <INA226_WE.h>
 #include <SPI.h>
 #include <ADS1220_WE.h>
 #include <math.h>
 
 #include "config.h"
 
-INA226 ina226(INA226_ADDR);
-static_assert(INA226_MAX_CURRENT_AMPS * INA226_SHUNT_OHM <= 0.08190f,
-              "INA226 max-current x shunt drop exceeds its 81.9 mV input range");
+INA226_WE ina226(INA226_ADDR);
 
 // The ADS1220 is the ONLY user of SPI on this board. The pins are given
 // explicitly because they are not the ESP32-S3 VSPI defaults (10/12/11/13 would
@@ -155,7 +153,7 @@ struct ZmctReading {
 //
 // The USB entry is forced true and is NOT driven to a pin (USB_OUTLET_NO_RELAY):
 // there is no relay behind the socket, so it can only ever report CLOSED.
-bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true };
+bool relayClosedDesired[OUTLET_COUNT] = { true, true, true, true, true };
 String pendingCommandId[OUTLET_COUNT];
 String acquisitionSessionId;
 uint32_t acquisitionSequence = 0;
@@ -165,7 +163,7 @@ uint32_t acquisitionSequence = 0;
 // CONFIG_INTERVAL_MS, which is fast enough to flood the console). Purely
 // diagnostic - nothing acts on these, they exist so a mismatch between the
 // backend's view and the device's view is visible on the bench.
-int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1, -1, -1 };
+int8_t lastDesiredStatus[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
 uint32_t syncCount = 0;
 
 // True for the one outlet that is monitored only and has no relay behind it.
@@ -216,14 +214,14 @@ volatile uint32_t relayStateVersion = 0;
 // Without this the boot-time write (setup() parks the pins HIGH, then calls
 // applyRelays()) would be indistinguishable from a real transition and would
 // stamp the version once for nothing.
-int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1 };
+int8_t relayAppliedLevel[OUTLET_COUNT] = { -1, -1, -1, -1, -1 };
 
 // A close can still leave contact bounce or input-capacitor inrush in the next
 // complete CT window after the transition-spanning window was discarded. Keep
 // this per outlet because each sensor window is collected at a different time.
 // Core 1 sets the counters and core 0 consumes them, so guard the tiny
 // read/decrement and set operations with a FreeRTOS port mux.
-volatile uint8_t relayCloseSettleRemaining[OUTLET_COUNT] = { 0, 0, 0, 0 };
+volatile uint8_t relayCloseSettleRemaining[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
 portMUX_TYPE relaySettleMux = portMUX_INITIALIZER_UNLOCKED;
 
 bool consumeRelayCloseSettleWindow(uint8_t outlet) {
@@ -455,20 +453,14 @@ void setup() {
   // posted with the fault flag raised, so the console labels the readings as
   // degraded instead of presenting them as verified. Mains volts are unaffected
   // either way - they are a FIXED 238 V constant, not a sensor reading.
-  ina226Present = ina226.begin();
+  ina226Present = ina226.init();
   if (ina226Present) {
-    // The requested full-scale drop must stay below the INA226's +/-81.9 mV
-    // shunt range. Check the result: an invalid pair leaves the library's
-    // current LSB unset, so getCurrent()/getPower() read as zero while raw
-    // shunt millivolts still move.
-    const int calibrationStatus =
-        ina226.setMaxCurrentShunt(INA226_MAX_CURRENT_AMPS, INA226_SHUNT_OHM);
-    ina226CalibrationValid = calibrationStatus == INA226_ERR_NONE;
-    if (!ina226CalibrationValid) {
-      Serial.print("INA226 calibration FAILED (status 0x");
-      Serial.print(calibrationStatus, HEX);
-      Serial.println("): current/power invalid; require Imax * Rshunt <= 81.9 mV.");
-    }
+    // Wolfgang's API takes (shunt ohms, maximum current amps). With the
+    // installed 0.1 ohm shunt, 0.75 A stays below the INA226's +/-81.9 mV
+    // shunt input range; the reference sketch's 2 A setting would exceed it.
+    ina226.setResistorRange(INA226_SHUNT_OHM, INA226_MAX_CURRENT_AMPS);
+    ina226.waitUntilConversionCompleted();
+    ina226CalibrationValid = true;
     Serial.print("INA226  OK  (0x");
     Serial.print(INA226_ADDR, HEX);
     Serial.print(") - separate INA226 3.3V rail monitor, ");
@@ -594,7 +586,9 @@ void setup() {
     Serial.print(" MOSI="); Serial.print(ADS1220_MOSI_PIN);
     Serial.println();
     Serial.print("[ADC] VREF="); Serial.print(ads1220.getVRef_V(), 3);
-    Serial.print(" V (AVDD-calibrated) | single-shot | window=");
+    Serial.print(" V (");
+    Serial.print(ADS1220_USE_AVDD_AS_VREF ? "AVDD-calibrated" : "internal reference");
+    Serial.print(") | single-shot | window=");
     Serial.print(ZMCT_DEDICATED_SAMPLES);
     Serial.print(" samples/channel | opmode+DR=ADS_OP_MODE/ADS_DATA_RATE (turbo, 2000 SPS)");
     Serial.print(" | CT channels="); Serial.print(BRANCH_CT_COUNT);
@@ -678,14 +672,14 @@ void loop() {
     // Bus lock FIRST, then the variable lock: never the reverse, so the bus is
     // never held while waiting on dataMutex.
     if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-      busV   = ina226.getBusVoltage();       // V at the INA226 bus pin (~3.3 V expected)
+      busV   = ina226.getBusVoltage_V();     // V at the INA226 bus pin (~3.3 V expected)
       // Shunt 0.1 Ohm / 0.75 A full scale - the part actually fitted, not the
       // 10 mOhm mains-side shunt these getters used to be annotated with. The
       // annotation mattered: it is the scale every current and watt figure on
       // this sensor is multiplied by, and it was 10x the real part.
       shuntV = ina226.getShuntVoltage_mV();  // mV across the 0.1 Ohm shunt
-      inAmps = ina226.getCurrent();          // A through the 0.1 Ohm shunt
-      inWatts = ina226.getPower();           // W at the INA226 bus pin
+      inAmps = ina226.getCurrent_mA() / 1000.0f; // A through the shunt
+      inWatts = busV * inAmps;               // W, matching the reference sketch
       readOk = true;
       xSemaphoreGive(i2cMutex);
     }
@@ -879,8 +873,8 @@ void sensorTask(void *pvParameters) {
 // Takes the CHANNEL INDEX (0-based), not a pin: the channel selects the ADS1220
 // MUX, not an ESP32 GPIO.
 ZmctReading readChannel(uint8_t channel) {
-  double sumRaw = 0.0;
-  double sumSqRaw = 0.0;
+  double sumMillivolts = 0.0;
+  double sumSqMillivolts = 0.0;
 
   // Point the ADC at this branch BEFORE the window, not per sample. setCompareChannels
   // rewrites the MUX field and makes the library re-read the gain field, which is a
@@ -888,38 +882,31 @@ ZmctReading readChannel(uint8_t channel) {
   // It also clamps the PGA for a single-ended (AINx/AVSS) input, so the gain the
   // mV scale below uses is the post-clamp one, not whatever was set at boot.
   ads1220.setCompareChannels(CT_MUX[channel]);
+  delay(2); // match the reference sketch's MUX settling delay
 
   for (uint16_t i = 0; i < ZMCT_DEDICATED_SAMPLES; i++) {
-    // Single-shot, blocking: the library issues START and waits on DRDY (GPIO
-    // 14) before clocking out 3 bytes, so each iteration is one conversion. The
-    // returned code is the signed 24-bit result, 8388607 = full scale.
-    const int32_t rawADC = ads1220.getRawData();
-    sumRaw += rawADC;
-    sumSqRaw += (double)rawADC * rawADC;
+    // Wolfgang's getVoltage_mV() waits for one conversion and scales the raw
+    // code using the configured VREF and PGA gain, matching the reference sketch.
+    const float voltage_mV = ads1220.getVoltage_mV();
+    sumMillivolts += voltage_mV;
+    sumSqMillivolts += (double)voltage_mV * voltage_mV;
   }
 
   // Mean-subtracted variance: the CT output sits on a large DC bias, so only
   // the AC ripple around that bias is of interest. Rounding can push a
   // near-constant window slightly negative, hence the clamp.
-  double meanRaw = sumRaw / ZMCT_DEDICATED_SAMPLES;
-  double variance = (sumSqRaw / ZMCT_DEDICATED_SAMPLES) - (meanRaw * meanRaw);
+  const double meanMillivolts = sumMillivolts / ZMCT_DEDICATED_SAMPLES;
+  double variance = (sumSqMillivolts / ZMCT_DEDICATED_SAMPLES) -
+                    (meanMillivolts * meanMillivolts);
   if (variance < 0.0) variance = 0.0;
 
   ZmctReading out;
-  out.countsRms = (float)sqrt(variance);
-  // Counts -> mV, using the reference and gain the library is actually running
-  // with (getVRef_V / getGainFactor), not a hardcoded volts-per-count. This
-  // replaced ads.computeVolts(1) from the ADS1015 build: that was a fixed
-  // table lookup for a 12-bit ADC whose gain came from a different part, and
-  // hardcoding the ADS1220 equivalent instead would bake in the same lie if the
-  // reference or gain is ever changed in config.h.
+  out.millivoltsRms = (float)sqrt(variance);
   const float mVPerCount = (ads1220.getVRef_V() * 1000.0f) /
                            (ADS1220_WE::ADS1220_RANGE * static_cast<float>(ads1220.getGainFactor()));
-  out.millivoltsRms = out.countsRms * mVPerCount;
-  // ZMCT_CAL_FACTOR is amps per volt, so the volts come straight out of the
-  // mV reading. NOTE: that factor was measured on the ADS1015 build, not on
-  // this ADC - see the warning above it in config.h and re-measure with
-  // ZMCT_CALIBRATION_MODE before treating any amps figure as real.
+  out.countsRms = mVPerCount > 0.0f ? out.millivoltsRms / mVPerCount : 0.0f;
+  // Convert voltage RMS to the reference sketch's base current estimate; the
+  // configured piecewise curve is applied to this value by sensorTask().
   out.amps = (out.millivoltsRms / 1000.0f) * ZMCT_CAL_FACTOR;
   return out;
 }
@@ -1086,7 +1073,7 @@ void printSerialTelemetry() {
       Serial.print(" CH"); Serial.print(ch + 1); Serial.print("->AIN"); Serial.print(ch);
       if (ch + 1 < BRANCH_CT_COUNT) Serial.print(",");
     }
-    Serial.println(" | INA226 is separate DC telemetry, not an outlet or part of CT calibration");
+    Serial.println(" | INA226 is the monitored USB/DC row; it is not a CT channel");
     Serial.println("[CAL] PROCEDURE: clamp ONE known load onto ONE branch, measure its");
     Serial.println("[CAL]   watts with a meter, put that number in ZMCT_CAL_REF_WATTS");
     Serial.println("[CAL]   (config.h) and reflash. Read 'suggested=' below, then write");
@@ -1145,9 +1132,9 @@ String backendUrl(const char* path) {
 }
 
 // One batch per second. CH1-CH4 carry their measured CT current against the one
-// shared mains voltage; outletId 5 (the USB socket) carries the INA226's own bus
-// volts and shunt current. Every posted outletId is a channel with a real sensor
-// behind it - no zeros, no residuals.
+// shared mains voltage. Outlet 5 is the monitored USB/DC rail; the backend maps
+// the INA226 block below to that row. This board has exactly four CT/relay
+// channels and one no-relay monitored row.
 bool postTelemetry() {
   float amps[BRANCH_CT_COUNT];
   float mainsV;
@@ -1209,8 +1196,9 @@ bool postTelemetry() {
   // CH1-4 watt; nothing in this block feeds it any more (it used to be
   // busV * INA226_MAIN_VOLT_DIVIDER). This block only reports the sensor.
   //
-  // These values belong only to the INA226 sensor block. They are not attached
-  // to an outlet or included in the four-outlet mains total.
+  // Raw INA226 values are sent in their own sensor block. The backend also
+  // mirrors them onto monitored outlet 5 so the dashboard shows four CT rows
+  // plus the USB/DC row; they are not part of the four-branch CT watt sum.
   JsonObject ina = doc["ina"].to<JsonObject>();
   ina["busV"]     = inaBusV;      // V at the INA226 bus pin (~3.3 V rail)
   ina["shuntmV"]  = inaShunt;     // mV across the 0.1 Ohm shunt

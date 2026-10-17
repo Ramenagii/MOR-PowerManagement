@@ -12,13 +12,13 @@
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// LIVE RIG (4 channels): four 220V CT-metered and relay-controlled outlets.
+// LIVE RIG: four 220V CT/relay outlets plus one monitored USB/DC row.
 // ---------------------------------------------------------------------------
 //   outletId 1..4  220 V mains outlets, one ZMCT103C CT each on the ADS1220
 //                  (AIN0, AIN1, AIN2, AIN3). Watts are derived from the CT
 //                  amps x the ONE mains voltage below, exactly as before.
-// The INA226 is separate DC-rail telemetry. It is not an outlet and does not
-// increase the relay or CT channel count.
+// Outlet 5 is the INA226-monitored USB/DC rail. It has no CT or relay; its
+// live reading comes from the INA226 telemetry object.
 //
 // Tier roles (the backend seed must carry these so the priority logic and the
 // dashboard labels agree with the device; RULES_ENABLED is still 0, so the
@@ -30,7 +30,7 @@
 //
 // Restore to 13 for the final rig: CH1-8 220V, CH9 110V, CH10-13 USB.
 // ---------------------------------------------------------------------------
-#define OUTLET_COUNT 4
+#define OUTLET_COUNT 5
 
 // ---- Wi-Fi ----
 // Credentials live in NVS flash (written on first setup), so the repo never
@@ -206,7 +206,7 @@
 // ACTION REQUIRED BEFORE THE NEXT THRESHOLD DECISION: re-measure mains with a
 // multimeter on this rig and write the reading here. If the meter still says
 // 228, this constant goes back and the reference sketch is what is wrong.
-#define MAINS_FIXED_VOLTS 238.0f
+#define MAINS_FIXED_VOLTS 228.0f
 
 // SUPERSEDED - KEPT AS HISTORY, DO NOT USE.
 // INA226_MAIN_VOLT_DIVIDER was the bus-voltage divider ratio, calibrated on
@@ -251,7 +251,7 @@
 // exactly the split that used to put 228 V next to 238 V-derived watts on the
 // dashboard. They were left divergent for exactly one revision and are not
 // again.
-#define FALLBACK_MAINS_VOLTS 238.0f
+#define FALLBACK_MAINS_VOLTS 228.0f
 
 // ---- ADS1220: 24-bit SPI ADC, one ZMCT103C per mains branch ----
 // The ADS1015 is gone: this rig reads branch current from an ADS1220 on its own
@@ -288,10 +288,10 @@
 // self-test" boot line before trusting the 600-sample window length here.
 #define ADS_OP_MODE ADS1220_TURBO_MODE
 #define ADS_DATA_RATE ADS1220_DR_LVL_5
-// Reference source. 1 = AVDD (~3.3 V) is calibrated and used as VREF, which is
-// what makes the gain-1 range above cover the CT's 2.5 V bias. 0 = the internal
-// 2.048 V reference, which clips this signal. The .ino calls
-// setAvddAvssAsVrefAndCalibrate() only when this is 1.
+// Reference source: 0 selects the ADS1220_WE default internal 2.048 V reference,
+// matching the supplied reference sketch (which does not change VREF). 1 selects
+// calibrated AVDD/AVSS. Either range can clip the CT's 2.5 V biased waveform if
+// the measured reference is below that bias; calibration cannot correct clipping.
 //
 // MEASURED 2026-10-15 on the bench, and it is the one number here that was NOT
 // as assumed: with this flag at 1 the ADC reported VREF = 2.0550 V, not ~3.3 V.
@@ -302,8 +302,9 @@
 // ZMCT_CAL_FACTOR until VREF is genuinely above the bias (external VREF on
 // REFP0/REFN0, or the module supply corrected). The boot line
 // "[ADC] VREF=..." prints it on every flash, so re-check it before trusting any
-// amps figure.
-#define ADS1220_USE_AVDD_AS_VREF 1
+// amps figure. The supplied sketch uses the internal default, so that is the
+// active setting here as well.
+#define ADS1220_USE_AVDD_AS_VREF 0
 
 // ---- ZMCT103C CT calibration factor: provenance ----
 // This is amps RMS per volt RMS at the CT output. It is the ONE constant in the
@@ -403,9 +404,15 @@
 //   0.140, 0.180, 0.182, 0.163, 0.138, 0.242, and 0.164 A (mean 0.16620 A).
 //   Re-solving the piecewise mapping for a 0.155 A mean gives scale 0.933041
 //   and final shared factor 1.109 x 0.933041 = 1.03474, rounded to 1.035.
-//   This centers the observed load; it cannot remove the CT's 0.138-0.242 A
-//   variation, which needs the VREF/input-range issue and signal stability fixed.
-#define ZMCT_CAL_FACTOR 1.035f
+//   This centered that observed load, but has been superseded by the operator's
+//   requested reference-sketch calculation below. It cannot remove the CT's
+//   observed variation or repair an ADC input-range problem.
+// 2026-10-17 (reference-sketch calculation): use ADS1220_WE millivolt samples,
+//   subtract the measured DC bias through RMS variance, multiply Vrms by 0.52
+//   A/V, then apply the shared four-segment piecewise map in the .ino. This is
+//   the operator-provided baseline across CH1-CH4; the previous 1.035 single-
+//   operating-point trim is no longer part of the live calculation.
+#define ZMCT_CAL_FACTOR 0.52f
 
 // ---- CT calibration bench mode (print-only, zero behavioural effect) ----
 // 0 = off, normal firmware (this is the shipping setting).
@@ -489,13 +496,12 @@
 // pass cannot delay the serial output on core 1.
 #define SENSOR_TASK_STACK 4096
 #define SENSOR_TASK_PRIORITY 2
-// CH1-CH4 each have one CT wired to ADS1220 AIN0-AIN3. INA226 is reported in
-// the separate `ina` telemetry object and is never counted as an outlet.
+// CH1-CH4 each have one CT wired to ADS1220 AIN0-AIN3. CH5 is the monitored-only
+// USB/DC row backed by the INA226 telemetry object.
 //
-// If a channel is ever added without a CT, do NOT derive its current as a
-// residual (mains total minus the measured branches): the INA226 is not on the
-// mains feed (see the INA226 note above), so no mains total exists here to
-// subtract from, and a fabricated residual would be a lie in the telemetry.
+// The monitored USB/DC row has no CT; its readings come directly from INA226.
+// Never derive it as a residual from mains power: the INA226 is not on the
+// mains feed, and this rig has no independent mains-total measurement.
 #define BRANCH_CT_COUNT 4
 // Per-branch overcurrent trip in amps RMS, evaluated by FR-03 on the board.
 #define BRANCH_OVERCURRENT_AMPS 5.0f
@@ -581,12 +587,12 @@
 // from VCC with the ESP32 side pulled low - rather than raising the ESP32 pin,
 // which is not possible at 3.3 V anyway.
 // Operator wiring, corrected 2026-10-16 (CH1/CH2 pin mapping verified).
-static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5 };
+static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 0 };
 #define RELAY_PIN_1 1
 #define RELAY_PIN_2 2
 #define RELAY_PIN_3 4
 #define RELAY_PIN_4 5
-#define USB_OUTLET_NO_RELAY 0
+#define USB_OUTLET_NO_RELAY 1
 
 // ---- Relay-transition window drop (2026-10-16) ----
 // NO NEW TUNABLE. This block documents a mechanism that lives entirely in
@@ -743,7 +749,7 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5 };
 // No switch is wired on this rig. 0 is a real "not connected" marker here, not a
 // channel number: GPIO 0 is a strapping pin and must never be used as a switch
 // input on the ESP32-S3. All four switch inputs are currently unwired.
-static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0 };
+static const uint8_t SWITCH_PINS[OUTLET_COUNT] = { 0, 0, 0, 0, 0 };
 
 // ---- Local autonomy ----
 #define LOCAL_AUTO_SHED true
@@ -758,8 +764,8 @@ static_assert(RELAY_PIN_1 == RELAY_PINS[0], "RELAY_PIN_1 must match RELAY_PINS[0
 static_assert(RELAY_PIN_2 == RELAY_PINS[1], "RELAY_PIN_2 must match RELAY_PINS[1]");
 static_assert(RELAY_PIN_3 == RELAY_PINS[2], "RELAY_PIN_3 must match RELAY_PINS[2]");
 static_assert(RELAY_PIN_4 == RELAY_PINS[3], "RELAY_PIN_4 must match RELAY_PINS[3]");
-static_assert(BRANCH_CT_COUNT == OUTLET_COUNT,
-              "each controlled outlet must have one CT channel");
+static_assert(OUTLET_COUNT == BRANCH_CT_COUNT + (USB_OUTLET_NO_RELAY ? 1 : 0),
+              "four CT outlets plus the optional monitored-only USB row expected");
 // No relay pin may collide with a sensor bus. These are the fixed wiring, not
 // choices, and a relay pin that lands on one of them takes the whole sensor
 // chain down with it - so the collision is made a compile error instead of a
@@ -786,5 +792,5 @@ static_assert(RELAY_PIN_4 != ADS1220_CS_PIN && RELAY_PIN_4 != ADS1220_DRDY_PIN &
 // would post a relay state read from whatever is next in memory, and the
 // 13-channel rig needs 8 CT-metered channels, which this ADS1220 (4 inputs)
 // cannot supply.
-static_assert(OUTLET_COUNT <= 4, "widen the arrays deliberately before exceeding the 4-channel rig");
+static_assert(OUTLET_COUNT <= 5, "widen the arrays deliberately before exceeding the 4+USB rig");
 static_assert(BRANCH_CT_COUNT <= 4, "the ADS1220 has 4 single-ended inputs (AIN0..AIN3)");
