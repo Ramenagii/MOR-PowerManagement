@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertCircle, BookmarkPlus, LoaderCircle, Save } from 'lucide-react'
-import { acknowledgeOutletFault, ApiError, clearOutletRecovery, fetchDashboardState, updateOutletPolicy } from '../api'
+import { acknowledgeOutletFault, ApiError, clearOutletRecovery, fetchDashboardState, setAutomaticPrioritisationEnabled, updateOutletPolicy } from '../api'
 import type { Outlet, Priority } from '../types/dashboard'
 import { isMonitoredOnlyChannel } from '../data/dashboard'
 import { draftFrom, sameDraft, type OutletDraft } from './policyAdmin'
@@ -28,6 +28,10 @@ export function PoliciesView() {
   const [liveTotal, setLiveTotal] = useState<number | null>(null)
   const [deviceOnline, setDeviceOnline] = useState(false)
   const [deviceProtocolReady, setDeviceProtocolReady] = useState(false)
+  const [automaticPrioritisationEnabled, setAutomaticPrioritisationEnabledState] = useState(true)
+  const [overloadBatches, setOverloadBatches] = useState(0)
+  const [overloadConfirmationSeconds, setOverloadConfirmationSeconds] = useState(3)
+  const [frameworkFaultLatched, setFrameworkFaultLatched] = useState(false)
   const [drafts, setDrafts] = useState<Record<number, OutletDraft>>({})
   const [baseline, setBaseline] = useState<Record<number, OutletDraft>>({})
   const [systemLimit, setSystemLimit] = useState<number | null>(null)
@@ -38,6 +42,7 @@ export function PoliciesView() {
   const [presets, setPresets] = useState<FrameworkPreset[]>(readFrameworkPresets)
   const [presetName, setPresetName] = useState('')
   const [clearingId, setClearingId] = useState<number | null>(null)
+  const [updatingAutomaticPrioritisation, setUpdatingAutomaticPrioritisation] = useState(false)
   const initialized = useRef(false)
 
   useEffect(() => {
@@ -49,6 +54,10 @@ export function PoliciesView() {
       setLiveTotal(snapshot.totalWatts)
       setDeviceOnline(snapshot.deviceOnline)
       setDeviceProtocolReady(snapshot.deviceProtocolReady)
+      setAutomaticPrioritisationEnabledState(snapshot.framework.automaticPrioritisationEnabled)
+      setOverloadBatches(snapshot.framework.consecutiveOverLimitBatches)
+      setOverloadConfirmationSeconds(snapshot.framework.overLimitConfirmationSeconds)
+      setFrameworkFaultLatched(snapshot.framework.faultLatched)
       setSystemLimit(snapshot.thresholds.critical)
       setBaseline(current)
       if (!initialized.current) { setDrafts(current); initialized.current = true }
@@ -109,6 +118,22 @@ export function PoliciesView() {
     } finally { setSaving(false) }
   }
 
+  async function toggleAutomaticPrioritisation() {
+    setUpdatingAutomaticPrioritisation(true)
+    setError(null)
+    setSaved(false)
+    try {
+      const result = await setAutomaticPrioritisationEnabled(!automaticPrioritisationEnabled)
+      setAutomaticPrioritisationEnabledState(result.enabled)
+    } catch (cause) {
+      setError(cause instanceof ApiError && cause.status === 401
+        ? 'Your session expired. Sign in again to change automatic relay control.'
+        : 'Could not update automatic relay control. Check the backend connection and try again.')
+    } finally {
+      setUpdatingAutomaticPrioritisation(false)
+    }
+  }
+
   return <section className="design-main" aria-label="Framework">
     <header className="mb-space-lg flex flex-col gap-1">
       <h1 className="font-headline-md text-headline-md text-on-surface">Framework</h1>
@@ -167,8 +192,38 @@ export function PoliciesView() {
 
     <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="framework-live-heading">
       <div className="ant-card-header flex items-center justify-between gap-4">
-        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W</p></div>
+        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W · overload confirmation {overloadBatches}/{overloadConfirmationSeconds}</p></div>
         <span className={`rounded-full px-3 py-1 text-xs ${deviceOnline && deviceProtocolReady ? 'bg-surface-container text-on-surface' : 'bg-amber-100 text-amber-900'}`}>{!deviceOnline ? 'NO FRESH DATA' : deviceProtocolReady ? 'MONITORING + CONTROL READY' : 'MONITORING · FIRMWARE UPDATE NEEDED'}</span>
+      </div>
+      <div className="ant-card-body border-b border-outline-variant">
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-outline-variant bg-surface-container-low p-4">
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="font-title-md">Automatic prioritisation</strong>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${automaticPrioritisationEnabled ? 'bg-emerald-100 text-emerald-900' : 'bg-amber-100 text-amber-900'}`}>
+                {automaticPrioritisationEnabled ? 'ENABLED' : 'PAUSED'}
+              </span>
+              {frameworkFaultLatched && <span className="rounded-full bg-error-container px-2.5 py-1 text-xs font-semibold text-on-error-container">FAULT LATCHED</span>}
+            </div>
+            <p className="mt-1 text-sm text-on-surface-variant">
+              {automaticPrioritisationEnabled
+                ? `Automatically sheds eligible relays after the global limit is exceeded for ${overloadConfirmationSeconds} seconds, or when an unprotected outlet reaches its allowance. Protected outlets are skipped.`
+                : 'Paused: telemetry and alarms continue, but automatic relay shedding and restoration are disabled.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className={automaticPrioritisationEnabled ? 'ant-btn ant-btn-default' : 'ant-btn ant-btn-primary'}
+            aria-pressed={automaticPrioritisationEnabled}
+            aria-label={automaticPrioritisationEnabled ? 'Pause automatic prioritisation' : 'Enable automatic prioritisation'}
+            disabled={loading || updatingAutomaticPrioritisation}
+            onClick={() => void toggleAutomaticPrioritisation()}
+          >
+            {updatingAutomaticPrioritisation
+              ? <><LoaderCircle size={16} className="animate-spin" /> Updating…</>
+              : automaticPrioritisationEnabled ? 'Pause automatic control' : 'Enable automatic control'}
+          </button>
+        </div>
       </div>
       <div className="ant-card-body grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-4">
         {outlets.map((outlet) => <article key={outlet.id} className="rounded-lg border border-outline-variant p-3">

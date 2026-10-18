@@ -120,7 +120,15 @@ type BackendState = {
     stabilizationDelayMs: number
   }
   recentEvents: BackendEvent[]
-  framework: { deviceProtocolReady?: boolean }
+  framework: {
+    deviceProtocolReady?: boolean
+    automaticPrioritisationEnabled?: boolean
+    faultLatched?: boolean
+    consecutiveOverLimitBatches?: number
+    overLimitConfirmationSeconds?: number
+    recoveryLimitWatts?: number
+    shedOutletIds?: number[]
+  }
   deviceOnline: boolean
   deviceLastSeen: string | null
   // Legacy field: current firmware reports fixed mains voltage separately.
@@ -206,6 +214,14 @@ export type DashboardSnapshot = {
   mainsVolts: number | null
   ina226: Ina226Reading
   deviceProtocolReady: boolean
+  framework: {
+    automaticPrioritisationEnabled: boolean
+    faultLatched: boolean
+    consecutiveOverLimitBatches: number
+    overLimitConfirmationSeconds: number
+    recoveryLimitWatts: number
+    shedOutletIds: number[]
+  }
 }
 
 function formatEventTime(timestamp: string): string {
@@ -287,7 +303,22 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
     mainsVolts: toMeasurement(state.mainsVolts),
     ina226: mapIna226(state.ina226),
     deviceProtocolReady: Boolean(state.framework?.deviceProtocolReady),
+    framework: {
+      automaticPrioritisationEnabled: state.framework?.automaticPrioritisationEnabled ?? true,
+      faultLatched: state.framework?.faultLatched ?? false,
+      consecutiveOverLimitBatches: state.framework?.consecutiveOverLimitBatches ?? 0,
+      overLimitConfirmationSeconds: state.framework?.overLimitConfirmationSeconds ?? 3,
+      recoveryLimitWatts: toMeasurement(state.framework?.recoveryLimitWatts) ?? 0,
+      shedOutletIds: state.framework?.shedOutletIds ?? [],
+    },
   }
+}
+
+export async function setAutomaticPrioritisationEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
+  return request<{ enabled: boolean }>('/Dashboard/shedding/override', {
+    method: 'POST',
+    body: JSON.stringify({ enabled, reason: 'Changed from Threshold settings' }),
+  })
 }
 
 export type PolicyItem = {
