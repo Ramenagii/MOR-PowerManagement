@@ -448,11 +448,10 @@ void setup() {
 
   Serial.println("\nInitializing Sensors on ESP32-S3...");
 
-  // A missing sensor must NEVER hang the device. Detection degrades instead of
-  // halting: outlet 5's USB reading falls back to zero, and every batch is
-  // posted with the fault flag raised, so the console labels the readings as
-  // degraded instead of presenting them as verified. Mains volts are unaffected
-  // either way - they are a FIXED 238 V constant, not a sensor reading.
+  // A missing sensor must NEVER hang the device. The INA226 only meters the
+  // monitored USB/DC row (outlet 5), which has no relay; its absence therefore
+  // zeros that row but must not raise the system-wide relay isolation flag.
+  // Mains volts and the four AC outlets are independent of this sensor.
   ina226Present = ina226.init();
   if (ina226Present) {
     // Wolfgang's API takes (shunt ohms, maximum current amps). With the
@@ -475,8 +474,8 @@ void setup() {
     Serial.print("Error: INA226 module not detected at 0x");
     Serial.println(INA226_ADDR, HEX);
     Serial.println("INA226  MISSING - outlet 5 USB reading falls back to zero "
-                   "(mains is a FIXED constant and is unaffected); readings will be "
-                   "flagged. Continuing: telemetry must not go dark.");
+                   "(monitored-only channel); four AC outlets remain operational. "
+                   "Continuing: telemetry must not go dark.");
   }
 
   // ---- Relay outputs ----
@@ -1188,12 +1187,12 @@ bool postTelemetry() {
   // IngestTelemetry.cs:179 was unreachable - the device could not report a fault
   // it had actually detected. Ported from master 57e3c00 defect 3.
   //
-  // The VALUE is false while both sensors are present: no protective rule
-  // evaluates in this phase (RULES_ENABLED 0), so the firmware has checked no
-  // rule condition at all, and claiming a fault it never evaluated would be as
-  // dishonest as claiming none. It is raised exactly when a sensor is missing,
-  // which is a condition setup() DID evaluate and can therefore speak to.
-  doc["faultFlag"] = !(ina226Present && ina226CalibrationValid && ads1220Present);
+  // FaultFlag makes the backend isolate all relays. Only the ADS1220 meters
+  // those relay-controlled AC outlets, so a missing INA226 (monitored-only USB
+  // channel) is reported as zero INA readings without taking AC control down.
+  // RULES_ENABLED is 0, so no overload rule is being claimed as evaluated here.
+  // The VALUE is false while the ADS1220 is present.
+  doc["faultFlag"] = !ads1220Present;
   doc["meteringMode"] = 2;                // 2 = Metered (real sensors are read)
 
   // The INA226's OWN readings, not derived branch figures. Until now these were

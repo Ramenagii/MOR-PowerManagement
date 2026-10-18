@@ -18,6 +18,7 @@ Add these Render environment variables as secrets/configuration:
 | `ConnectionStrings__Mor.PowerManagementDb` | Neon connection URI (`postgresql://...`) |
 | `Device__ApiKey` | Random 32-byte secret, Base64URL encoded; use the same value in firmware `config.local.h` |
 | `Admin__InitialPassword` | Unique password of at least 16 characters, used only to create the first admin or rotate the old seeded default |
+| `Admin__ResetExistingPassword` | Optional one-time recovery switch. Set to `true` to reset the existing `administrator@localhost` password from `Admin__InitialPassword` at startup; remove it immediately after the successful startup log. |
 
 Before deploying, rotate the Neon database owner's password and revoke/replace
 the Render API key. The repository's security notes record that both appeared
@@ -42,6 +43,17 @@ service at one instance during migration startup.
 
 After the first successful startup and administrator password rotation, remove
 `Admin__InitialPassword` from Render. The account retains its new password.
+
+### Recovering an existing administrator account
+
+Changing `Admin__InitialPassword` does not replace an existing custom password.
+If the existing administrator cannot sign in, temporarily keep/set
+`Admin__InitialPassword` to the new password and add
+`Admin__ResetExistingPassword=true` in Render. Deploy once and wait for the log
+message that the existing administrator password was reset. Then remove
+`Admin__ResetExistingPassword` from Render and deploy again. Do not leave the
+reset switch enabled: while it is set, every service startup resets the account
+password to `Admin__InitialPassword` and invalidates existing sign-in sessions.
 
 ## Firmware connection
 

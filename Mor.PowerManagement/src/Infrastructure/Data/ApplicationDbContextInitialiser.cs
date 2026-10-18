@@ -448,6 +448,7 @@ public class ApplicationDbContextInitialiser
         const string retiredDefaultPassword = "Administrator1!";
         var administrator = await _userManager.FindByNameAsync(administratorName);
         var initialPassword = _configuration["Admin:InitialPassword"];
+        var resetExistingPassword = _configuration.GetValue<bool>("Admin:ResetExistingPassword");
 
         if (administrator is null)
         {
@@ -455,6 +456,15 @@ public class ApplicationDbContextInitialiser
             administrator = new ApplicationUser { UserName = administratorName, Email = administratorName };
             var createResult = await _userManager.CreateAsync(administrator, initialPassword);
             ThrowIfFailed(createResult, "Creating the initial administrator account");
+        }
+        else if (resetExistingPassword)
+        {
+            initialPassword = RequireInitialPassword(initialPassword);
+            var resetToken = await _userManager.GeneratePasswordResetTokenAsync(administrator);
+            var resetResult = await _userManager.ResetPasswordAsync(administrator, resetToken, initialPassword);
+            ThrowIfFailed(resetResult, "Resetting the existing administrator password");
+            _logger.LogWarning(
+                "The existing administrator password was reset from Admin:InitialPassword. Remove Admin:ResetExistingPassword from the hosting environment now.");
         }
         else if (_environment.IsProduction() && await _userManager.CheckPasswordAsync(administrator, retiredDefaultPassword))
         {
