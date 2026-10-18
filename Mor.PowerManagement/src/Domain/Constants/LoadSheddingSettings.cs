@@ -28,9 +28,11 @@ public abstract class LoadSheddingSettings
     // Three seconds filters a transient while keeping the relay response short.
     public const int OverLimitConfirmationSeconds = 3;
 
-    // A longer gap means the samples cannot establish continuous overload.
-    // Reset the timer instead of treating missing telemetry as sustained load.
-    public const int MaxOverLimitSampleGapSeconds = 2;
+    // The currently flashed ESP32 image may report on a 5 s cadence even when
+    // the checked-in firmware is configured for 1 Hz. Allow one 5 s interval
+    // plus 1 s of network jitter; larger gaps restart the confirmation window.
+    // The action still requires at least 3 s between over-limit observations.
+    public const int MaxOverLimitSampleGapSeconds = 6;
 
     // A recovery trial still uses a small number of fresh batches to verify
     // that reconnecting the outlet did not push the rig back over its limit.
