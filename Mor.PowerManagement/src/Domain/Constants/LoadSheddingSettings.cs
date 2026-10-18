@@ -21,7 +21,7 @@ public abstract class LoadSheddingSettings
     public const int MonitoredOnlyOutletId = 5;
 
     // ---- Load-shedding confirmation -------------------------------------
-    // How long fresh telemetry must keep P_total above P_limit before anything
+    // How long fresh telemetry must keep P_total at or above P_limit before anything
     // is shed. The ESP32 reports at 1 Hz, so detection is quantized to roughly
     // one second plus relay-command delivery time.
     //

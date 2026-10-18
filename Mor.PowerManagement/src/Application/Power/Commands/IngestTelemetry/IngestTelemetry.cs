@@ -451,7 +451,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             var measuredTotal = outlets
                 .Where(o => !LoadTierMapper.IsMonitoredOnlyOutlet(o.Id) && LoadResponseEvaluator.IsEnergized(o.Status))
                 .Sum(o => o.CurrentWatts);
-            if (measuredTotal > pLimit)
+            if (measuredTotal >= pLimit)
             {
                 recoveryTrial.RecoveryTrialOverLimitBatches++;
                 if (recoveryTrial.RecoveryTrialOverLimitBatches >= LoadSheddingSettings.RecoveryTrialConfirmationBatches)

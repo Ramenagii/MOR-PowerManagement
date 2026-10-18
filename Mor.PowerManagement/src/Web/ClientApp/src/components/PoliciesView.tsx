@@ -192,7 +192,7 @@ export function PoliciesView() {
 
     <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="framework-live-heading">
       <div className="ant-card-header flex items-center justify-between gap-4">
-        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W · over limit {overloadElapsedSeconds.toFixed(1)} / {overloadConfirmationSeconds} s</p></div>
+        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${liveTotal.toFixed(1)} W`} / {systemLimit ?? '—'} W · at/above limit {overloadElapsedSeconds.toFixed(1)} / {overloadConfirmationSeconds} s</p></div>
         <span className={`rounded-full px-3 py-1 text-xs ${deviceOnline && deviceProtocolReady ? 'bg-surface-container text-on-surface' : 'bg-amber-100 text-amber-900'}`}>{!deviceOnline ? 'NO FRESH DATA' : deviceProtocolReady ? 'MONITORING + CONTROL READY' : 'MONITORING · FIRMWARE UPDATE NEEDED'}</span>
       </div>
       <div className="ant-card-body border-b border-outline-variant">

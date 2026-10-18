@@ -36,7 +36,7 @@ public sealed record LoadSheddingState
 {
     public static readonly LoadSheddingState Initial = new();
 
-    /// <summary>Consecutive fresh batches seen over P_limit (diagnostic only).</summary>
+    /// <summary>Consecutive fresh batches seen at or above P_limit (diagnostic only).</summary>
     public int ConsecutiveOverLimitBatches { get; init; }
 
     /// <summary>First fresh sample in the current sustained system-overload interval.</summary>
@@ -90,7 +90,7 @@ public sealed record SensorFault(int OutletId, string Reason);
 /// makes the whole ladder reproducible for thesis evaluation.
 ///
 /// Shape of one cycle:
-///   over P_limit  -> confirm 3 s of fresh over-limit readings -> shed ONE lowest-tier
+///   at/over P_limit -> confirm 3 s of fresh readings -> shed ONE lowest-tier
 ///                    branch -> remeasure on the next batch -> repeat while
 ///                    still over
 ///   under recovery-> wait the recovery period -> reclose ONE highest-tier
@@ -250,7 +250,9 @@ public static class LoadSheddingEngine
     {
         var recoveryLimit = ComputeRecoveryLimit(pLimitWatts);
         var total = LoadResponseEvaluator.TotalLoad(outlets);
-        var overLimit = total > pLimitWatts;
+        // Match the dashboard's Critical state and the outlet-allowance rule:
+        // reaching P_limit counts as overload, not only crossing above it.
+        var overLimit = total >= pLimitWatts;
 
         // ---- 1. Never assume safe. Sensor faults outrank every other action:
         // if the numbers are untrustworthy the framework says so and stops.
@@ -363,7 +365,7 @@ public static class LoadSheddingEngine
                     LoadSheddingAction.None,
                     null,
                     null,
-                    $"P_total {total:F0} W is over P_limit {pLimitWatts:F0} W; sustained for {elapsed.TotalSeconds:F1}/{LoadSheddingSettings.OverLimitConfirmationSeconds} s.",
+                    $"P_total {total:F1} W is at or above P_limit {pLimitWatts:F1} W; sustained for {elapsed.TotalSeconds:F1}/{LoadSheddingSettings.OverLimitConfirmationSeconds} s.",
                     confirmed,
                     recoveryLimit,
                     counter,
@@ -376,7 +378,7 @@ public static class LoadSheddingEngine
                     LoadSheddingAction.None,
                     null,
                     null,
-                    $"P_total {total:F0} W is over P_limit {pLimitWatts:F0} W, but the operator has disabled automatic prioritisation. Manual action required.",
+                    $"P_total {total:F1} W is at or above P_limit {pLimitWatts:F1} W, but the operator has disabled automatic prioritisation. Manual action required.",
                     confirmed,
                     recoveryLimit,
                     counter,
@@ -395,7 +397,7 @@ public static class LoadSheddingEngine
                     LoadSheddingAction.Alarm,
                     null,
                     null,
-                    $"P_total {total:F0} W is still over P_limit {pLimitWatts:F0} W after shedding every eligible branch. " +
+                    $"P_total {total:F1} W is still at or above P_limit {pLimitWatts:F1} W after shedding every eligible branch. " +
                     "The remaining load is highest-priority load the framework will not disconnect automatically; " +
                     "the rig is NOT assumed safe and needs operator intervention.",
                     latched,
@@ -417,7 +419,7 @@ public static class LoadSheddingEngine
                 LoadSheddingAction.Shed,
                 next.Id,
                 tier,
-                $"P_total {total:F0} W stayed over P_limit {pLimitWatts:F0} W for at least {LoadSheddingSettings.OverLimitConfirmationSeconds} s. " +
+                $"P_total {total:F1} W stayed at or above P_limit {pLimitWatts:F1} W for at least {LoadSheddingSettings.OverLimitConfirmationSeconds} s. " +
                 $"Shedding Outlet {next.Id} ({tier}, {next.Watts:F0} W) as the most expendable active load.",
                 shedState,
                 recoveryLimit,
