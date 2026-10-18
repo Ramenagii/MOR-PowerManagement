@@ -184,6 +184,29 @@ export function Dashboard({
     [historyByOutlet],
   )
 
+  /*
+   * The server ships a true per-bucket MAX alongside the averaged watts
+   * (channel.peakWatts), and it is the only honest source for a row's "Peak"
+   * line. The previous peak took max(avg buckets, live); a single-batch spike is
+   * smeared away by the average, so the peak could sit below a number the branch
+   * genuinely recorded. Peak now reads the server's MAX, and falls back to the
+   * averaged window only when the server shipped no peak series for a channel.
+   */
+  const peakByOutlet = useMemo(() => {
+    const map = new Map<number, Array<number | null>>()
+    if (!series) return map
+    const take = Math.max(2, series.bucketCount)
+    for (const channel of series.channels) {
+      map.set(channel.outletId, (channel.peakWatts ?? channel.watts).slice(-take))
+    }
+    return map
+  }, [series])
+
+  const peakFor = useCallback(
+    (outletId: number): Array<number | null> => peakByOutlet.get(outletId) ?? NO_HISTORY,
+    [peakByOutlet],
+  )
+
   const deviceHasSamples = (series?.channels ?? []).some((channel) => channel.sampleCount > 0)
   const streamLabel = stalenessState(
     series?.latestSampleAt ?? null,
@@ -290,6 +313,7 @@ export function Dashboard({
             rowIndex={index}
             outlet={outlet}
             history={historyFor(outlet.id)}
+            peakHistory={peakFor(outlet.id)}
             live={live}
             /*
               CH5 gets NO volts reference at all, and that is the honest

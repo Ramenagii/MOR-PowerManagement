@@ -24,6 +24,15 @@ function outlet(id: number, watts: number, status: OutletStatus, priority: Prior
     status,
     schedule: 'Always on',
     idleLimit: '30 min',
+    isProtected: false,
+    manualHold: false,
+    faultHold: false,
+    recoveryLockout: false,
+    automaticRecoveryAttempts: 0,
+    nextRecoveryAtUtc: null,
+    commandNeedsReview: false,
+    commandPending: false,
+    recoveryTrialPending: false,
   }
 }
 

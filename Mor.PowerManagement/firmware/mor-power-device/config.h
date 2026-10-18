@@ -206,7 +206,7 @@
 // ACTION REQUIRED BEFORE THE NEXT THRESHOLD DECISION: re-measure mains with a
 // multimeter on this rig and write the reading here. If the meter still says
 // 228, this constant goes back and the reference sketch is what is wrong.
-#define MAINS_FIXED_VOLTS 228.0f
+#define MAINS_FIXED_VOLTS 238.0f
 
 // SUPERSEDED - KEPT AS HISTORY, DO NOT USE.
 // INA226_MAIN_VOLT_DIVIDER was the bus-voltage divider ratio, calibrated on
@@ -251,7 +251,7 @@
 // exactly the split that used to put 228 V next to 238 V-derived watts on the
 // dashboard. They were left divergent for exactly one revision and are not
 // again.
-#define FALLBACK_MAINS_VOLTS 228.0f
+#define FALLBACK_MAINS_VOLTS 238.0f
 
 // ---- ADS1220: 24-bit SPI ADC, one ZMCT103C per mains branch ----
 // The ADS1015 is gone: this rig reads branch current from an ADS1220 on its own

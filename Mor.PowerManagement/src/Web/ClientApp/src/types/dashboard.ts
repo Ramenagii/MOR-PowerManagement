@@ -53,6 +53,7 @@ export type Outlet = {
   nextRecoveryAtUtc: string | null
   commandNeedsReview: boolean
   commandPending: boolean
+  recoveryTrialPending: boolean
 }
 
 export type EventLog = {

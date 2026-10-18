@@ -13,6 +13,8 @@ type DashboardOutletProps = {
   outlet: Outlet
   /** Recorded watt buckets for this branch, oldest first. */
   history: Array<number | null>
+  /** Per-bucket MAX recorded by the server; backs the "Peak" line. */
+  peakHistory: Array<number | null>
   /**
    * Position in the roster, 0-based. Carried only so the first-paint stagger in
    * styles.css can be offset per row; it is applied as `--row-index`, never as a
@@ -160,7 +162,7 @@ export function branchBand(watts: number, allowance: number, live: boolean): Bra
  * look writable, and POSTing a disconnection for a branch with no relay would
  * return a success that changed nothing on the bench.
  */
-function DashboardOutletRow({ outlet, history, rowIndex, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
+function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
   const monitorOnly = isMonitoredOnlyChannel(outlet.id)
   const latched = live && isLatchedOutlet(outlet.status)
   const on = live && (monitorOnly || isEnergizedOutlet(outlet.status))
@@ -223,11 +225,15 @@ function DashboardOutletRow({ outlet, history, rowIndex, live, mainsVolts, busy,
    */
   const bucketPeak = useMemo(() => {
     let max = 0
-    for (const value of history) {
-      if (value !== null && Number.isFinite(value) && value > max) max = value
+    const bump = (arr: Array<number | null>) => {
+      for (const value of arr) {
+        if (value !== null && Number.isFinite(value) && value > max) max = value
+      }
     }
+    bump(peakHistory)
+    bump(history)
     return max
-  }, [history])
+  }, [peakHistory, history])
   const peakWatts = live ? Math.max(bucketPeak, effWatts) : 0
   const peakPercent = allowance > 0 ? (peakWatts / allowance) * 100 : 0
 
@@ -540,6 +546,7 @@ export const DashboardOutlet = memo(DashboardOutletRow, (prev, next) => {
     prev.mainsVolts === next.mainsVolts &&
     prev.busy === next.busy &&
     sameOutlet(prev.outlet, next.outlet) &&
-    sameHistory(prev.history, next.history)
+    sameHistory(prev.history, next.history) &&
+    sameHistory(prev.peakHistory, next.peakHistory)
   )
 })

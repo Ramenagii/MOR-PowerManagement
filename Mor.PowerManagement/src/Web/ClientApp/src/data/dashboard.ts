@@ -48,7 +48,7 @@ export const baseOutlets: Outlet[] = [
     schedule: 'Class hours + override',
     idleLimit: 'Exempt',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false, recoveryTrialPending: false,
   },
   {
     id: 2,
@@ -64,7 +64,7 @@ export const baseOutlets: Outlet[] = [
     schedule: '08:00-18:00',
     idleLimit: '20 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false, recoveryTrialPending: false,
   },
   {
     id: 3,
@@ -80,7 +80,7 @@ export const baseOutlets: Outlet[] = [
     schedule: '08:00-18:00',
     idleLimit: '20 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false, recoveryTrialPending: false,
   },
   {
     id: 4,
@@ -96,7 +96,7 @@ export const baseOutlets: Outlet[] = [
     schedule: 'Class hours',
     idleLimit: '15 min',
     isProtected: false, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false, recoveryTrialPending: false,
   },
   {
     id: 5,
@@ -112,7 +112,7 @@ export const baseOutlets: Outlet[] = [
     schedule: 'Monitored only',
     idleLimit: 'Exempt',
     isProtected: true, manualHold: false, faultHold: false, recoveryLockout: false,
-    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false,
+    automaticRecoveryAttempts: 0, nextRecoveryAtUtc: null, commandNeedsReview: false, commandPending: false, recoveryTrialPending: false,
   },
 ]
 

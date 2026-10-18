@@ -90,6 +90,7 @@ type BackendOutlet = {
   nextRecoveryAtUtc: string | null
   commandNeedsReview: boolean
   commandPending: boolean
+  recoveryTrialPending: boolean
 }
 
 type BackendEvent = {
@@ -196,6 +197,7 @@ export type ThresholdSet = {
 
 export type DashboardSnapshot = {
   outlets: Outlet[]
+  totalWatts: number
   events: EventLog[]
   thresholds: ThresholdSet
   deviceOnline: boolean
@@ -237,6 +239,7 @@ function mapOutlet(outlet: BackendOutlet): Outlet {
     nextRecoveryAtUtc: outlet.nextRecoveryAtUtc,
     commandNeedsReview: outlet.commandNeedsReview,
     commandPending: outlet.commandPending,
+    recoveryTrialPending: outlet.recoveryTrialPending,
   }
 }
 
@@ -264,6 +267,7 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
   // unusable, which is the truth, and the views print a dash for it.
   return {
     outlets: (state.outlets ?? []).map(mapOutlet),
+    totalWatts: toMeasurement(state.totalWatts) ?? 0,
     events: (state.recentEvents ?? []).map(mapEvent),
     thresholds: {
       max: toMeasurement(state.thresholds?.maxCapacityWatts) ?? 0,

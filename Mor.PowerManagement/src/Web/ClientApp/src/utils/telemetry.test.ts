@@ -227,16 +227,16 @@ describe('ina226Freshness', () => {
 
 describe('shuntFillPercent', () => {
   it('places the drop inside the converter input range', () => {
-    // Full scale is 200 mV: the reference configures `setResistorRange(0.1, 2.0)`
-    // — a 100 mOhm shunt on a 2 A range — and the register stores the product.
+    // Full scale is 75 mV: the firmware configures INA226_MAX_CURRENT_AMPS 0.75 A
+    // on a 100 mOhm shunt, and the register stores the product (0.75 A × 0.1 Ω).
     expect(INA226_SHUNT_FULL_SCALE_MV).toBe(75)
-    expect(shuntFillPercent(50)).toBe(25)
+    expect(shuntFillPercent(37.5)).toBe(50)
     expect(shuntFillPercent(INA226_SHUNT_FULL_SCALE_MV)).toBe(100)
   })
 
   it('clamps rather than drawing past full scale', () => {
     // A drop beyond the input range is a fault, not a bar that overflows.
-    expect(shuntFillPercent(160)).toBe(80)
+    expect(shuntFillPercent(160)).toBe(100)
     expect(shuntFillPercent(260)).toBe(100)
     expect(shuntFillPercent(-4)).toBe(0)
     expect(shuntFillPercent(Number.NaN)).toBe(0)

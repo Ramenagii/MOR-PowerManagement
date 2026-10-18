@@ -12,6 +12,8 @@ import {
   disconnectOutlet,
   fetchDashboardState,
   fetchTelemetrySeries,
+  UNMEASURED_INA226,
+  type Ina226Reading,
   type TelemetryChannel,
   type TelemetrySeries,
   type TelemetryWindow,
@@ -276,6 +278,7 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
 export function ChannelInventoryView() {
   const [outlets, setOutlets] = useState<Outlet[]>([])
   const [series, setSeries] = useState<TelemetrySeries | null>(null)
+  const [ina226, setIna226] = useState<Ina226Reading>({ ...UNMEASURED_INA226 })
   const [thresholds, setThresholds] = useState<ThresholdSet>({
     max: 0,
     warning: 0,
@@ -315,6 +318,7 @@ export function ChannelInventoryView() {
 
       setOutlets(state.outlets)
       setSeries(telemetry)
+      setIna226(state.ina226)
       setThresholds(state.thresholds)
       failuresRef.current = 0
       setError(null)
@@ -559,7 +563,13 @@ export function ChannelInventoryView() {
             <span className="st-unit">V RMS</span>
           </div>
           <div className="st-stat-foot st-micro">
-            <span className="st-accent">{'↗'} INA226 · ESP32 I²C DC shunt</span>
+            <span className="st-accent">
+              {ina226.busVolts !== null
+                ? `INA226 DC · ${ina226.busVolts.toFixed(2)} V${
+                    ina226.currentAmps !== null ? ` · ${(ina226.currentAmps * 1000).toFixed(1)} mA` : ''
+                  }${ina226.powerWatts !== null ? ` · ${ina226.powerWatts.toFixed(2)} W` : ''}`
+                : 'INA226 · no DC sample yet'}
+            </span>
             <span>{ratedVolts > 0 ? `Rated ${ratedVolts} V` : `Rated ${UNAVAILABLE}`}</span>
           </div>
         </article>
