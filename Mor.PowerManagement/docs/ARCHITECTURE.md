@@ -61,12 +61,12 @@ Boot proof on serial @115200:
   (`ConnectionStrings:Mor.PowerManagementDb`, Neon URL, normalized to
   Npgsql format by `NormalizePostgresConnectionString`). Migrations auto-run
   in Development via `InitialiseDatabaseAsync()`.
-- Prod (Pi/cloud): set `ConnectionStrings__Mor.PowerManagementDb` env var
-  and run `dotnet ef database update` once (auto-migrate runs in Development
-  only). `Device:ApiKey` empty = open LAN; set it + matching
-  `DEVICE_API_KEY` in firmware when the rig leaves the lab.
-- Demo accounts (seeded, lockout disabled): `administrator@localhost` /
-  `Administrator1!`, `demo@localhost` / `Demo1234!`.
+- Prod (Pi/cloud): set `ConnectionStrings__Mor.PowerManagementDb` and
+  `Device__ApiKey` as secrets. Production requires both and enforces TLS for
+  PostgreSQL. Startup applies migrations. See [DEPLOYMENT.md](DEPLOYMENT.md).
+- The initial administrator password is supplied through
+  `Admin__InitialPassword`; there is no production demo account or fixed
+  administrator password. The old default is rotated at production startup.
 
 ### Telemetry retention
 
@@ -104,20 +104,16 @@ Boot proof on serial @115200:
   the host TLS proxy, and startup migrations in every environment.
   1. Push to GitHub (done) and create a Render/Railway/Fly web service from
      this repo (Docker build, no local Docker needed).
-  2. Env vars on the host: `ASPNETCORE_ENVIRONMENT=Production`,
-     `ConnectionStrings__Mor.PowerManagementDb=<Neon URL>`,
-     `Device__ApiKey=<shared secret>`. First boot auto-migrates Neon.
-  3. Note the public URL. The deployed host is
-      `https://mor-powermanagement.onrender.com` (matches `BACKEND_HOST` in
-      `firmware/mor-power-device/config.h`); the earlier
-      `https://mor-power.onrender.com` placeholder was never a real host.
-  4. Firmware for public backend: `BACKEND_HOST` = host domain (no
-     `https://`), `BACKEND_PORT 443`, `BACKEND_USE_TLS 1`,
-     `DEVICE_API_KEY` = same secret, reflash. Real certs are verified by
-     the host, so the firmware's insecure dev-cert mode is not used.
+  2. Set `ASPNETCORE_ENVIRONMENT=Production`, the Neon connection URI,
+     `Device__ApiKey`, and initial `Admin__InitialPassword` in the host.
+     Production startup auto-migrates Neon.
+  3. Copy the actual Render hostname into ignored `config.local.h`, set TLS on,
+     and use the same device key; build and reflash the ESP32.
+  4. Use an always-on Render instance for continuous telemetry. A Free service
+     spins down after 15 minutes without inbound traffic.
   5. Dashboard + ESP32 then work from any device anywhere; the PC can stay
-     off. Free-tier hosts sleep when idle — first load and device sync take
-     ~30s to wake.
+     off. Use always-on Render and Neon compute settings for continuous
+     telemetry; Free-tier sleep interrupts operation when either service idles.
 
 ## 6. Operability (how you know it works)
 
@@ -136,7 +132,8 @@ Boot proof on serial @115200:
 - Functional/acceptance test projects fail on Aspire resource naming
   (`Mor.PowerManagementDb` contains dots); unit suites pass (Domain 6/6,
   Application 8/8, ClientApp 5/5).
-- Wi-Fi credentials live in `config.h` — keep the repo private.
+- Wi-Fi credentials and device API keys belong in ignored `config.local.h`,
+  never in tracked firmware files.
 - **Telemetry retention is opportunistic, not scheduled.** `TelemetryRetentionService`
   is an in-process `BackgroundService`. On a Render free-tier host that sleeps
   after ~15 min idle, neither the retention job nor the ESP32's 5 s telemetry POST

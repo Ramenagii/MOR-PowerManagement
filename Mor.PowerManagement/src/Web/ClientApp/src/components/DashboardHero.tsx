@@ -1,6 +1,5 @@
 import { useMemo } from 'react'
 import type { TelemetrySeries } from '../api'
-import { DASHBOARD_TIPS } from '../data/dashboard'
 
 type DashboardHeroProps = {
   /** Live total from GET /Dashboard/state. Ignored while `live` is false. */
@@ -166,8 +165,8 @@ export function DashboardHero({
    * are two independent settings and the server can legitimately supply either
    * without the other.
    *
-   *   hasCapacity  drives the P_limit tag, the meter's scale and the "N % of M W
-   *                limit" line. All three are arithmetic against the CEILING, so
+   *   hasCapacity  drives the meter's scale and the "N % of M W limit" line.
+   *                Both are arithmetic against the CEILING, so
    *                a rig that reports 4400 W of capacity is entitled to see how
    *                full it is even if nobody has set a trip point. Folding
    *                `critical > 0` into this used to blank the meter entirely in
@@ -194,8 +193,6 @@ export function DashboardHero({
     : headroom <= 0
       ? `${Math.round(Math.abs(headroom))} W over`
       : `${Math.round(headroom).toLocaleString()} W`
-
-  const limitTag = hasCapacity ? `P_limit ${Math.round(max).toLocaleString()} W` : 'P_limit not configured'
 
   return (
     <>
@@ -233,16 +230,12 @@ export function DashboardHero({
         </div>
 
         {/*
-          Right half. Three rows in normal flow — limit tag, plot, caption — so
+          Right half. The plot and caption stay in normal flow so
           nothing can overlap anything. The previous version absolutely
           positioned the caption over the plot, which is what made the hero read
           as a stack of overlapping layers.
         */}
         <div className="hero-r">
-          <span className="lim num" title={DASHBOARD_TIPS.pLimit}>
-            {limitTag}
-          </span>
-
           <div className="hero-plot">
             <svg
               viewBox={`0 0 ${CHART_W} ${CHART_H}`}

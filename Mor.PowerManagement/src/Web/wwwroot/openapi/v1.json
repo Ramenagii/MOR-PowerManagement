@@ -1889,7 +1889,7 @@
           "faultLatched",
           "recoveryLimitWatts",
           "hysteresisFraction",
-          "overLimitConfirmationBatches",
+          "overLimitConfirmationSeconds",
           "recoveryPeriodSeconds",
           "interReconnectDelaySeconds",
           "consecutiveOverLimitBatches",
@@ -1923,7 +1923,7 @@
             ],
             "format": "double"
           },
-          "overLimitConfirmationBatches": {
+          "overLimitConfirmationSeconds": {
             "pattern": "^-?(?:0|[1-9]\\d*)$",
             "type": [
               "integer",
@@ -2274,7 +2274,7 @@
           "pLimitWatts",
           "recoveryLimitWatts",
           "consecutiveOverLimitBatches",
-          "overLimitConfirmationBatches",
+          "overLimitConfirmationSeconds",
           "recoveryPeriodSeconds",
           "shedOutletIds",
           "manualOverride",
@@ -2333,7 +2333,7 @@
             ],
             "format": "int32"
           },
-          "overLimitConfirmationBatches": {
+          "overLimitConfirmationSeconds": {
             "pattern": "^-?(?:0|[1-9]\\d*)$",
             "type": [
               "integer",
@@ -2524,7 +2524,8 @@
           "automaticRecoveryAttempts",
           "nextRecoveryAtUtc",
           "commandNeedsReview",
-          "commandPending"
+          "commandPending",
+          "recoveryTrialPending"
         ],
         "type": "object",
         "properties": {
@@ -2638,6 +2639,9 @@
           },
           "commandPending": {
             "type": "boolean"
+          },
+          "recoveryTrialPending": {
+            "type": "boolean"
           }
         }
       },
@@ -2650,7 +2654,8 @@
           "timestamp",
           "title",
           "detail",
-          "severity"
+          "severity",
+          "actor"
         ],
         "type": "object",
         "properties": {
@@ -2674,6 +2679,12 @@
           },
           "severity": {
             "$ref": "#/components/schemas/EventSeverity"
+          },
+          "actor": {
+            "type": [
+              "null",
+              "string"
+            ]
           }
         }
       },
@@ -3491,6 +3502,12 @@
               "string"
             ],
             "format": "int32"
+          },
+          "name": {
+            "type": [
+              "null",
+              "string"
+            ]
           },
           "priority": {
             "oneOf": [

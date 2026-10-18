@@ -58,7 +58,8 @@ public record PowerEventDto(
     DateTimeOffset Timestamp,
     string Title,
     string Detail,
-    EventSeverity Severity);
+    EventSeverity Severity,
+    string? Actor);
 
 public record FrameworkStateDto(
     bool AutomaticPrioritisationEnabled,
@@ -68,7 +69,7 @@ public record FrameworkStateDto(
     // anything is restored.
     double RecoveryLimitWatts,
     double HysteresisFraction,
-    int OverLimitConfirmationBatches,
+    int OverLimitConfirmationSeconds,
     int RecoveryPeriodSeconds,
     int InterReconnectDelaySeconds,
     int ConsecutiveOverLimitBatches,
@@ -152,7 +153,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         var events = await _context.PowerEvents
             .OrderByDescending(e => e.Timestamp)
             .Take(20)
-            .Select(e => new PowerEventDto(e.Id, e.Timestamp, e.Title, e.Detail, e.Severity))
+            .Select(e => new PowerEventDto(e.Id, e.Timestamp, e.Title, e.Detail, e.Severity, e.CreatedBy))
             .ToListAsync(cancellationToken);
 
         var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
@@ -223,7 +224,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 framework.FaultLatched,
                 LoadSheddingEngine.ComputeRecoveryLimit(config.CriticalThresholdWatts),
                 LoadSheddingSettings.RecoveryHysteresisFraction,
-                LoadSheddingSettings.OverLimitConfirmationBatches,
+                LoadSheddingSettings.OverLimitConfirmationSeconds,
                 LoadSheddingSettings.RecoveryPeriodSeconds,
                 LoadSheddingSettings.InterReconnectDelaySeconds,
                 framework.ConsecutiveOverLimitBatches,

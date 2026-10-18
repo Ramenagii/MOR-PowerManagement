@@ -680,6 +680,12 @@ void loop() {
       shuntV = ina226.getShuntVoltage_mV();  // mV across the 0.1 Ohm shunt
       inAmps = ina226.getCurrent_mA() / 1000.0f; // A through the shunt
       inWatts = busV * inAmps;               // W, matching the reference sketch
+      // At a zero-load rail, INA226 offset can report a few tens of microamps
+      // with a negative sign. Remove only values below the sensor's practical
+      // noise floor so a harmless -0.00002 A / -0.0005 W does not invalidate an
+      // otherwise good telemetry batch at the backend's nonnegative checks.
+      if (fabsf(inAmps) < 0.001f) inAmps = 0.0f;
+      if (fabsf(inWatts) < 0.01f) inWatts = 0.0f;
       readOk = true;
       xSemaphoreGive(i2cMutex);
     }
@@ -739,8 +745,8 @@ void sensorTask(void *pvParameters) {
   (void)pvParameters;
 
   // Absolute wake time, so METER_INTERVAL_MS is the sweep PERIOD rather than
-  // period + sweep duration (a two-channel pass is ~600 ms of blocking
-  // conversions, which would otherwise stretch the cycle to 1.6 s).
+  // period + sweep duration (the four-channel pass is ~564 ms of blocking
+  // conversions at the measured ADC rate).
   TickType_t previousWake = xTaskGetTickCount();
   bool overrunWarned = false;
 
@@ -827,7 +833,7 @@ void sensorTask(void *pvParameters) {
     // vTaskDelayUntil() with an already-expired wake time returns immediately -
     // which is precisely how a too-slow sweep turns into a continuous hog. A
     // forced delay is the belt-and-braces answer to that.
-    if ((uint32_t)(micros() - sweepStartUs) >= METER_INTERVAL_MS * 1000UL / 2UL) {
+    if ((uint32_t)(micros() - sweepStartUs) >= METER_INTERVAL_MS * 1000UL) {
       const uint32_t overrun = (uint32_t)(micros() - sweepStartUs);
       if (!overrunWarned) {
         overrunWarned = true;
@@ -835,7 +841,7 @@ void sensorTask(void *pvParameters) {
         Serial.print(overrun / 1000);
         Serial.print(" ms of a ");
         Serial.print(METER_INTERVAL_MS);
-        Serial.println(" ms period. Shortening the window; the ADC is slower than");
+        Serial.println(" ms period. Forcing a scheduler yield; ADC is slower than");
         Serial.println("[SWEEP]   ADS_DATA_RATE implies, or DRDY is stretching each read.");
       }
       // Long enough for IDLE0 to run and for loop() to post telemetry, but short
@@ -1131,6 +1137,18 @@ String backendUrl(const char* path) {
   return url;
 }
 
+bool beginBackendRequest(HTTPClient& http, WiFiClient& plainClient,
+                        WiFiClientSecure& secureClient, const char* path) {
+  const String url = backendUrl(path);
+  if (BACKEND_USE_TLS) {
+    // Validate the Render certificate chain against Espressif's maintained
+    // root CA bundle. HTTPClient's URL-only overload skips certificate checks.
+    secureClient.useBuiltinCACertBundle();
+    return http.begin(secureClient, url);
+  }
+  return http.begin(plainClient, url);
+}
+
 // One batch per second. CH1-CH4 carry their measured CT current against the one
 // shared mains voltage. Outlet 5 is the monitored USB/DC rail; the backend maps
 // the INA226 block below to that row. This board has exactly four CT/relay
@@ -1246,7 +1264,9 @@ bool postTelemetry() {
   serializeJson(doc, payload);
 
   HTTPClient http;
-  if (!http.begin(backendUrl("/Device/telemetry"))) return false;
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  if (!beginBackendRequest(http, plainClient, secureClient, "/Device/telemetry")) return false;
   http.addHeader("Content-Type", "application/json");
   if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
 
@@ -1286,9 +1306,10 @@ bool postTelemetry() {
 // status it never receives, because the dashboard shows the outlet as
 // disconnected while the load is still live.
 bool syncConfig() {
-  WiFiClient client;
   HTTPClient http;
-  if (!http.begin(client, backendUrl("/Device/config"))) {
+  WiFiClient plainClient;
+  WiFiClientSecure secureClient;
+  if (!beginBackendRequest(http, plainClient, secureClient, "/Device/config")) {
     // Never silent. This function failing quietly for a whole session is how a
     // disconnect command can sit in the backend forever while the firmware
     // cheerfully reports every outlet as CLOSED and the dashboard shows the

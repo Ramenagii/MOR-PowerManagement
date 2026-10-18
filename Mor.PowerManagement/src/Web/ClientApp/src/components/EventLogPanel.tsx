@@ -115,6 +115,7 @@ export function EventLogPanel({ events, onDismiss }: EventLogPanelProps) {
                     </time>
                   </div>
                   <p className="mt-0.5 font-body-sm text-body-sm text-on-surface-variant">{event.detail}</p>
+                  {event.actor && <p className="mt-1 font-code text-code text-outline">Changed by {event.actor}</p>}
                 </div>
                 <span className="inline-flex shrink-0 items-center gap-1.5 pt-0.5">
                   <span className={view.dot} aria-hidden="true" />

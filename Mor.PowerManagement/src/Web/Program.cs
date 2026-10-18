@@ -3,6 +3,22 @@ using Mor.PowerManagement.Infrastructure.Data;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+var isDocGen = string.Join(' ', Environment.GetCommandLineArgs())
+    .Contains("getdocument", StringComparison.OrdinalIgnoreCase);
+
+if (!isDocGen && builder.Environment.IsProduction())
+{
+    if (string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("Mor.PowerManagementDb")))
+    {
+        throw new InvalidOperationException("Production requires ConnectionStrings__Mor.PowerManagementDb to be configured.");
+    }
+
+    var deviceApiKey = builder.Configuration["Device:ApiKey"];
+    if (string.IsNullOrWhiteSpace(deviceApiKey) || deviceApiKey.Length < 32)
+    {
+        throw new InvalidOperationException("Production requires Device__ApiKey to be set to a random secret of at least 32 characters.");
+    }
+}
 
 // Managed hosts (Render/Railway/Fly) hand us a dynamic port via $PORT.
 var port = Environment.GetEnvironmentVariable("PORT");
@@ -42,8 +58,6 @@ app.UseForwardedHeaders();
 // `dotnet ef database update` from, so initialise in every environment —
 // except the OpenAPI doc-generation tool run at build time, which executes
 // this pipeline without a database.
-var isDocGen = string.Join(' ', Environment.GetCommandLineArgs())
-    .Contains("getdocument", StringComparison.OrdinalIgnoreCase);
 if (!isDocGen)
 {
     await app.InitialiseDatabaseAsync();

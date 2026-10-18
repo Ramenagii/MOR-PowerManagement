@@ -36,8 +36,14 @@ public sealed record LoadSheddingState
 {
     public static readonly LoadSheddingState Initial = new();
 
-    /// <summary>Consecutive batches seen over P_limit. Reset on the first batch under it.</summary>
+    /// <summary>Consecutive fresh batches seen over P_limit (diagnostic only).</summary>
     public int ConsecutiveOverLimitBatches { get; init; }
+
+    /// <summary>First fresh sample in the current sustained system-overload interval.</summary>
+    public DateTimeOffset? OverLimitSinceUtc { get; init; }
+
+    /// <summary>Timestamp of the last fresh sample used to confirm system overload.</summary>
+    public DateTimeOffset? LastOverLimitSampleUtc { get; init; }
 
     /// <summary>Consecutive fresh batches above each energized outlet's own allowance.</summary>
     public IReadOnlyDictionary<int, int> ConsecutiveOutletOverLimitBatches { get; init; }
@@ -70,7 +76,7 @@ public sealed record LoadSheddingDecision(
     LoadSheddingState NextState,
     double RecoveryLimitWatts,
     int ConsecutiveOverLimitBatches,
-    int OverLimitConfirmationBatches);
+    int OverLimitConfirmationSeconds);
 
 /// <summary>A branch whose reported data cannot be trusted.</summary>
 public sealed record SensorFault(int OutletId, string Reason);
@@ -84,7 +90,7 @@ public sealed record SensorFault(int OutletId, string Reason);
 /// makes the whole ladder reproducible for thesis evaluation.
 ///
 /// Shape of one cycle:
-///   over P_limit  -> confirm N consecutive batches -> shed ONE lowest-tier
+///   over P_limit  -> confirm 3 s of fresh over-limit readings -> shed ONE lowest-tier
 ///                    branch -> remeasure on the next batch -> repeat while
 ///                    still over
 ///   under recovery-> wait the recovery period -> reclose ONE highest-tier
@@ -254,6 +260,8 @@ public static class LoadSheddingEngine
             var next = state with
             {
                 ConsecutiveOverLimitBatches = 0,
+                OverLimitSinceUtc = null,
+                LastOverLimitSampleUtc = null,
                 ConsecutiveOutletOverLimitBatches = new Dictionary<int, int>(),
                 FaultLatched = true,
             };
@@ -266,7 +274,7 @@ public static class LoadSheddingEngine
                 next,
                 recoveryLimit,
                 next.ConsecutiveOverLimitBatches,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         // An outlet at or above its own configured allowance is disconnected
@@ -278,6 +286,7 @@ public static class LoadSheddingEngine
             var fresh = outlet.LastSeen is { } lastSeen
                 && lastSeen >= now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds);
             var overAllowance = !state.ManualOverride
+                && !LoadTierMapper.IsMonitoredOnlyOutlet(outlet.Id)
                 && LoadResponseEvaluator.IsEnergized(outlet.Status)
                 && fresh
                 && outlet.Watts >= outlet.AllowanceWatts;
@@ -291,6 +300,7 @@ public static class LoadSheddingEngine
         if (!state.ManualOverride)
         {
             var overAllowance = outlets
+                .Where(o => !LoadTierMapper.IsMonitoredOnlyOutlet(o.Id))
                 .Where(o => !o.IsProtected)
                 .Where(o => outletCounters[o.Id] >= LoadSheddingSettings.OutletAllowanceConfirmationBatches)
                 .OrderByDescending(o => o.Watts - o.AllowanceWatts)
@@ -333,24 +343,31 @@ public static class LoadSheddingEngine
         // ---- 2. Overload path: confirm, then shed one branch per batch.
         if (overLimit)
         {
-            var counter = state.ConsecutiveOverLimitBatches + 1;
+            var gap = state.LastOverLimitSampleUtc is { } lastSample ? now - lastSample : TimeSpan.MaxValue;
+            var uninterrupted = gap >= TimeSpan.Zero
+                && gap <= TimeSpan.FromSeconds(LoadSheddingSettings.MaxOverLimitSampleGapSeconds);
+            var startedAt = uninterrupted ? state.OverLimitSinceUtc ?? now : now;
+            var elapsed = now - startedAt;
+            var counter = uninterrupted ? state.ConsecutiveOverLimitBatches + 1 : 1;
             var confirmed = state with
             {
                 ConsecutiveOverLimitBatches = counter,
+                OverLimitSinceUtc = startedAt,
+                LastOverLimitSampleUtc = now,
                 BelowRecoveryLimitSinceUtc = null,
             };
 
-            if (counter < LoadSheddingSettings.OverLimitConfirmationBatches)
+            if (elapsed < TimeSpan.FromSeconds(LoadSheddingSettings.OverLimitConfirmationSeconds))
             {
                 return new LoadSheddingDecision(
                     LoadSheddingAction.None,
                     null,
                     null,
-                    $"P_total {total:F0} W is over P_limit {pLimitWatts:F0} W; confirming ({counter}/{LoadSheddingSettings.OverLimitConfirmationBatches} batches).",
+                    $"P_total {total:F0} W is over P_limit {pLimitWatts:F0} W; sustained for {elapsed.TotalSeconds:F1}/{LoadSheddingSettings.OverLimitConfirmationSeconds} s.",
                     confirmed,
                     recoveryLimit,
                     counter,
-                    LoadSheddingSettings.OverLimitConfirmationBatches);
+                    LoadSheddingSettings.OverLimitConfirmationSeconds);
             }
 
             if (state.ManualOverride)
@@ -363,7 +380,7 @@ public static class LoadSheddingEngine
                     confirmed,
                     recoveryLimit,
                     counter,
-                    LoadSheddingSettings.OverLimitConfirmationBatches);
+                    LoadSheddingSettings.OverLimitConfirmationSeconds);
             }
 
             var next = SelectNextShed(outlets, 1).FirstOrDefault();
@@ -384,7 +401,7 @@ public static class LoadSheddingEngine
                     latched,
                     recoveryLimit,
                     counter,
-                    LoadSheddingSettings.OverLimitConfirmationBatches);
+                    LoadSheddingSettings.OverLimitConfirmationSeconds);
             }
 
             var tier = LoadTierMapper.ToTier(next.Priority);
@@ -400,18 +417,25 @@ public static class LoadSheddingEngine
                 LoadSheddingAction.Shed,
                 next.Id,
                 tier,
-                $"P_total {total:F0} W exceeded P_limit {pLimitWatts:F0} W for {counter} consecutive batches. " +
+                $"P_total {total:F0} W stayed over P_limit {pLimitWatts:F0} W for at least {LoadSheddingSettings.OverLimitConfirmationSeconds} s. " +
                 $"Shedding Outlet {next.Id} ({tier}, {next.Watts:F0} W) as the most expendable active load.",
                 shedState,
                 recoveryLimit,
                 counter,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         // ---- 3. Timed recovery ladder.
         // Recovery is time-based by design: after an automatic OFF, allow a
         // measured trial even when total demand remains high, then evaluate the
         // fresh post-switch telemetry and return the same outlet OFF if needed.
+        state = state with
+        {
+            ConsecutiveOverLimitBatches = 0,
+            OverLimitSinceUtc = null,
+            LastOverLimitSampleUtc = null,
+        };
+
         var recoveryStarted = state.BelowRecoveryLimitSinceUtc ?? now;
         var sinceRecovery = now - recoveryStarted;
 
@@ -420,6 +444,8 @@ public static class LoadSheddingEngine
             var waiting = state with
             {
                 ConsecutiveOverLimitBatches = 0,
+                OverLimitSinceUtc = null,
+                LastOverLimitSampleUtc = null,
                 BelowRecoveryLimitSinceUtc = recoveryStarted,
                 FaultLatched = false,
             };
@@ -432,7 +458,7 @@ public static class LoadSheddingEngine
                 waiting,
                 recoveryLimit,
                 waiting.ConsecutiveOverLimitBatches,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         if (state.ShedLedger.Count == 0)
@@ -440,6 +466,8 @@ public static class LoadSheddingEngine
             var idle = state with
             {
                 ConsecutiveOverLimitBatches = 0,
+                OverLimitSinceUtc = null,
+                LastOverLimitSampleUtc = null,
                 BelowRecoveryLimitSinceUtc = null,
                 FaultLatched = false,
             };
@@ -452,7 +480,7 @@ public static class LoadSheddingEngine
                 idle,
                 recoveryLimit,
                 idle.ConsecutiveOverLimitBatches,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         if (state.ManualOverride)
@@ -462,10 +490,10 @@ public static class LoadSheddingEngine
                 null,
                 null,
                 $"{state.ShedLedger.Count} branch(es) are shed and the rig is healthy, but the operator has disabled automatic prioritisation. Manual restoration required.",
-                state with { ConsecutiveOverLimitBatches = 0, BelowRecoveryLimitSinceUtc = null },
+                state with { ConsecutiveOverLimitBatches = 0, OverLimitSinceUtc = null, LastOverLimitSampleUtc = null, BelowRecoveryLimitSinceUtc = null },
                 recoveryLimit,
                 0,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         // Inter-reconnect delay: one reclose, then wait a full delay before the
@@ -482,7 +510,7 @@ public static class LoadSheddingEngine
                 state,
                 recoveryLimit,
                 0,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         var nextRestore = SelectNextRestore(outlets, state.ShedLedger, 1).FirstOrDefault();
@@ -491,6 +519,8 @@ public static class LoadSheddingEngine
             var cleared2 = state with
             {
                 ConsecutiveOverLimitBatches = 0,
+                OverLimitSinceUtc = null,
+                LastOverLimitSampleUtc = null,
                 BelowRecoveryLimitSinceUtc = null,
                 FaultLatched = false,
             };
@@ -503,13 +533,15 @@ public static class LoadSheddingEngine
                 cleared2,
                 recoveryLimit,
                 cleared2.ConsecutiveOverLimitBatches,
-                LoadSheddingSettings.OverLimitConfirmationBatches);
+                LoadSheddingSettings.OverLimitConfirmationSeconds);
         }
 
         var restoreTier = LoadTierMapper.ToTier(nextRestore.Priority);
         var restored = state with
         {
             ConsecutiveOverLimitBatches = 0,
+            OverLimitSinceUtc = null,
+            LastOverLimitSampleUtc = null,
             BelowRecoveryLimitSinceUtc = null,
             LastReconnectUtc = now,
             ShedLedger = state.ShedLedger.Where(r => r.OutletId != nextRestore.Id).ToList(),
@@ -524,6 +556,6 @@ public static class LoadSheddingEngine
             restored,
             recoveryLimit,
             restored.ConsecutiveOverLimitBatches,
-            LoadSheddingSettings.OverLimitConfirmationBatches);
+            LoadSheddingSettings.OverLimitConfirmationSeconds);
     }
 }

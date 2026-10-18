@@ -41,7 +41,9 @@ public static class LoadResponseEvaluator
         => status is OutletStatus.Active or OutletStatus.Standby;
 
     public static double TotalLoad(IEnumerable<OutletLoadSnapshot> outlets)
-        => outlets.Where(o => IsEnergized(o.Status)).Sum(o => o.Watts);
+        => outlets
+            .Where(o => !LoadTierMapper.IsMonitoredOnlyOutlet(o.Id) && IsEnergized(o.Status))
+            .Sum(o => o.Watts);
 
     public static SystemState GetSystemState(double totalWatts, double warningThreshold, double criticalThreshold)
     {

@@ -9,6 +9,9 @@ namespace Mor.PowerManagement.Domain.Services;
 /// </summary>
 public static class LoadTierMapper
 {
+    public static bool IsMonitoredOnlyOutlet(int outletId)
+        => outletId == LoadSheddingSettings.MonitoredOnlyOutletId;
+
     // OutletPriority.Low is shed first (rank 1) and LoadTier.Nonessential is
     // shed first (rank 4), so the two scales run opposite ways and the
     // conversion must invert rather than copy.
@@ -82,6 +85,7 @@ public static class LoadTierMapper
     /// </summary>
     public static bool IsAutoSheddable(OutletLoadSnapshot outlet)
         => LoadResponseEvaluator.IsEnergized(outlet.Status)
+            && !IsMonitoredOnlyOutlet(outlet.Id)
             && !outlet.IsProtected;
 
     /// <summary>
@@ -91,6 +95,7 @@ public static class LoadTierMapper
     /// </summary>
     public static bool IsAutoRestorable(OutletLoadSnapshot outlet)
         => outlet.Status == OutletStatus.Disconnected
+            && !IsMonitoredOnlyOutlet(outlet.Id)
             && !outlet.IsProtected
             && !outlet.ManualHold
             && !outlet.RecoveryLockout

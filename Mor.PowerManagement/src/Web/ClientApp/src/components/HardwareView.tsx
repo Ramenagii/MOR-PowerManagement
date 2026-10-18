@@ -131,6 +131,32 @@ export function HardwareView() {
         </div>
       </header>
 
+      <section className="ant-card mb-space-lg" aria-labelledby="quick-setup-heading">
+        <div className="ant-card-header">
+          <h2 id="quick-setup-heading" className="font-title-lg text-title-lg font-semibold text-on-surface">
+            Quick setup checklist
+          </h2>
+        </div>
+        <ol className="ant-card-body grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <li className="rounded-md border border-outline-variant bg-surface-container-low p-3">
+            <strong className="block text-on-surface">1. Sign in</strong>
+            <span className="mt-1 block text-sm text-on-surface-variant">Use the administrator account before changing outlet settings.</span>
+          </li>
+          <li className="rounded-md border border-outline-variant bg-surface-container-low p-3">
+            <strong className="block text-on-surface">2. Check device freshness</strong>
+            <span className="mt-1 block text-sm text-on-surface-variant">Confirm the ESP32 is online and each outlet has reported recently.</span>
+          </li>
+          <li className="rounded-md border border-outline-variant bg-surface-container-low p-3">
+            <strong className="block text-on-surface">3. Set outlet policy</strong>
+            <span className="mt-1 block text-sm text-on-surface-variant">Assign outlet names, priorities, protection, and load limits in Threshold.</span>
+          </li>
+          <li className="rounded-md border border-outline-variant bg-surface-container-low p-3">
+            <strong className="block text-on-surface">4. Confirm relay feedback</strong>
+            <span className="mt-1 block text-sm text-on-surface-variant">After a manual command, wait for the device to acknowledge the relay state.</span>
+          </li>
+        </ol>
+      </section>
+
       {/* --- The one loud thing ---------------------------------------------- */}
       <section
         className="ant-card mb-space-lg overflow-hidden border-l-4 border-l-error"

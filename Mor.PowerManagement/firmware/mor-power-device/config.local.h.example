@@ -12,3 +12,22 @@
 #ifndef WIFI_PASS
 #define WIFI_PASS ""
 #endif
+
+// For a Render deployment, set these in your ignored config.local.h and
+// use the same random DEVICE_API_KEY as Render's Device__ApiKey secret.
+// BACKEND_HOST is the Render hostname only (no scheme or path).
+#ifndef BACKEND_HOST
+#define BACKEND_HOST ""
+#endif
+#ifndef BACKEND_PORT
+#define BACKEND_PORT 443
+#endif
+#ifndef BACKEND_BASE
+#define BACKEND_BASE "/api"
+#endif
+#ifndef BACKEND_USE_TLS
+#define BACKEND_USE_TLS 1
+#endif
+#ifndef DEVICE_API_KEY
+#define DEVICE_API_KEY ""
+#endif

@@ -13,7 +13,13 @@ export function formatWatts(value: number) {
 }
 
 export function totalLoad(outlets: Outlet[]) {
-  return outlets.reduce((sum, outlet) => sum + outlet.watts, 0)
+  return outlets.reduce((sum, outlet) => sum + (isOutletFresh(outlet) ? outlet.watts : 0), 0)
+}
+
+export function isOutletFresh(outlet: Outlet, now = Date.now()) {
+  if (!outlet.lastSeen) return false
+  const timestamp = Date.parse(outlet.lastSeen)
+  return Number.isFinite(timestamp) && now - timestamp <= 30_000
 }
 
 export function isEnergizedOutlet(status: OutletStatus) {

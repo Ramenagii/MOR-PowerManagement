@@ -3,6 +3,7 @@ import {
   ArrowDown,
   ArrowUp,
   CloudOff,
+  Download,
   Info,
   RefreshCw,
   Sigma,
@@ -64,6 +65,11 @@ function utcStamp(stamp: string | undefined): string {
 
 function formatValue(value: number | null, digits: number): string {
   return value === null || !Number.isFinite(value) ? UNAVAILABLE : value.toFixed(digits)
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = value === null || value === undefined ? '' : String(value)
+  return `"${text.replace(/"/g, '""')}"`
 }
 
 export function TelemetryView() {
@@ -133,6 +139,43 @@ export function TelemetryView() {
     },
     [activeWindow],
   )
+
+  const exportCsv = () => {
+    if (!series) return
+    const channels = series.channels.filter((channel) => !hidden.includes(channel.outletId))
+    const header = [
+      'Timestamp',
+      'System watts',
+      'Window energy kWh',
+      ...channels.flatMap((channel) => [
+        `CH${channel.outletId} ${channel.name} watts`,
+        `CH${channel.outletId} ${channel.name} volts`,
+        `CH${channel.outletId} ${channel.name} amps`,
+      ]),
+    ]
+    const lines = [header.map(csvCell).join(',')]
+    series.timestamps.forEach((timestamp, index) => {
+      lines.push([
+        csvCell(timestamp),
+        csvCell(series.totals.watts[index]),
+        csvCell(series.totals.energyKwhDelta),
+        ...channels.flatMap((channel) => [
+          csvCell(channel.watts[index]),
+          csvCell(channel.volts[index]),
+          csvCell(channel.amps[index]),
+        ]),
+      ].join(','))
+    })
+    const blob = new Blob([`\uFEFF${lines.join('\r\n')}`], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `mor-power-${series.window}-${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  }
 
   useEffect(() => {
     void load(false)
@@ -338,6 +381,9 @@ export function TelemetryView() {
             >
               <RefreshCw size={14} className={status === 'loading' ? 'animate-spin' : ''} aria-hidden="true" />
             </button>
+            <button type="button" className="st-btn" onClick={exportCsv} disabled={!series}>
+              <Download size={14} aria-hidden="true" /> Export CSV
+            </button>
           </div>
         </div>
       </header>
@@ -355,7 +401,7 @@ export function TelemetryView() {
       )}
 
       {/* ---------------- Stat strip ---------------- */}
-      <section className="st-stats st-stats-5" aria-label="Window statistics">
+      <section className="st-stats st-stats-6" aria-label="Window statistics">
         <StatCard
           label="Min Power"
           icon={<ArrowDown size={14} aria-hidden="true" />}
@@ -397,6 +443,13 @@ export function TelemetryView() {
           unit={null}
           foot={`${formatDuration(duty.seconds)} / ${formatDuration(duty.windowSeconds)}`}
           ok={duty.ratio !== null}
+        />
+        <StatCard
+          label="Window Energy"
+          icon={<Zap size={14} aria-hidden="true" />}
+          value={series?.totals.energyKwhDelta == null ? UNAVAILABLE : series.totals.energyKwhDelta.toFixed(3)}
+          unit={series?.totals.energyKwhDelta == null ? null : 'kWh'}
+          foot={`${activeWindow} telemetry window`}
         />
       </section>
 

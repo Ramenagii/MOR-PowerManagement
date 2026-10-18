@@ -5,7 +5,7 @@ import { login } from '../api'
 import { LoadwiseBrand } from './LoadwiseBrand'
 
 type LoginGateProps = {
-  onAuthenticated: () => void
+  onAuthenticated: (email: string) => void
   onOffline: () => void
 }
 
@@ -23,7 +23,7 @@ export function LoginGate({ onAuthenticated, onOffline }: LoginGateProps) {
     setError(null)
     try {
       await login(email, password)
-      onAuthenticated()
+      onAuthenticated(email)
     } catch {
       setError('Login failed. Check the credentials and that the backend is running.')
     } finally {

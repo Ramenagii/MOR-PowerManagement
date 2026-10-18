@@ -60,33 +60,79 @@ export function NotificationCentre({ events, userKey }: NotificationCentreProps)
   const storageKey = `mor.notifications.readThrough.${userKey || 'local'}`
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const notifiedIds = useRef<Set<number> | null>(null)
+  const readIds = useRef<Set<number> | null>(null)
   const reduceMotion = useReducedMotion()
 
   useEffect(() => {
     if (!events.length) return
-    const latestId = Math.max(...events.map((event) => event.id))
-    const saved = window.localStorage.getItem(storageKey)
-    // Establish a baseline on first use; old event history should not appear
-    // as a flood of newly received notifications on first login.
-    if (saved === null) {
-      window.localStorage.setItem(storageKey, String(latestId))
-      setUnread(0)
+    const notified = notifiedIds.current
+    if (notified === null) {
+      notifiedIds.current = new Set(events.map((event) => event.id))
       return
     }
-    const readThrough = Number(saved) || 0
+    const fresh = events.filter((event) => !notified.has(event.id))
+    for (const event of fresh) notified.add(event.id)
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    for (const event of fresh.filter((item) => item.severity === 'warning' || item.severity === 'critical')) {
+      const notification = new Notification(event.title, {
+        body: event.detail,
+        tag: `mor-power-event-${event.id}`,
+      })
+      notification.onclick = () => window.focus()
+    }
+  }, [events])
+
+  async function enableDesktopAlerts() {
+    if (typeof Notification === 'undefined') return
+    if (Notification.permission === 'default') await Notification.requestPermission()
+    setAlertPermission(Notification.permission)
+  }
+
+  const [alertPermission, setAlertPermission] = useState(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+  )
+
+  useEffect(() => {
+    if (!events.length) return
+    if (readIds.current === null) {
+      const saved = window.localStorage.getItem(storageKey)
+      if (saved === null) {
+        readIds.current = new Set(events.map((event) => event.id))
+        window.localStorage.setItem(storageKey, JSON.stringify([...readIds.current]))
+        setUnread(0)
+        return
+      }
+      try {
+        const parsed: unknown = JSON.parse(saved)
+        if (Array.isArray(parsed)) readIds.current = new Set(parsed.filter((id: unknown): id is number => Number.isInteger(id)))
+      } catch {
+        // Older versions stored a numeric read-through id; migrate it below.
+      }
+      if (readIds.current === null) {
+        const readThrough = Number(saved) || 0
+        readIds.current = new Set(events.filter((event) => event.id > 0 && event.id <= readThrough).map((event) => event.id))
+      }
+    }
+    const read = readIds.current
+    if (!read) return
     if (open) {
-      window.localStorage.setItem(storageKey, String(latestId))
+      for (const event of events) read.add(event.id)
+      window.localStorage.setItem(storageKey, JSON.stringify([...read].slice(-500)))
       setUnread(0)
       return
     }
-    setUnread(events.filter((event) => event.id > readThrough).length)
+    setUnread(events.filter((event) => !read.has(event.id)).length)
   }, [events, storageKey, open])
 
   function toggle() {
     const nextOpen = !open
     setOpen(nextOpen)
     if (nextOpen && events.length) {
-      window.localStorage.setItem(storageKey, String(Math.max(...events.map((event) => event.id))))
+      const read = readIds.current ?? new Set<number>()
+      readIds.current = read
+      for (const event of events) read.add(event.id)
+      window.localStorage.setItem(storageKey, JSON.stringify([...read].slice(-500)))
       setUnread(0)
     }
   }
@@ -146,6 +192,17 @@ export function NotificationCentre({ events, userKey }: NotificationCentreProps)
               and the event count stay reachable with eight rows of detail
               behind them. */}
           <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="flex items-center justify-between gap-3 border-b border-outline-variant bg-surface-container-low px-4 py-2">
+              <span className="text-xs text-on-surface-variant">Desktop alerts for warnings and critical events</span>
+              <button
+                type="button"
+                className="ant-btn ant-btn-default"
+                onClick={() => void enableDesktopAlerts()}
+                disabled={alertPermission === 'granted' || alertPermission === 'denied' || alertPermission === 'unsupported'}
+              >
+                {alertPermission === 'granted' ? 'Enabled' : alertPermission === 'denied' ? 'Blocked in browser' : alertPermission === 'unsupported' ? 'Unavailable' : 'Enable alerts'}
+              </button>
+            </div>
             <EventLogPanel events={events} onDismiss={() => setOpen(false)} />
           </div>
         </motion.div>

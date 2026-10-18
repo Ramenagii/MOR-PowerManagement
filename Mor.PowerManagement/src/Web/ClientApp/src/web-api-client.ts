@@ -2595,7 +2595,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
     faultLatched!: boolean;
     recoveryLimitWatts!: number;
     hysteresisFraction!: number;
-    overLimitConfirmationBatches!: number;
+    overLimitConfirmationSeconds!: number;
     recoveryPeriodSeconds!: number;
     interReconnectDelaySeconds!: number;
     consecutiveOverLimitBatches!: number;
@@ -2627,7 +2627,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
             this.faultLatched = _data["faultLatched"];
             this.recoveryLimitWatts = _data["recoveryLimitWatts"];
             this.hysteresisFraction = _data["hysteresisFraction"];
-            this.overLimitConfirmationBatches = _data["overLimitConfirmationBatches"];
+            this.overLimitConfirmationSeconds = _data["overLimitConfirmationSeconds"];
             this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
             this.interReconnectDelaySeconds = _data["interReconnectDelaySeconds"];
             this.consecutiveOverLimitBatches = _data["consecutiveOverLimitBatches"];
@@ -2658,7 +2658,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
         data["faultLatched"] = this.faultLatched;
         data["recoveryLimitWatts"] = this.recoveryLimitWatts;
         data["hysteresisFraction"] = this.hysteresisFraction;
-        data["overLimitConfirmationBatches"] = this.overLimitConfirmationBatches;
+        data["overLimitConfirmationSeconds"] = this.overLimitConfirmationSeconds;
         data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
         data["interReconnectDelaySeconds"] = this.interReconnectDelaySeconds;
         data["consecutiveOverLimitBatches"] = this.consecutiveOverLimitBatches;
@@ -2678,7 +2678,7 @@ export interface IFrameworkStateDto {
     faultLatched: boolean;
     recoveryLimitWatts: number;
     hysteresisFraction: number;
-    overLimitConfirmationBatches: number;
+    overLimitConfirmationSeconds: number;
     recoveryPeriodSeconds: number;
     interReconnectDelaySeconds: number;
     consecutiveOverLimitBatches: number;
@@ -3176,7 +3176,7 @@ export class LoadSheddingResult implements ILoadSheddingResult {
     pLimitWatts!: number;
     recoveryLimitWatts!: number;
     consecutiveOverLimitBatches!: number;
-    overLimitConfirmationBatches!: number;
+    overLimitConfirmationSeconds!: number;
     recoveryPeriodSeconds!: number;
     shedOutletIds!: number[];
     manualOverride!: boolean;
@@ -3210,7 +3210,7 @@ export class LoadSheddingResult implements ILoadSheddingResult {
             this.pLimitWatts = _data["pLimitWatts"];
             this.recoveryLimitWatts = _data["recoveryLimitWatts"];
             this.consecutiveOverLimitBatches = _data["consecutiveOverLimitBatches"];
-            this.overLimitConfirmationBatches = _data["overLimitConfirmationBatches"];
+            this.overLimitConfirmationSeconds = _data["overLimitConfirmationSeconds"];
             this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
             if (Array.isArray(_data["shedOutletIds"])) {
                 this.shedOutletIds = [] as any;
@@ -3243,7 +3243,7 @@ export class LoadSheddingResult implements ILoadSheddingResult {
         data["pLimitWatts"] = this.pLimitWatts;
         data["recoveryLimitWatts"] = this.recoveryLimitWatts;
         data["consecutiveOverLimitBatches"] = this.consecutiveOverLimitBatches;
-        data["overLimitConfirmationBatches"] = this.overLimitConfirmationBatches;
+        data["overLimitConfirmationSeconds"] = this.overLimitConfirmationSeconds;
         data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
         if (Array.isArray(this.shedOutletIds)) {
             data["shedOutletIds"] = [];
@@ -3265,7 +3265,7 @@ export interface ILoadSheddingResult {
     pLimitWatts: number;
     recoveryLimitWatts: number;
     consecutiveOverLimitBatches: number;
-    overLimitConfirmationBatches: number;
+    overLimitConfirmationSeconds: number;
     recoveryPeriodSeconds: number;
     shedOutletIds: number[];
     manualOverride: boolean;
@@ -3554,6 +3554,7 @@ export class OutletStateDto implements IOutletStateDto {
     nextRecoveryAtUtc!: Date | undefined;
     commandNeedsReview!: boolean;
     commandPending!: boolean;
+    recoveryTrialPending!: boolean;
 
     [key: string]: any;
 
@@ -3596,6 +3597,7 @@ export class OutletStateDto implements IOutletStateDto {
             this.nextRecoveryAtUtc = _data["nextRecoveryAtUtc"] ? new Date(_data["nextRecoveryAtUtc"].toString()) : undefined as any;
             this.commandNeedsReview = _data["commandNeedsReview"];
             this.commandPending = _data["commandPending"];
+            this.recoveryTrialPending = _data["recoveryTrialPending"];
         }
     }
 
@@ -3636,6 +3638,7 @@ export class OutletStateDto implements IOutletStateDto {
         data["nextRecoveryAtUtc"] = this.nextRecoveryAtUtc ? this.nextRecoveryAtUtc.toISOString() : undefined as any;
         data["commandNeedsReview"] = this.commandNeedsReview;
         data["commandPending"] = this.commandPending;
+        data["recoveryTrialPending"] = this.recoveryTrialPending;
         return data;
     }
 }
@@ -3665,6 +3668,7 @@ export interface IOutletStateDto {
     nextRecoveryAtUtc: Date | undefined;
     commandNeedsReview: boolean;
     commandPending: boolean;
+    recoveryTrialPending: boolean;
 
     [key: string]: any;
 }
@@ -3675,6 +3679,7 @@ export class PowerEventDto implements IPowerEventDto {
     title!: string;
     detail!: string;
     severity!: number;
+    actor!: string | undefined;
 
     [key: string]: any;
 
@@ -3698,6 +3703,7 @@ export class PowerEventDto implements IPowerEventDto {
             this.title = _data["title"];
             this.detail = _data["detail"];
             this.severity = _data["severity"];
+            this.actor = _data["actor"];
         }
     }
 
@@ -3719,6 +3725,7 @@ export class PowerEventDto implements IPowerEventDto {
         data["title"] = this.title;
         data["detail"] = this.detail;
         data["severity"] = this.severity;
+        data["actor"] = this.actor;
         return data;
     }
 }
@@ -3729,6 +3736,7 @@ export interface IPowerEventDto {
     title: string;
     detail: string;
     severity: number;
+    actor: string | undefined;
 
     [key: string]: any;
 }
@@ -5156,6 +5164,7 @@ export interface ITwoFactorResponse {
 
 export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
     outletId?: number;
+    name?: string | undefined;
     priority?: number | undefined;
     allowanceWatts?: number | undefined;
     isProtected?: boolean | undefined;
@@ -5181,6 +5190,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
                     this[property] = _data[property];
             }
             this.outletId = _data["outletId"];
+            this.name = _data["name"];
             this.priority = _data["priority"];
             this.allowanceWatts = _data["allowanceWatts"];
             this.isProtected = _data["isProtected"];
@@ -5204,6 +5214,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
                 data[property] = this[property];
         }
         data["outletId"] = this.outletId;
+        data["name"] = this.name;
         data["priority"] = this.priority;
         data["allowanceWatts"] = this.allowanceWatts;
         data["isProtected"] = this.isProtected;
@@ -5216,6 +5227,7 @@ export class UpdateOutletPolicyCommand implements IUpdateOutletPolicyCommand {
 
 export interface IUpdateOutletPolicyCommand {
     outletId?: number;
+    name?: string | undefined;
     priority?: number | undefined;
     allowanceWatts?: number | undefined;
     isProtected?: boolean | undefined;

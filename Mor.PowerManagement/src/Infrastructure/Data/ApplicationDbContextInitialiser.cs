@@ -8,6 +8,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using System.Text;
 
 namespace Mor.PowerManagement.Infrastructure.Data;
@@ -31,13 +33,23 @@ public class ApplicationDbContextInitialiser
     private readonly ApplicationDbContext _context;
     private readonly UserManager<ApplicationUser> _userManager;
     private readonly RoleManager<IdentityRole> _roleManager;
+    private readonly IConfiguration _configuration;
+    private readonly IHostEnvironment _environment;
 
-    public ApplicationDbContextInitialiser(ILogger<ApplicationDbContextInitialiser> logger, ApplicationDbContext context, UserManager<ApplicationUser> userManager, RoleManager<IdentityRole> roleManager)
+    public ApplicationDbContextInitialiser(
+        ILogger<ApplicationDbContextInitialiser> logger,
+        ApplicationDbContext context,
+        UserManager<ApplicationUser> userManager,
+        RoleManager<IdentityRole> roleManager,
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         _logger = logger;
         _context = context;
         _userManager = userManager;
         _roleManager = roleManager;
+        _configuration = configuration;
+        _environment = environment;
     }
 
     public async Task InitialiseAsync()
@@ -74,42 +86,46 @@ public class ApplicationDbContextInitialiser
 
         if (_roleManager.Roles.All(r => r.Name != administratorRole.Name))
         {
-            await _roleManager.CreateAsync(administratorRole);
+            var roleResult = await _roleManager.CreateAsync(administratorRole);
+            ThrowIfFailed(roleResult, "Creating the administrator role");
         }
 
-        // Default users
-        var administrator = new ApplicationUser { UserName = "administrator@localhost", Email = "administrator@localhost" };
+        var administrator = await EnsureAdministratorAsync(administratorRole);
 
-        if (_userManager.Users.All(u => u.UserName != administrator.UserName))
+        if (_environment.IsProduction())
         {
-            await _userManager.CreateAsync(administrator, "Administrator1!");
-            if (!string.IsNullOrWhiteSpace(administratorRole.Name))
+            var lockoutResult = await _userManager.SetLockoutEnabledAsync(administrator, true);
+            ThrowIfFailed(lockoutResult, "Enabling administrator lockout protection");
+
+            // Old deployments seeded this predictable demo user. Remove it on
+            // startup so its demo password cannot remain a production login.
+            if (await _userManager.FindByNameAsync("demo@localhost") is { } demoAccount)
             {
-                await _userManager.AddToRolesAsync(administrator, new [] { administratorRole.Name });
+                var deleteResult = await _userManager.DeleteAsync(demoAccount);
+                ThrowIfFailed(deleteResult, "Removing the development-only demo account from production");
             }
         }
-
-        // Hardcoded demo account for the GUI (local defense demo).
-        var demo = new ApplicationUser { UserName = "demo@localhost", Email = "demo@localhost" };
-
-        if (_userManager.Users.All(u => u.UserName != demo.UserName))
+        else
         {
-            await _userManager.CreateAsync(demo, "Demo1234!");
-        }
-
-        // A mistyped password during the demo must never lock the dashboard out:
-        // disable lockout for the local accounts and clear any active lockout.
-        foreach (var userName in new[] { administrator.UserName!, demo.UserName! })
-        {
-            var user = await _userManager.FindByNameAsync(userName);
-            if (user is null)
+            var demo = new ApplicationUser { UserName = "demo@localhost", Email = "demo@localhost" };
+            if (await _userManager.FindByNameAsync(demo.UserName) is null
+                && !string.IsNullOrWhiteSpace(_configuration["Admin:DevelopmentDemoPassword"]))
             {
-                continue;
+                var result = await _userManager.CreateAsync(demo, _configuration["Admin:DevelopmentDemoPassword"]!);
+                ThrowIfFailed(result, "Creating the development-only demo account");
             }
 
-            await _userManager.SetLockoutEnabledAsync(user, false);
-            await _userManager.ResetAccessFailedCountAsync(user);
-            await _userManager.SetLockoutEndDateAsync(user, null);
+            // Disable lockout only for local demo convenience.
+            foreach (var userName in new[] { administrator.UserName!, demo.UserName! })
+            {
+                var user = await _userManager.FindByNameAsync(userName);
+                if (user is not null)
+                {
+                    await _userManager.SetLockoutEnabledAsync(user, false);
+                    await _userManager.ResetAccessFailedCountAsync(user);
+                    await _userManager.SetLockoutEndDateAsync(user, null);
+                }
+            }
         }
 
         // Default data
@@ -424,5 +440,57 @@ public class ApplicationDbContextInitialiser
         }
 
         await _context.SaveChangesAsync();
+    }
+
+    private async Task<ApplicationUser> EnsureAdministratorAsync(IdentityRole administratorRole)
+    {
+        const string administratorName = "administrator@localhost";
+        const string retiredDefaultPassword = "Administrator1!";
+        var administrator = await _userManager.FindByNameAsync(administratorName);
+        var initialPassword = _configuration["Admin:InitialPassword"];
+
+        if (administrator is null)
+        {
+            initialPassword = RequireInitialPassword(initialPassword);
+            administrator = new ApplicationUser { UserName = administratorName, Email = administratorName };
+            var createResult = await _userManager.CreateAsync(administrator, initialPassword);
+            ThrowIfFailed(createResult, "Creating the initial administrator account");
+        }
+        else if (_environment.IsProduction() && await _userManager.CheckPasswordAsync(administrator, retiredDefaultPassword))
+        {
+            // Existing Neon databases may already contain the former demo
+            // credential. Replace it once using the hosting secret.
+            initialPassword = RequireInitialPassword(initialPassword);
+            var changeResult = await _userManager.ChangePasswordAsync(administrator, retiredDefaultPassword, initialPassword);
+            ThrowIfFailed(changeResult, "Rotating the former default administrator password");
+        }
+
+        if (!string.IsNullOrWhiteSpace(administratorRole.Name)
+            && !await _userManager.IsInRoleAsync(administrator, administratorRole.Name))
+        {
+            var roleResult = await _userManager.AddToRoleAsync(administrator, administratorRole.Name);
+            ThrowIfFailed(roleResult, "Assigning the administrator role");
+        }
+
+        return administrator;
+    }
+
+    private static string RequireInitialPassword(string? password)
+    {
+        if (string.IsNullOrWhiteSpace(password) || password.Length < 16)
+        {
+            throw new InvalidOperationException(
+                "Set Admin__InitialPassword to a unique password with at least 16 characters before the first production startup (or while rotating the former default password).");
+        }
+
+        return password;
+    }
+
+    private static void ThrowIfFailed(IdentityResult result, string operation)
+    {
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"{operation} failed: {string.Join("; ", result.Errors.Select(error => error.Description))}");
+        }
     }
 }
