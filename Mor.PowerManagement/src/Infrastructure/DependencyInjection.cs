@@ -16,11 +16,11 @@ public static class DependencyInjection
     public static void AddInfrastructureServices(this IHostApplicationBuilder builder)
     {
         var rawConnectionString = builder.Configuration.GetConnectionString(Services.Database);
-        Guard.Against.Null(rawConnectionString, message: $"Connection string '{Services.Database}' not found.");
+        Guard.Against.NullOrWhiteSpace(rawConnectionString, message: $"Connection string '{Services.Database}' not found.");
 
         // Neon hands out URLs like postgresql://user:pass@host/db?sslmode=require;
         // Npgsql expects ADO.NET format, so normalise before handing it to EF Core.
-        var connectionString = NormalizePostgresConnectionString(rawConnectionString);
+        var connectionString = NormalizePostgresConnectionString(rawConnectionString, builder.Environment.IsProduction());
 
         builder.Services.AddScoped<ISaveChangesInterceptor, AuditableEntityInterceptor>();
         builder.Services.AddScoped<ISaveChangesInterceptor, DispatchDomainEventsInterceptor>();
@@ -86,11 +86,17 @@ public static class DependencyInjection
         builder.Services.AddHostedService<TelemetryRetentionService>();
     }
 
-    private static string NormalizePostgresConnectionString(string raw)
+    private static string NormalizePostgresConnectionString(string raw, bool requireTls)
     {
         if (!raw.Contains("://", StringComparison.Ordinal))
         {
-            return raw;
+            var native = new NpgsqlConnectionStringBuilder(raw);
+            if (requireTls)
+            {
+                native.SslMode = SslMode.Require;
+            }
+
+            return native.ConnectionString;
         }
 
         var uri = new Uri(raw);
@@ -100,7 +106,7 @@ public static class DependencyInjection
             Host = uri.Host,
             Port = uri.Port > 0 ? uri.Port : 5432,
             Database = Uri.UnescapeDataString(uri.AbsolutePath.Trim('/')),
-            SslMode = SslMode.Require,
+            SslMode = requireTls ? SslMode.Require : SslMode.Prefer,
         };
 
         var userInfo = uri.UserInfo.Split(':', 2);

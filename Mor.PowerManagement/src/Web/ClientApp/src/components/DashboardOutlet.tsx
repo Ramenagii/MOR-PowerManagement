@@ -54,10 +54,11 @@ const SPARK_H = 64
  * an open branch sits at 0 W and therefore always bands Normal. Collapsing them
  * would make an isolated outlet the healthiest thing in the grid.
  */
-type BranchBand = 'offline' | 'nocap' | 'normal' | 'near' | 'over'
+type BranchBand = 'offline' | 'stale' | 'nocap' | 'normal' | 'near' | 'over'
 
 const BAND_TAG: Record<BranchBand, string> = {
   offline: 'tag band-offline',
+  stale: 'tag band-offline',
   nocap: 'tag band-nocap',
   normal: 'tag band-normal',
   near: 'tag band-near',
@@ -67,6 +68,7 @@ const BAND_TAG: Record<BranchBand, string> = {
 /** One word. A row is read from across a room; the rest is a tooltip. */
 const BAND_WORD: Record<BranchBand, string> = {
   offline: 'Offline',
+  stale: 'Stale',
   nocap: 'No cap',
   normal: 'Normal',
   near: 'Near cap',
@@ -117,8 +119,9 @@ const STATE_TAG: Record<RelayTone | 'none', string> = {
  *     cap" would both be invented. `allowance` comes straight off the admin
  *     field with no fallback in api.ts, so 0 is a value the server can send.
  */
-export function branchBand(watts: number, allowance: number, live: boolean): BranchBand {
+export function branchBand(watts: number, allowance: number, live: boolean, fresh = true): BranchBand {
   if (!live) return 'offline'
+  if (!fresh) return 'stale'
   if (!(allowance > 0)) return 'nocap'
   const pct = (watts / allowance) * 100
   if (pct > 100) return 'over'
@@ -165,7 +168,6 @@ export function branchBand(watts: number, allowance: number, live: boolean): Bra
 function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, mainsVolts, busy, onToggle }: DashboardOutletProps) {
   const monitorOnly = isMonitoredOnlyChannel(outlet.id)
   const latched = live && isLatchedOutlet(outlet.status)
-  const on = live && (monitorOnly || isEnergizedOutlet(outlet.status))
 
   /*
    * The relay-state chip. Gated on `live` for the same reason every other figure
@@ -175,10 +177,17 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
    * absent, so the row keeps its layout and does not reflow when the session
    * comes back.
    */
-  const state = live ? relayChip(outlet.status) : null
+  const readingAgeMs = outlet.lastSeen ? Date.now() - Date.parse(outlet.lastSeen) : Number.POSITIVE_INFINITY
+  const fresh = live && Number.isFinite(readingAgeMs) && readingAgeMs <= 30_000
+  const on = fresh && (monitorOnly || isEnergizedOutlet(outlet.status))
+  const state = fresh ? relayChip(outlet.status) : null
   const stateTag = state ? STATE_TAG[state.tone] : STATE_TAG.none
-  const stateWord = state?.word ?? UNAVAILABLE
-  const stateDetail = state ? state.detail : DASHBOARD_TIPS.offline
+  const stateWord = state?.word ?? (live ? 'Stale' : UNAVAILABLE)
+  const stateDetail = state ? state.detail : live
+    ? outlet.lastSeen
+      ? `Last report ${new Date(outlet.lastSeen).toLocaleString()}. This outlet has not sent fresh telemetry in the last 30 seconds.`
+      : 'This outlet has not reported a reading yet.'
+    : DASHBOARD_TIPS.offline
 
   /*
    * The allocation denominator, and it is whatever the server says it is. The
@@ -190,9 +199,9 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
    * says No cap, instead of showing Infinity %.
    */
   const allowance = outlet.allowance
-  const effWatts = live ? outlet.watts : 0
+  const effWatts = fresh ? outlet.watts : 0
   const usedPercent = allowance > 0 ? (effWatts / allowance) * 100 : 0
-  const over = live && allowance > 0 && outlet.watts > allowance
+  const over = fresh && allowance > 0 && outlet.watts > allowance
 
   /*
    * THE PEAK IS THE MAXIMUM OF WHAT IS LIVE AND WHAT WAS RECORDED.
@@ -234,16 +243,18 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
     bump(history)
     return max
   }, [peakHistory, history])
-  const peakWatts = live ? Math.max(bucketPeak, effWatts) : 0
+  const peakWatts = fresh ? Math.max(bucketPeak, effWatts) : 0
   const peakPercent = allowance > 0 ? (peakWatts / allowance) * 100 : 0
 
   // The badge's band and the tooltip sentence that explains it are derived from
   // the same three numbers as the meter below, so the chip can never disagree
   // with the bar it sits beside. Band text is one word; the tooltip carries the
   // arithmetic — both facts about this branch, neither of them invented.
-  const band = branchBand(effWatts, allowance, live)
+  const band = branchBand(effWatts, allowance, live, fresh)
   const bandTitle = `${!live
     ? 'GET /api/Dashboard/state did not answer, so this row carries no load reading and no band.'
+    : !fresh
+      ? 'This outlet has not reported within the 30-second freshness window. Its last wattage is withheld until a new reading arrives.'
     : band === 'nocap'
       ? 'No allowance is configured for this branch, so there is no cap to read the load against.'
       : `${Math.round(effWatts).toLocaleString()} W is ${Math.round(usedPercent)}% of its allowance.`} ${
@@ -299,17 +310,28 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
   // figure in the pair on a 5 V socket. `mainsVolts` is already null for that
   // channel, so the pair reads 0 and the tooltip states the reason: nothing on
   // this rig measures that rail.
-  const voltsLive = live && mainsVolts !== null && mainsVolts > 0
+  const voltsLive = fresh && mainsVolts !== null && mainsVolts > 0
   const shownVolts = voltsLive ? mainsVolts : 0
   const amps = voltsLive && effWatts > 0 ? effWatts / shownVolts : 0
-  const wattsText = Math.round(effWatts).toLocaleString()
-  const vaText = `${shownVolts.toFixed(1)} V · ${amps.toFixed(2)} A`
+  const wattsText = fresh ? Math.round(effWatts).toLocaleString() : UNAVAILABLE
+  const lastReportText = !live
+    ? 'Backend offline'
+    : !outlet.lastSeen
+      ? 'No reading yet'
+      : !fresh
+        ? `Stale · ${readingAgeMs < 60_000 ? `${Math.max(1, Math.floor(readingAgeMs / 1000))} sec ago` : `${Math.floor(readingAgeMs / 60_000)} min ago`}`
+        : readingAgeMs < 60_000
+        ? 'Updated just now'
+        : `Updated ${Math.floor(readingAgeMs / 60_000)} min ago`
+  const vaText = fresh ? `${shownVolts.toFixed(1)} V · ${amps.toFixed(2)} A` : UNAVAILABLE
 
   // The peak line carries its own arithmetic, because a figure that cannot be
   // re-derived from the two numbers above it is how "Peak 127 W" next to a live
   // 792 W survived review in the first place.
   const peakTitle = !live
     ? 'GET /api/Dashboard/state did not answer, so there is neither a live reading nor a window to take a peak from.'
+    : !fresh
+      ? 'Peak is unavailable because this outlet has no fresh measurement.'
     : `Peak is the larger of this branch's live reading (${wattsText} W) and every watt bucket recorded in the last 15 minutes (${Math.round(
         bucketPeak,
       ).toLocaleString()} W), so the peak can never print below the live figure above it. ${
@@ -358,6 +380,9 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
           <span className={stateTag} title={stateDetail}>
             {stateWord}
           </span>
+        </div>
+        <div className="meta num" title={outlet.lastSeen ? `Last report: ${new Date(outlet.lastSeen).toLocaleString()}` : 'No report has been received from this outlet yet.'}>
+          {lastReportText}
         </div>
       </div>
 
@@ -414,7 +439,7 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
       <div className="alloc">
         <div className="top">
           <span>Allocation</span>
-          <b className="num">{`${Math.round(effWatts).toLocaleString()} / ${Math.round(allowance).toLocaleString()} W`}</b>
+          <b className="num">{`${fresh ? Math.round(effWatts).toLocaleString() : UNAVAILABLE} / ${Math.round(allowance).toLocaleString()} W`}</b>
         </div>
         <div
           className="meter"
@@ -431,7 +456,9 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
           <i style={{ width: `${Math.min(usedPercent, 100)}%`, background: over ? 'var(--bad)' : undefined }} />
         </div>
         <div className="pk num" title={peakTitle}>
-          {allowance > 0
+          {!fresh
+            ? 'Peak unavailable · no fresh outlet reading'
+            : allowance > 0
             ? `Peak ${Math.round(peakWatts).toLocaleString()} W · ${Math.round(peakPercent)}% used`
             : `Peak ${Math.round(peakWatts).toLocaleString()} W · no allocation set`}
         </div>
@@ -477,7 +504,15 @@ function DashboardOutletRow({ outlet, history, peakHistory, rowIndex, live, main
                   : `POST /api/Dashboard/outlets/${outlet.id}/activation`
         }
         disabled={monitorOnly || !live || busy}
-        onClick={() => onToggle(outlet.id)}
+        onClick={() => {
+          if (on && (outlet.priority === 'Critical' || outlet.isProtected)) {
+            const confirmed = window.confirm(
+              `${outlet.name} is ${outlet.isProtected ? 'protected' : 'Critical priority'}. Disconnect it manually? This does not change its automatic-shedding setting.`,
+            )
+            if (!confirmed) return
+          }
+          onToggle(outlet.id)
+        }}
       />
     </article>
   )
@@ -519,6 +554,7 @@ function sameOutlet(a: Outlet, b: Outlet): boolean {
     a.volts === b.volts &&
     a.watts === b.watts &&
     a.status === b.status &&
+    a.lastSeen === b.lastSeen &&
     a.schedule === b.schedule &&
     a.idleLimit === b.idleLimit
   )

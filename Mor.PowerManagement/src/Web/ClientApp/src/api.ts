@@ -99,6 +99,7 @@ type BackendEvent = {
   title: string
   detail: string
   severity: number
+  actor?: string | null
 }
 
 type BackendState = {
@@ -229,6 +230,7 @@ function mapOutlet(outlet: BackendOutlet): Outlet {
     volts: toMeasurement(outlet.ratedVoltageVolts) ?? 0,
     watts: outlet.watts,
     status: toStatus(outlet.status),
+    lastSeen: outlet.lastSeen ?? null,
     schedule: outlet.schedule,
     idleLimit: outlet.idleLimitMinutes === null ? 'Exempt' : `${outlet.idleLimitMinutes} min`,
     isProtected: outlet.isProtected,
@@ -254,6 +256,7 @@ function mapEvent(event: BackendEvent): EventLog {
     title: event.title,
     detail: event.detail,
     severity: toSeverity(event.severity),
+    actor: event.actor ?? null,
   }
 }
 
@@ -345,6 +348,7 @@ export async function updateThresholds(input: {
 export async function updateOutletPolicy(
   id: number,
   input: {
+    name?: string
     priority?: Priority
     allowanceWatts?: number
     isProtected?: boolean

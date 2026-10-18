@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { fetchTelemetrySeries, type Ina226Reading, type TelemetrySeries } from '../api'
 import { POLL_INTERVAL_MS } from '../data/telemetry'
 import type { EventLog, Outlet } from '../types/dashboard'
-import { isEnergizedOutlet, totalLoad } from '../utils/dashboard'
+import { isEnergizedOutlet, isOutletFresh, totalLoad } from '../utils/dashboard'
 import { stalenessState } from '../utils/telemetry'
 import { DashboardHero } from './DashboardHero'
 import { DashboardOutlet } from './DashboardOutlet'
@@ -165,7 +165,7 @@ export function Dashboard({
    */
   const live = backendOnline
   const load = live ? totalLoad(outlets) : 0
-  const energized = live ? outlets.filter((outlet) => isEnergizedOutlet(outlet.status)).length : 0
+  const energized = live ? outlets.filter((outlet) => isOutletFresh(outlet) && isEnergizedOutlet(outlet.status)).length : 0
 
   const historyByOutlet = useMemo(() => {
     const map = new Map<number, Array<number | null>>()
@@ -282,9 +282,7 @@ export function Dashboard({
         onSignIn={onSignIn}
       />
 
-      <h2 className="mp-h">
-        <span>Channels</span>
-      </h2>
+      <h2 className="mp-h"><span>Channels</span></h2>
       {/* Not "controlled channels": CH5 is in this list and has no control. */}
       {/*
         THE LIST AND THE EMPTY STATE ARE SIBLINGS, NOT TWO ARMS OF ONE TERNARY.
@@ -340,20 +338,9 @@ export function Dashboard({
         )}
       </div>
 
-      {/*
-        The INA226 sits here, between the branches and the vectors that drive
-        them. It is NOT the reference those branches derive against — it is a
-        standalone DC shunt monitor polled by the ESP32 over I2C — so this position is about reading
-        order rather than signal flow: it is the one card on the page whose
-        three headline figures are direct conversions rather than arithmetic on
-        somebody else's total, and it belongs where the eye lands after scanning
-        the rows and before reaching for a control.
-      */}
       <Ina226Card reading={ina226} live={live} now={now} />
 
-      <h2 className="mp-h">
-        <span>Actions</span>
-      </h2>
+      <h2 className="mp-h"><span>Actions</span></h2>
       <DashboardSimRail
         onRun={runVector}
         notice={scenario.notice}
@@ -363,19 +350,6 @@ export function Dashboard({
         lastRun={lastVector}
       />
 
-      {/*
-        Policy events stay reachable but out of the way. The reference console
-        has no log panel, and the dashboard is read across a room, so the list is
-        collapsed to a one-line count here rather than deleted — the events are
-        real engine output and must not become unreachable.
-
-        The empty branch is a real state, not a missing one: GET /Dashboard/state
-        returns an empty log on a rig that has not tripped anything, and saying
-        so is the difference between "the engine is quiet" and "the log is not
-        rendering". It used to render nothing at all here, next to two seeded
-        rows in data/dashboard.ts that the browser had written about numbers it
-        had invented.
-      */}
       {events.length === 0 ? (
         <p className="num" style={{ marginTop: 26, color: 'var(--mute)', fontSize: 12 }}>
           No recent events.

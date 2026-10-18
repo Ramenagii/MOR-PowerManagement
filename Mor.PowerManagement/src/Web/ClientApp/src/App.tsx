@@ -1,8 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from 'framer-motion'
-import { RotateCcw } from 'lucide-react'
 import {
-  ApiError,
   activateOutlet,
   checkSession,
   disconnectOutlet,
@@ -12,7 +10,6 @@ import {
   UNMEASURED_INA226,
   type Ina226Reading,
 } from './api'
-import { ChannelInventoryView } from './components/ChannelInventoryView'
 import { Dashboard } from './components/Dashboard'
 import { HardwareView } from './components/HardwareView'
 import { LoadingScreen } from './components/LoadingScreen'
@@ -23,7 +20,7 @@ import { TelemetryView } from './components/TelemetryView'
 import { AppTopBar } from './components/AppTopBar'
 import { baseOutlets, initialEvents, isMonitoredOnlyChannel } from './data/dashboard'
 import type { AppView, EventLog, Outlet, Severity } from './types/dashboard'
-import { formatWatts, getTimeStamp, isEnergizedOutlet, systemState, totalLoad } from './utils/dashboard'
+import { formatWatts, getTimeStamp, isEnergizedOutlet, isOutletFresh, systemState, totalLoad } from './utils/dashboard'
 import {
   buildScenarioPayload,
   capacityBlockProfile,
@@ -34,7 +31,8 @@ import {
   type ScenarioProfile,
 } from './utils/scenarios'
 
-type Session = 'checking' | 'authed' | 'login' | 'offline'
+type Session = 'authed' | 'login' | 'offline'
+const AUTH_SESSION_KEY = 'mor-power-authenticated-tab'
 
 /**
  * Pacing. The ESP32 posts every 1 s, so a 5 s dashboard poll threw away four
@@ -73,13 +71,18 @@ function App() {
   // a measurement exists before the server says so.
   const [outlets, setOutlets] = useState<Outlet[]>(baseOutlets)
   const [events, setEvents] = useState<EventLog[]>(initialEvents)
+  const lastOutletFreshness = useRef<Map<number, boolean> | null>(null)
   // 0 is "the server has not told us". It is not a copy of the rig's configured
   // ceiling: a guessed limit renders as "0 % of 4400 W limit — full headroom" on
   // a rig that knows nothing, and the hero shows a dash for every limit-derived
   // figure instead. The reference device's 4400 W ceiling is a setting the
   // Framework admin writes; nothing in this client holds a copy of it.
   const [thresholds, setThresholds] = useState({ max: 0, warning: 0, critical: 0 })
-  const [session, setSession] = useState<Session>('checking')
+  // Fresh tabs start at sign-in. A refresh in this authenticated tab restores
+  // the cookie session after the server verifies it.
+  const [session, setSession] = useState<Session>(() =>
+    window.sessionStorage.getItem(AUTH_SESSION_KEY) === '1' ? 'offline' : 'login',
+  )
   // Shown in the top bar avatar and the footer. checkSession() already returns
   // the signed-in address, so this costs nothing extra.
   const [userEmail, setUserEmail] = useState<string | null>(null)
@@ -88,7 +91,6 @@ function App() {
   const [mainsVolts, setMainsVolts] = useState<number | null>(null)
   const [ina226, setIna226] = useState<Ina226Reading>(UNMEASURED_INA226)
   const [introDone, setIntroDone] = useState(false)
-  const [introKey, setIntroKey] = useState(0)
   const [activeView, setActiveView] = useState<AppView>('dashboard')
   // Outcome of the last scenario run, shown verbatim in the panel. This is the
   // honesty surface: it states whether rows were actually stored, and reports
@@ -100,40 +102,64 @@ function App() {
   const [scenarioBusy, setScenarioBusy] = useState(false)
   const prefersReducedMotion = useReducedMotion()
 
+  // Keep the login-first behavior for a fresh tab, while preserving a valid
+  // sign-in across refreshes in the tab that authenticated. The server cookie
+  // remains authoritative; the sessionStorage marker only tells us to verify it.
+  useEffect(() => {
+    if (session !== 'offline') return
+    let current = true
+    void checkSession()
+      .then((email) => {
+        if (!current) return
+        setUserEmail(email)
+        setSession('authed')
+      })
+      .catch(() => {
+        if (!current) return
+        window.sessionStorage.removeItem(AUTH_SESSION_KEY)
+        setSession('login')
+      })
+    return () => { current = false }
+  }, [session])
+
   const refreshFromBackend = useCallback(async () => {
     const snapshot = await fetchDashboardState()
     setOutlets(snapshot.outlets)
-    setEvents(snapshot.events)
+    const previousFreshness = lastOutletFreshness.current
+    const currentFreshness = new Map<number, boolean>(
+      snapshot.outlets.map((outlet) => [outlet.id, isOutletFresh(outlet)] as const),
+    )
+    lastOutletFreshness.current = currentFreshness
+    const healthEvents: EventLog[] = previousFreshness
+      ? snapshot.outlets.flatMap((outlet) => {
+          const wasFresh = previousFreshness.get(outlet.id)
+          const fresh = currentFreshness.get(outlet.id) ?? false
+          if (wasFresh === undefined || wasFresh === fresh) return []
+          const restored = fresh
+          return [{
+            id: Date.now() + outlet.id,
+            time: getTimeStamp(),
+            at: new Date().toISOString(),
+            title: restored ? 'Outlet telemetry restored' : 'Outlet went offline',
+            detail: restored
+              ? `${outlet.name} is reporting fresh readings again.`
+              : `${outlet.name} has not reported for 30 seconds. Its last wattage is marked stale.`,
+            severity: restored ? 'success' : outlet.priority === 'Critical' ? 'critical' : 'warning',
+          }]
+        })
+      : []
+    setEvents((current) => {
+      const localEvents = current.filter((event) => event.id >= 1_000_000_000_000)
+      return [...healthEvents, ...localEvents, ...snapshot.events]
+        .filter((event, index, list) => list.findIndex((candidate) => candidate.id === event.id) === index)
+        .slice(0, 40)
+    })
     setThresholds(snapshot.thresholds)
     setDeviceOnline(snapshot.deviceOnline)
     setMainsVolts(snapshot.mainsVolts)
     setIna226(snapshot.ina226)
     setBackendOnline(true)
   }, [])
-
-  useEffect(() => {
-    let cancelled = false
-    checkSession()
-      .then((email) => {
-        if (cancelled) return
-        setUserEmail(email)
-        setSession('authed')
-        void refreshFromBackend().catch(() => setBackendOnline(false))
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        if (error instanceof ApiError && error.status === 401) {
-          setSession('login')
-        } else {
-          // Backend unreachable. There is no simulated baseline to fall back to:
-          // the shell renders zeros and says why.
-          setSession('offline')
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [refreshFromBackend])
 
   useEffect(() => {
     if (session !== 'authed') return
@@ -166,7 +192,7 @@ function App() {
   useEffect(() => {
     const timer = window.setTimeout(() => setIntroDone(true), prefersReducedMotion ? 0 : INTRO_MS)
     return () => window.clearTimeout(timer)
-  }, [introKey, prefersReducedMotion])
+  }, [prefersReducedMotion])
 
   useEffect(() => {
     document.body.classList.toggle('intro-active', !introDone)
@@ -329,11 +355,6 @@ function App() {
     void runLive(() => activateOutlet(SIM_ACTIVATION_CHANNEL), requestActivationLocal)
   }
 
-  const replayIntro = () => {
-    setIntroDone(false)
-    setIntroKey((current) => current + 1)
-  }
-
   const toggleOutletLocal = (id: number) => {
     const outlet = outlets.find((item) => item.id === id)
     if (!outlet) return
@@ -420,7 +441,10 @@ function App() {
   const handleLogout = () => {
     void logout()
       .catch(() => undefined)
-      .finally(() => setSession('login'))
+      .finally(() => {
+        window.sessionStorage.removeItem(AUTH_SESSION_KEY)
+        setSession('login')
+      })
   }
 
   const routeInitial = prefersReducedMotion
@@ -431,14 +455,16 @@ function App() {
     ? { opacity: 0 }
     : { opacity: 0, y: -10, filter: 'blur(6px)' }
 
-  if (session === 'checking') {
-    return <LoadingScreen />
+  if (session === 'offline') {
+    return <div className="flex h-dvh items-center justify-center bg-background font-body text-on-surface">Restoring your session…</div>
   }
 
   if (session === 'login') {
     return (
       <LoginGate
-        onAuthenticated={() => {
+        onAuthenticated={(email) => {
+          window.sessionStorage.setItem(AUTH_SESSION_KEY, '1')
+          setUserEmail(email)
           setSession('authed')
           void refreshFromBackend().catch(() => setBackendOnline(false))
         }}
@@ -454,12 +480,12 @@ function App() {
     session === 'authed' && backendOnline ? 'Live — backend' : 'Offline — backend unreachable'
 
   return (
-    <LayoutGroup id={`loadwise-${introKey}`}>
+    <LayoutGroup id="loadwise">
       <AnimatePresence mode="popLayout">
-        {!introDone && <LoadingScreen key={`intro-${introKey}`} />}
+        {!introDone && <LoadingScreen key="intro" />}
       </AnimatePresence>
       <motion.main
-        className={`flex min-h-screen flex-col bg-background ${introDone ? '' : 'pointer-events-none select-none'}`}
+        className={`flex min-h-screen flex-col bg-background ${activeView === 'dashboard' ? 'framework-dashboard-shell' : ''} ${introDone ? '' : 'pointer-events-none select-none'}`}
         initial={false}
         animate={introDone ? { opacity: 1, y: 0 } : { opacity: 0, y: 12 }}
         transition={{ duration: SHELL_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
@@ -497,23 +523,20 @@ function App() {
             transition={{ duration: ROUTE_TRANSITION_S, ease: [0.22, 1, 0.36, 1] }}
           >
             {/*
-              Two views opt out of the shared page frame and own their own
-              container instead:
-
-              - 'channels' ships its own legacy `.design-main` frame, ported
-                first and not editable here.
-              - 'dashboard' is the MOR Power reference design, which specifies
-                its own 1180px column and 20px gutters. Giving it the shared
-                1440px/24px wrapper would both widen it past the reference and
-                stack the padding twice.
+              The dashboard opts out of the shared page frame and owns its own
+              container. It specifies its own 1180px column and 20px gutters.
+              Giving it the shared 1440px/24px wrapper would widen it past the
+              reference and stack the padding twice.
 
               Every other view keeps the same 24px margin and 1440px column.
             */}
             <div
               className={
-                activeView === 'channels' || activeView === 'dashboard'
+                activeView === 'dashboard'
                   ? 'w-full'
-                  : 'mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg'
+                  : activeView === 'admin'
+                    ? 'framework-admin-frame mx-auto w-full max-w-[1440px] px-margin py-space-md'
+                    : 'mx-auto flex w-full max-w-[1440px] flex-col gap-space-lg px-margin py-space-lg'
               }
             >
               {activeView === 'dashboard' && (
@@ -540,8 +563,6 @@ function App() {
                 />
               )}
 
-              {activeView === 'channels' && <ChannelInventoryView />}
-
               {activeView === 'telemetry' && <TelemetryView />}
 
               {activeView === 'admin' && <PolicyAdminView />}
@@ -554,7 +575,7 @@ function App() {
         </AnimatePresence>
 
         {session === 'authed' && (
-          <footer className="mt-auto flex flex-col gap-space-sm border-t border-surface-container bg-surface-container-lowest px-margin py-3 sm:flex-row sm:items-center sm:justify-between">
+          <footer className="app-status-footer mt-auto flex shrink-0 flex-col gap-space-sm border-t border-surface-container bg-surface-container-lowest px-margin sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-x-space-lg gap-y-1 font-code text-code text-on-surface-variant">
               <span>{userEmail ?? 'signed in'}</span>
               <span className="flex items-center gap-1.5">
@@ -565,12 +586,6 @@ function App() {
                 {connectionLabel}
               </span>
               <span>{deviceOnline ? 'ESP32 online' : 'ESP32 offline'}</span>
-            </div>
-            <div className="flex shrink-0 items-center gap-space-sm">
-              <button type="button" className="ant-btn ant-btn-default" onClick={replayIntro}>
-                <RotateCcw size={16} className="text-outline" aria-hidden="true" />
-                Replay intro
-              </button>
             </div>
           </footer>
         )}

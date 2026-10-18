@@ -62,14 +62,26 @@
 // silently overwrites the 2-channel testing configuration that MUST_READ.md
 // defines for this phase. Talking to the LAN backend keeps the testing rig and
 // the dashboard in the same place.
+#ifndef BACKEND_HOST
 #define BACKEND_HOST "192.168.18.47"
+#endif
+#ifndef BACKEND_PORT
 #define BACKEND_PORT 5211
+#endif
+#ifndef BACKEND_BASE
 #define BACKEND_BASE "/api"
+#endif
 // 1 = https (host has a real cert), 0 = plain http for the LAN bench.
+#ifndef BACKEND_USE_TLS
 #define BACKEND_USE_TLS 0
+#endif
+#ifndef DEVICE_ID
 #define DEVICE_ID "mor-prototype-01"
-// Must match the backend Device:ApiKey when key enforcement is turned on.
-#define DEVICE_API_KEY "vuZAWog0U6MnqHF58TK3DhCzO9Je2atQ"
+#endif
+// Set this only in ignored config.local.h. Production rejects an empty key.
+#ifndef DEVICE_API_KEY
+#define DEVICE_API_KEY ""
+#endif
 
 // ---- Timing ----
 // Telemetry is 1 Hz so the console reads as live rather than as a slow poll.
@@ -471,10 +483,9 @@
 // So the window is now 150 samples (~141 ms/channel at the measured ~940 us per
 // conversion, ~9 AC cycles at 60 Hz), which is the operator's reference-sketch
 // value and the shortest window that still spans two full 60 Hz cycles' worth of
-// nominal mains content. The sweep period below is unchanged at 2 s, so the
-// four-channel pass now costs ~564 ms instead of ~940 ms against the same
-// period: comfortably under the METER_INTERVAL_MS/2 guard, and the extra slack
-// is deliberate - the watchdog path must never engage on a healthy rig.
+// nominal mains content. The four-channel pass costs ~564 ms. A 1 s sweep gives
+// fresh branch readings at the same cadence as telemetry and leaves ~436 ms for
+// other core-0 work before the next pass.
 //
 // WHAT 150 COSTS, stated plainly: the RMS window is shorter than the 250-sample
 // one it replaces, so a genuinely noisy branch is averaged over fewer cycles and
@@ -486,11 +497,8 @@
 // the sample cost must be re-checked against METER_INTERVAL_MS at the same
 // time, because that is what the watchdog guard is actually watching.
 //
-// The visible consequence of the 2 s period: branchAmps only refreshes every 2 s
-// while telemetry posts every 1 s, so the dashboard can show one repeated amps
-// frame between updates. That is a stale-but-true number, which is the honest
-// trade - the alternative is a sweep that overruns its own period and stops
-// posting altogether.
+// Branch measurements and telemetry now both refresh at 1 Hz. Relay command
+// confirmation still arrives in telemetry after the next CT sweep.
 #define ZMCT_DEDICATED_SAMPLES 150
 // Stack for the sampling task; it is pinned to core 0 so a full four-channel
 // pass cannot delay the serial output on core 1.
@@ -506,19 +514,10 @@
 // Per-branch overcurrent trip in amps RMS, evaluated by FR-03 on the board.
 #define BRANCH_OVERCURRENT_AMPS 5.0f
 
-// How often the sensor sweep runs. WAS 1000 ms, sized for a 2-channel pass;
-// DOUBLED to 2000 ms with the 4-CT rig because each blocking channel window is
-// now ~141 ms (ZMCT_DEDICATED_SAMPLES = 150), i.e. ~564 ms for all four. The RMS
-// window is blocking by nature, so the sweep is deliberately NOT run every loop
-// iteration: core 0 would be occupied almost continuously and telemetry would
-// stutter. The main loop keeps spinning at full speed between sweeps and the
-// dashboard still sees a reading on every telemetry batch. The sweep is on SPI
-// and the INA226 on I2C, so the two no longer contend for a bus (see the
-// i2cMutex note in the .ino).
-//
-// If this period ever needs to go back toward 1 s, ZMCT_DEDICATED_SAMPLES has to
-// come down with it - the pass duration, not the period, is what starves IDLE0.
-#define METER_INTERVAL_MS 2000UL
+// Each four-channel sweep takes ~564 ms at the measured ADC conversion time.
+// A 1 s period aligns fresh readings with 1 Hz telemetry and leaves the rest of
+// the second for IDLE0 and the Wi-Fi/config loop on core 1.
+#define METER_INTERVAL_MS 1000UL
 
 // How often the INA226 is read. It is the 3.3 V RAIL MONITOR (see above), not
 // a mains meter and not a mains voltage reference any more, so it does not need
@@ -639,7 +638,7 @@ static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 0 };
 // COST: one dropped CT reading per channel that transitions mid-window, visible
 // on the serial line as "raw STALE-DROPPED" next to the held amps. That is a
 // stale-but-true number for ~141 ms, which is strictly better than a wrong one.
-// If a real transient ever has to be caught faster than the 2 s
+// If a real transient ever has to be caught faster than the 1 s
 // METER_INTERVAL_MS sweep already allows, that is a sampling-period question for
 // the watchdog budget above - not a reason to publish step-contaminated RMS.
 

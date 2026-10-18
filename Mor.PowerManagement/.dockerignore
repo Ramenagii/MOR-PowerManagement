@@ -6,3 +6,7 @@ src/Web/ClientApp/build/
 src/Web/wwwroot/assets/
 *.user
 .vs/
+**/config.local.h
+.env
+.env.*
+!.env.example

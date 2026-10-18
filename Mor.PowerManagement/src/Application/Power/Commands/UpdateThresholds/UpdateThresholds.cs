@@ -1,5 +1,6 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
 using Mor.PowerManagement.Domain.Entities;
+using Mor.PowerManagement.Domain.Enums;
 
 namespace Mor.PowerManagement.Application.Power.Commands.UpdateThresholds;
 
@@ -62,34 +63,59 @@ public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCo
             _context.PowerSystemConfigs.Add(config);
         }
 
+        var changes = new List<string>();
+
         if (request.MaxCapacityWatts.HasValue)
         {
+            if (Math.Abs(config.MaxCapacityWatts - request.MaxCapacityWatts.Value) > 0.001)
+                changes.Add($"system capacity: {config.MaxCapacityWatts:F0} W → {request.MaxCapacityWatts.Value:F0} W");
             config.MaxCapacityWatts = request.MaxCapacityWatts.Value;
         }
 
         if (request.WarningThresholdWatts.HasValue)
         {
+            if (Math.Abs(config.WarningThresholdWatts - request.WarningThresholdWatts.Value) > 0.001)
+                changes.Add($"warning threshold: {config.WarningThresholdWatts:F0} W → {request.WarningThresholdWatts.Value:F0} W");
             config.WarningThresholdWatts = request.WarningThresholdWatts.Value;
         }
 
         if (request.CriticalThresholdWatts.HasValue)
         {
+            if (Math.Abs(config.CriticalThresholdWatts - request.CriticalThresholdWatts.Value) > 0.001)
+                changes.Add($"critical threshold: {config.CriticalThresholdWatts:F0} W → {request.CriticalThresholdWatts.Value:F0} W");
             config.CriticalThresholdWatts = request.CriticalThresholdWatts.Value;
         }
 
         if (request.StandbyThresholdWatts.HasValue)
         {
+            if (Math.Abs(config.StandbyThresholdWatts - request.StandbyThresholdWatts.Value) > 0.001)
+                changes.Add($"standby cutoff: {config.StandbyThresholdWatts:F0} W → {request.StandbyThresholdWatts.Value:F0} W");
             config.StandbyThresholdWatts = request.StandbyThresholdWatts.Value;
         }
 
         if (request.StandbyIdleMinutes.HasValue)
         {
+            if (config.StandbyIdleMinutes != request.StandbyIdleMinutes.Value)
+                changes.Add($"standby timeout: {config.StandbyIdleMinutes} → {request.StandbyIdleMinutes.Value} min");
             config.StandbyIdleMinutes = request.StandbyIdleMinutes.Value;
         }
 
         if (request.StabilizationDelayMs.HasValue)
         {
+            if (config.StabilizationDelayMs != request.StabilizationDelayMs.Value)
+                changes.Add($"stabilization delay: {config.StabilizationDelayMs} → {request.StabilizationDelayMs.Value} ms");
             config.StabilizationDelayMs = request.StabilizationDelayMs.Value;
+        }
+
+        if (changes.Count > 0)
+        {
+            _context.PowerEvents.Add(new PowerEvent
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Title = "System thresholds changed",
+                Detail = string.Join("; ", changes) + ".",
+                Severity = EventSeverity.Info,
+            });
         }
 
         await _context.SaveChangesAsync(cancellationToken);

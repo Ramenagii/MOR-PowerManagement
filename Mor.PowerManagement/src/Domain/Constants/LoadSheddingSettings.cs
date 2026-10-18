@@ -16,22 +16,25 @@ namespace Mor.PowerManagement.Domain.Constants;
 // this framework fails to shed stays energised.
 public abstract class LoadSheddingSettings
 {
+    // Channel 5 is the INA226 USB/DC monitor on this bench. Its watts are not
+    // part of the mains total and it has no relay to shed or restore.
+    public const int MonitoredOnlyOutletId = 5;
+
     // ---- Load-shedding confirmation -------------------------------------
-    // How many consecutive telemetry batches must report P_total above P_limit
-    // before anything is shed.
+    // How long fresh telemetry must keep P_total above P_limit before anything
+    // is shed. The ESP32 reports at 1 Hz, so detection is quantized to roughly
+    // one second plus relay-command delivery time.
     //
-    // Why 3: one batch can be wrong. A CT spike, a relay transition caught
-    // mid-close or a single corrupted sample would otherwise shed a lab's
-    // work for no reason, which is the failure mode that makes operators
-    // distrust an automatic scheme and switch it off. Requiring agreement
-    // across consecutive batches costs a few seconds of continued overload -
-    // seconds the hardware protection is covering anyway - and buys immunity
-    // to one bad sample.
-    //
-    // The NUMBER is the portable part, not the seconds: at the rig's ~5 s
-    // posting cadence this is ~15 s of confirmation; at a 1 s batch cadence it
-    // is ~3 s. Re-measure this at any site with a different scan rate.
-    public const int OverLimitConfirmationBatches = 3;
+    // Three seconds filters a transient while keeping the relay response short.
+    public const int OverLimitConfirmationSeconds = 3;
+
+    // A longer gap means the samples cannot establish continuous overload.
+    // Reset the timer instead of treating missing telemetry as sustained load.
+    public const int MaxOverLimitSampleGapSeconds = 2;
+
+    // A recovery trial still uses a small number of fresh batches to verify
+    // that reconnecting the outlet did not push the rig back over its limit.
+    public const int RecoveryTrialConfirmationBatches = 3;
 
     // Per-outlet protection reacts on the first fresh reading at or above
     // that outlet's admin-configured allowance, independent of its priority.

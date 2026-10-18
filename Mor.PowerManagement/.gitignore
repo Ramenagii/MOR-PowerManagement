@@ -502,6 +502,11 @@ src/Web/wwwroot/assets/
 # Local Wi-Fi credentials - never commit these
 firmware/*/config.local.h
 
+# Local deployment credentials
+.env
+.env.*
+!.env.example
+
 
 # SPA build output: index.html references content-hashed assets under
 # src/Web/wwwroot/assets/, which is already ignored above. Tracking the

@@ -92,8 +92,10 @@ export type ThresholdsForm = {
 
 /** Editable copy of one outlet's policy row. null idle limit means "exempt". */
 export type OutletDraft = {
+  name: string
   priority: Priority
   allowanceWatts: number
+  isProtected: boolean
   schedule: string
   idleLimitMinutes: number | null
 }
@@ -104,8 +106,10 @@ export const PRIORITY_RANK: Record<Priority, number> = { Critical: 4, High: 3, M
 
 export function draftFrom(outlet: Outlet): OutletDraft {
   return {
+    name: outlet.name,
     priority: outlet.priority,
     allowanceWatts: outlet.allowance,
+    isProtected: outlet.isProtected,
     schedule: outlet.schedule,
     idleLimitMinutes: outlet.idleLimit === 'Exempt' ? null : Number.parseInt(outlet.idleLimit, 10),
   }
@@ -119,8 +123,10 @@ function idleValue(minutes: number | null): number | null {
 
 export function sameDraft(a: OutletDraft, b: OutletDraft): boolean {
   return (
+    a.name === b.name &&
     a.priority === b.priority &&
     a.allowanceWatts === b.allowanceWatts &&
+    a.isProtected === b.isProtected &&
     a.schedule === b.schedule &&
     idleValue(a.idleLimitMinutes) === idleValue(b.idleLimitMinutes)
   )

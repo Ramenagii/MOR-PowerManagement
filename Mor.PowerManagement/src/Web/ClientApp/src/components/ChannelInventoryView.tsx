@@ -22,6 +22,7 @@ import {
 import { POLL_INTERVAL_MS } from '../data/telemetry'
 import { relayGpio } from '../data/dashboard'
 import type { Outlet, OutletStatus, Priority } from '../types/dashboard'
+import { SelectField } from './SelectField'
 import { describeSeries } from '../utils/telemetry'
 
 /**
@@ -162,6 +163,7 @@ type Row = {
   name: string
   priority: Priority | null
   status: OutletStatus | null
+  fresh: boolean
   commandPending: boolean
   commandNeedsReview: boolean
   gpio: string
@@ -216,6 +218,8 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
     const sampledVolts = lastValue(channel.volts)
     const sampledAmps = lastValue(channel.amps)
     const sampledWatts = lastValue(channel.watts)
+    const sampleAge = outlet.lastSeen ? Date.now() - Date.parse(outlet.lastSeen) : Number.POSITIVE_INFINITY
+    const fresh = Number.isFinite(sampleAge) && sampleAge <= 30_000
 
     return {
       id: outlet.id,
@@ -230,9 +234,10 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
       gpio: relayGpio(outlet.id) ?? '—',
       ratedVolts: outlet.volts,
       allowance: outlet.allowance,
-      volts: sampledVolts,
-      amps: sampledAmps,
-      watts: sampledWatts,
+      volts: fresh ? sampledVolts : null,
+      amps: fresh ? sampledAmps : null,
+      watts: fresh ? sampledWatts : null,
+      fresh,
       measured: channel.provenance === 'Measured',
       coverage: describeSeries(channel.watts).count,
       total: series?.bucketCount ?? 0,
@@ -251,6 +256,7 @@ function buildRows(outlets: Outlet[], series: TelemetrySeries | null): Row[] {
       name: 'Not wired on this bench',
       priority: null,
       status: null,
+      fresh: false,
       commandPending: false,
       commandNeedsReview: false,
       gpio: '—',
@@ -426,7 +432,7 @@ export function ChannelInventoryView() {
 
   // Summary figures. `live` gates every measurement: with no backend answer the
   // baseline roster is never presented as a reading.
-  const totalWatts = rows.filter((r) => r.wired).reduce((sum, r) => sum + (r.watts ?? 0), 0)
+  const totalWatts = rows.filter((r) => r.wired && r.fresh).reduce((sum, r) => sum + (r.watts ?? 0), 0)
   // Rated rail comes off the roster. The old `?? 220` invented a mains rating
   // for a roster that had none, and it fed the headline "Rated 220 V" caption.
   const ratedVolts = rows.find((r) => r.rail === '220V AC')?.ratedVolts ?? 0
@@ -438,8 +444,8 @@ export function ChannelInventoryView() {
     .filter((r) => r.wired && r.rail !== '5V USB')
     .reduce((sum, r) => sum + (ratedVolts > 0 ? r.allowance / ratedVolts : 0), 0)
 
-  const energized = rows.filter((r) => r.wired && (r.status === 'Active' || r.status === 'Standby')).length
-  const standby = rows.filter((r) => r.status === 'Standby').length
+  const energized = rows.filter((r) => r.wired && r.fresh && (r.status === 'Active' || r.status === 'Standby')).length
+  const standby = rows.filter((r) => r.fresh && r.status === 'Standby').length
 
   /*
    * Trip points are the framework's CONFIGURATION and they are read from
@@ -649,11 +655,11 @@ export function ChannelInventoryView() {
               aria-label="Search channels by name, GPIO or rail"
             />
           </div>
-          <div className="relative sm:w-56">
-            <select
-              className="st-select"
+          <SelectField
+              compact
+              wrapperClassName="mp-select-sort-width"
               value={sort}
-              onChange={(event) => setSort(event.target.value as SortId)}
+              onValueChange={(value) => setSort(value as SortId)}
               aria-label="Sort channels"
             >
               {SORT_OPTIONS.map((option) => (
@@ -661,8 +667,7 @@ export function ChannelInventoryView() {
                   Sort: {option.label}
                 </option>
               ))}
-            </select>
-          </div>
+          </SelectField>
         </div>
       </div>
 
@@ -716,8 +721,8 @@ function ChannelCard({
   busy: boolean
   onToggle: () => void
 }) {
-  const statusView = row.status ? STATUS_VIEWS[row.status] : null
-  const on = row.status === 'Active' || row.status === 'Standby'
+  const statusView = row.fresh && row.status ? STATUS_VIEWS[row.status] : null
+  const on = row.fresh && (row.status === 'Active' || row.status === 'Standby')
 
   const watts = row.watts ?? 0
   const capPercent = row.allowance > 0 ? (watts / row.allowance) * 100 : 0
@@ -726,9 +731,9 @@ function ChannelCard({
 
   // A wired branch with no backend answer shows a dash; an unwired branch shows
   // a real 0.00 A / 0 W because zero is what an unfitted sensor reports.
-  const voltsText = !row.wired ? UNAVAILABLE : live && row.volts !== null ? `${row.volts.toFixed(1)}V` : UNAVAILABLE
-  const ampsText = !row.wired ? '0.00A' : live ? `${(row.amps ?? 0).toFixed(2)}A` : UNAVAILABLE
-  const powerText = !row.wired ? '0W' : live ? `${Math.round(watts)}W` : UNAVAILABLE
+  const voltsText = !row.wired ? UNAVAILABLE : live && row.fresh && row.volts !== null ? `${row.volts.toFixed(1)}V` : UNAVAILABLE
+  const ampsText = !row.wired ? '0.00A' : live && row.fresh ? `${(row.amps ?? 0).toFixed(2)}A` : UNAVAILABLE
+  const powerText = !row.wired ? '0W' : live && row.fresh ? `${Math.round(watts)}W` : UNAVAILABLE
 
   const dotClass = !row.wired ? 'st-dot st-dot-off' : statusView ? statusView.dot : 'st-dot st-dot-off'
 
@@ -753,7 +758,7 @@ function ChannelCard({
 
       {/* Name */}
       <div className="mb-3">
-        <div className="st-eyebrow">{row.eyebrow}</div>
+        <div className="st-eyebrow">{row.eyebrow}{row.wired && !row.fresh ? ' · STALE — awaiting next device report' : ''}</div>
         <h2 className="st-h3 truncate" title={row.name}>
           {row.name}
         </h2>
@@ -779,9 +784,9 @@ function ChannelCard({
       {row.wired ? (
         <div className="mb-3">
           <div className="st-micro mb-1 flex items-center justify-between gap-2">
-            <span className="min-w-0 truncate">{`Cap: ${Math.round(watts)}W / ${Math.round(row.allowance)}W`}</span>
+            <span className="min-w-0 truncate">{`Cap: ${row.fresh ? `${Math.round(watts)}W` : UNAVAILABLE} / ${Math.round(row.allowance)}W`}</span>
             <span className={overCap ? 'st-danger font-medium' : capPercent >= 85 ? 'st-warn font-medium' : 'st-ok font-medium'}>
-              {live ? `${capPercent.toFixed(1)}%` : UNAVAILABLE}
+              {live && row.fresh ? `${capPercent.toFixed(1)}%` : UNAVAILABLE}
             </span>
           </div>
           <div
@@ -825,7 +830,7 @@ function ChannelCard({
             <span className="st-micro st-warn" role="status">WAIT</span>
           ) : (
             <span className={`st-tiny font-medium ${on ? 'st-ok' : 'text-[#939ca8]'}`}>
-              {row.wired ? (on ? 'ON' : 'OFF') : 'NO WIRING'}
+              {row.wired ? (row.fresh ? (on ? 'ON' : 'OFF') : 'STALE') : 'NO WIRING'}
             </span>
           )}
           <button
@@ -845,7 +850,7 @@ function ChannelCard({
                   ? `POST /api/Dashboard/outlets/${row.id}/disconnection`
                   : `POST /api/Dashboard/outlets/${row.id}/activation`
             }
-            disabled={!row.wired || busy || !live || row.commandPending || row.commandNeedsReview}
+            disabled={!row.wired || busy || !live || !row.fresh || row.commandPending || row.commandNeedsReview}
             onClick={onToggle}
           />
         </div>

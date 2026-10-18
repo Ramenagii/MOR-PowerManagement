@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
 
 namespace Mor.PowerManagement.Application.Power.Commands.UpdateOutletPolicy;
@@ -6,6 +7,8 @@ namespace Mor.PowerManagement.Application.Power.Commands.UpdateOutletPolicy;
 public record UpdateOutletPolicyCommand : IRequest<int>
 {
     public int OutletId { get; init; }
+
+    public string? Name { get; init; }
 
     public OutletPriority? Priority { get; init; }
 
@@ -27,6 +30,11 @@ public class UpdateOutletPolicyCommandValidator : AbstractValidator<UpdateOutlet
     public UpdateOutletPolicyCommandValidator()
     {
         RuleFor(x => x.OutletId).GreaterThan(0);
+
+        RuleFor(x => x.Name)
+            .Must(name => !string.IsNullOrWhiteSpace(name))
+            .MaximumLength(80)
+            .When(x => x.Name is not null);
 
         RuleFor(x => x.AllowanceWatts)
             .GreaterThanOrEqualTo(0)
@@ -58,33 +66,64 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
 
         Guard.Against.NotFound(request.OutletId, outlet);
 
+        var changes = new List<string>();
+
+        if (request.Name is not null && !string.Equals(outlet.Name, request.Name.Trim(), StringComparison.Ordinal))
+        {
+            changes.Add($"name: '{outlet.Name}' → '{request.Name.Trim()}'");
+            outlet.Name = request.Name.Trim();
+        }
+
         if (request.Priority.HasValue)
         {
+            if (outlet.Priority != request.Priority.Value)
+                changes.Add($"priority: {outlet.Priority} → {request.Priority.Value}");
             outlet.Priority = request.Priority.Value;
         }
 
         if (request.AllowanceWatts.HasValue)
         {
+            if (Math.Abs(outlet.AllowanceWatts - request.AllowanceWatts.Value) > 0.001)
+                changes.Add($"allowance: {outlet.AllowanceWatts:F0} W → {request.AllowanceWatts.Value:F0} W");
             outlet.AllowanceWatts = request.AllowanceWatts.Value;
         }
 
         if (request.IsProtected.HasValue)
         {
+            if (outlet.IsProtected != request.IsProtected.Value)
+                changes.Add($"protected: {outlet.IsProtected} → {request.IsProtected.Value}");
             outlet.IsProtected = request.IsProtected.Value;
         }
 
         if (request.Schedule is not null)
         {
+            if (!string.Equals(outlet.Schedule, request.Schedule, StringComparison.Ordinal))
+                changes.Add("schedule label updated");
             outlet.Schedule = request.Schedule;
         }
 
         if (request.ClearIdleLimit)
         {
+            if (outlet.IdleLimitMinutes is not null)
+                changes.Add($"idle limit: {outlet.IdleLimitMinutes} min → exempt");
             outlet.IdleLimitMinutes = null;
         }
         else if (request.IdleLimitMinutes.HasValue)
         {
+            if (outlet.IdleLimitMinutes != request.IdleLimitMinutes.Value)
+                changes.Add($"idle limit: {outlet.IdleLimitMinutes?.ToString() ?? "exempt"} → {request.IdleLimitMinutes.Value} min");
             outlet.IdleLimitMinutes = request.IdleLimitMinutes.Value;
+        }
+
+        if (changes.Count > 0)
+        {
+            _context.PowerEvents.Add(new PowerEvent
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Title = "Outlet settings changed",
+                Detail = $"{outlet.Name} (CH{outlet.Id}): {string.Join("; ", changes)}.",
+                Severity = EventSeverity.Info,
+            });
         }
 
         await _context.SaveChangesAsync(cancellationToken);

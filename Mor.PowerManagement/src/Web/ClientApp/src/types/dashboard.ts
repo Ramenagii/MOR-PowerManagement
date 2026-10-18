@@ -30,7 +30,7 @@ export type OutletStatus = 'Active' | 'Standby' | 'Restricted' | 'Disconnected'
 
 export type Severity = 'info' | 'success' | 'warning' | 'critical'
 
-export type AppView = 'dashboard' | 'policies' | 'hardware' | 'telemetry' | 'channels' | 'admin'
+export type AppView = 'dashboard' | 'policies' | 'hardware' | 'telemetry' | 'admin'
 
 export type Outlet = {
   id: number
@@ -43,6 +43,8 @@ export type Outlet = {
   volts: number
   watts: number
   status: OutletStatus
+  /** Time of the outlet's last device telemetry report. Null means never reported. */
+  lastSeen?: string | null
   schedule: string
   idleLimit: string
   isProtected: boolean
@@ -72,4 +74,5 @@ export type EventLog = {
   title: string
   detail: string
   severity: Severity
+  actor?: string | null
 }

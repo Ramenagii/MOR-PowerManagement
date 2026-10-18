@@ -89,6 +89,60 @@ body.intro-active {
   overflow: hidden;
 }
 
+.framework-admin-page {
+  min-height: 100%;
+  gap: 10px;
+  overflow: visible;
+}
+
+.framework-admin-page > :first-child,
+.framework-admin-thresholds {
+  flex: 0 0 auto;
+}
+
+.framework-admin-thresholds .ant-card-header {
+  padding-block: 8px;
+}
+
+.framework-admin-thresholds .ant-card-body {
+  gap: 10px;
+  padding: 10px 16px;
+}
+
+.framework-admin-outlets {
+  flex: 0 0 auto;
+}
+
+.framework-admin-outlets > .ant-card-header,
+.framework-admin-outlets > :last-child {
+  flex: 0 0 auto;
+}
+
+.framework-admin-table-scroll {
+  flex: 0 0 auto;
+  min-height: auto;
+  overflow-x: auto;
+  overflow-y: visible;
+}
+
+.framework-admin-table-scroll .ant-table-header th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.framework-admin-help {
+  flex: 0 0 auto;
+}
+
+@media (max-height: 780px) and (min-width: 900px) {
+  .framework-admin-page { gap: 6px; }
+  .framework-admin-thresholds .ant-card-header { padding-block: 6px; }
+  .framework-admin-thresholds .ant-card-body { padding-block: 6px; }
+  .framework-admin-thresholds .ant-card-body > * { min-height: 0; }
+  .framework-admin-outlets .ant-table-row > td { padding-block: 5px; }
+}
+
 button {
   font: inherit;
 }
@@ -3189,6 +3243,8 @@ body {
 @media (min-width: 640px) { .st-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .st-stats-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (min-width: 1024px) { .st-stats-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .st-stats-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1440px) { .st-stats-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 
 .st-split { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 
@@ -3263,6 +3319,11 @@ body {
 .mp { max-width: 1180px; margin: 0 auto; padding: 20px 20px 40px; }
 .mp .num { font-family: var(--num); font-variant-numeric: tabular-nums; }
 .mp .mp-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.mp .mp-card:hover { border-color: var(--line); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.04); }
+
+/* Channel row: subtle lift on hover so the operator can tell which row is under
+   the cursor, without any colour that could be mistaken for a state. */
+.mp-channel-list > .row:hover { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06); z-index: 1; }
 
 /* --- status dot + pulse --------------------------------------------------- */
 .mp .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
@@ -3324,10 +3385,6 @@ body {
   flex: none; display: flex; justify-content: space-between; align-items: center;
   gap: 8px; color: var(--mute); font-size: 11px;
 }
-
-/* P_limit: its own row above the plot, right-aligned. In flow it can never
-   overlap the line, which an absolutely-positioned tag could and did. */
-.mp .lim { flex: none; align-self: flex-end; font-size: 11px; color: var(--warn); }
 
 /* --- section heading ----------------------------------------------------- */
 .mp h2.mp-h {
@@ -3593,18 +3650,332 @@ body {
   .mp .hero-plot { height: 140px; }
 }
 
+/* The live console is a fixed viewport instrument. Arrange its full dashboard
+   in two responsive columns so the outlets and operating controls stay visible
+   together without page scrolling. */
+:root .framework-dashboard-shell {
+  background: #f7f8fa !important;
+  color: #20252b;
+}
+.framework-dashboard-shell > header,
+.framework-dashboard-shell > footer {
+  background: #fff !important;
+  border-color: #e3e7eb !important;
+}
+.framework-dashboard-shell > header { color: #303840; }
+.framework-dashboard-shell > header nav button { color: #59636e; }
+.framework-dashboard-shell > header nav button[aria-current='page'] { color: #245bd6; }
+.framework-dashboard-shell > footer { color: #59636e; }
+:root .framework-dashboard-shell .mp {
+  --bg: #f7f8fa;
+  --surface: #fff;
+  --ink: #20252b;
+  --mute: #68717c;
+  --line: #e1e5e9;
+  --live: #245bd6;
+  --live-soft: #dce7ff;
+  --ok: #6b737c;
+  --warn: #a76a00;
+  --bad: #cf3030;
+  color-scheme: light;
+  color: var(--ink);
+}
+/* ===========================================================================
+ * MOR Power dashboard — top-level console layout (framework shell only)
+ *
+ * Layout principle: one vertical stack so nothing fights for equal height.
+ *   - Hero: full width, prominent load figure + 15 min trace
+ *   - INA226 rail card: beside the hero on wide screens, below on narrow
+ *   - Actions: prescribed vectors + event log, clearly separated
+ *   - Channels: full-width roster, rows at natural height with breathing room
+ *
+ * Breakpoints follow the content: columns merge when a row would get cramped.
+ * =========================================================================== */
+
+.mp {
+  display: grid;
+  grid-template-columns: 1fr;
+  grid-template-rows: auto auto 1fr;
+  gap: 20px;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 24px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Wide screen: hero and INA226 share the top row side by side. */
+@media (min-width: 980px) {
+  .mp {
+    grid-template-columns: 1fr 320px;
+    grid-template-rows: auto auto 1fr;
+    gap: 20px 24px;
+  }
+  .mp > .mp-overview { grid-column: 1; grid-row: 1; }
+  .mp > .mp-overview > .hero { grid-column: 1; grid-row: 1; height: auto; min-height: 0; }
+  .mp > .mp-overview > .ina { grid-column: 2; grid-row: 1; align-self: start; }
+  .mp-actions { grid-column: 1 / -1; grid-row: 2; }
+  .mp-channel-panel { grid-column: 1 / -1; grid-row: 3; }
+}
+
+.mp-overview {
+  display: contents;
+  min-height: 0;
+}
+
+/* ---- hero ---- */
+.mp > .mp-overview > .hero {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 1fr);
+  gap: 0;
+  height: auto;
+  min-height: clamp(150px, 22vh, 220px);
+}
+.mp-overview .hero-l {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border-right: 1px solid var(--line);
+  min-width: 0;
+}
+.mp-overview .hero-r {
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+.mp-overview .hero-plot {
+  position: relative;
+  height: clamp(90px, 16vh, 150px);
+  min-width: 0;
+  flex: none;
+}
+.mp-overview .hero-plot svg { width: 100%; height: 100%; display: block; }
+.mp-overview .chart-cap {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: var(--mute);
+  font-size: 11px;
+}
+.mp-overview .big { font-size: clamp(40px, 5vw, 64px); }
+.mp-overview .stats { gap: 18px; }
+
+/* ---- INA226 rail card ---- */
+.mp > .mp-overview > .ina {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+}
+.mp-overview .ina { gap: 12px; }
+.mp-overview .ina-fig .v { font-size: clamp(26px, 2.5vw, 34px); }
+
+/* ---- actions ---- */
+.mp-actions {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr) 170px;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+  padding: 0;
+}
+.mp-actions .mp-h { margin: 0; }
+.mp-actions .vec { flex-wrap: nowrap; gap: 10px; padding: 0; }
+.mp-actions .vec button { padding: 10px 14px; font-size: 13px; }
+.mp-actions .vec .ep { font-size: 11px; }
+.mp-actions .out { margin: 0; padding: 10px 14px; font-size: 12px; }
+.mp-events { margin: 0; color: var(--mute); font-size: 12px; }
+
+/* ---- channel roster ---- */
+.mp-channel-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.mp-channel-panel > .mp-h { flex: 0 0 auto; margin: 0 0 10px; font-size: 14px; }
+.mp-channel-list {
+  display: grid;
+  grid-template-rows: repeat(auto-fill, minmax(68px, auto));
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.mp-channel-list > .row {
+  margin: 0;
+  padding: 16px 20px;
+  gap: 14px;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.9fr) minmax(160px, 1fr) minmax(200px, 1fr) 64px;
+  align-items: center;
+  min-height: 0;
+}
+.mp-channel-list .row .w { font-size: clamp(26px, 2.8vw, 40px); }
+.mp-channel-list .row .va,
+.mp-channel-list .row.idcol .meta { margin-top: 2px; font-size: 12px; }
+.mp-channel-list .row .spark svg { height: clamp(40px, 7vh, 56px); }
+.mp-channel-list .row .alloc .top,
+.mp-channel-list .row .alloc .pk { font-size: 11px; }
+.mp-channel-list .row .sw { transform: none; }
+
+/* Responsive rules � content-driven breakpoints, not device breakpoints.
+ * The base layout stacks vertically; columns merge only when a row would
+ * get cramped. */
+
+/* Narrow screens: everything stacks, hero becomes single column. */
+@media (max-width: 979px) {
+  .mp {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+    gap: 16px;
+    padding: 16px;
+  }
+  .mp > .mp-overview > .hero {
+    grid-template-columns: 1fr;
+  }
+  .mp-overview .hero-l {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+    padding: 16px 20px;
+  }
+  .mp-overview .hero-r {
+    padding: 12px 20px;
+  }
+  .mp > .mp-overview > .ina {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .mp-actions {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .mp-actions .vec {
+    flex-wrap: wrap;
+  }
+  .mp-actions .vec button {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+  .mp-channel-list > .row {
+    grid-template-columns: minmax(140px, 1fr) minmax(100px, 0.8fr) minmax(140px, 1fr) minmax(180px, 1fr) 52px;
+    padding: 14px 18px;
+    gap: 12px;
+  }
+  .mp-channel-list .row .spark,
+  .mp-channel-list .row .alloc {
+    display: none;
+  }
+  .mp-channel-list .row .sw {
+    grid-column: 5;
+  }
+}
+
+/* Very narrow: hide non-essential figures, keep the read-out scannable. */
+@media (max-width: 640px) {
+  .mp { padding: 12px; gap: 12px; }
+  .mp-overview .big { font-size: clamp(30px, 8vw, 42px); }
+  .mp-overview .hero-l .stats { gap: 12px; }
+  .mp-overview .stats b { font-size: 16px; }
+  .mp-overview .hero-plot { height: 80px; }
+  .mp-channel-list > .row {
+    grid-template-columns: minmax(120px, 1fr) minmax(90px, 0.7fr) auto 52px;
+    padding: 10px 14px;
+    gap: 10px;
+  }
+  .mp-channel-list .row .w { font-size: 24px; }
+  .mp-channel-list .row .alloc { display: none; }
+  .mp-actions .out { font-size: 11px; padding: 8px 12px; }
+  .mp-events { font-size: 11px; }
+}
+
+/* Desktop: give the console room to breathe without page scrolling. */
+@media (min-width: 980px) {
+  .mp {
+    max-width: 1600px;
+    margin: 0 auto;
+    padding: 28px 32px;
+    gap: 24px;
+  }
+  .mp > .mp-overview > .hero {
+    min-height: clamp(160px, 24vh, 240px);
+  }
+  .mp-overview .hero-l { padding: 24px 28px; gap: 14px; }
+  .mp-overview .hero-r { padding: 20px 24px; gap: 12px; }
+  .mp-overview .hero-plot { height: clamp(100px, 18vh, 160px); }
+  .mp-overview .big { font-size: clamp(44px, 5vw, 72px); }
+  .mp-overview .stats { gap: 22px; }
+  .mp-overview .stats b { font-size: 20px; }
+  .mp > .mp-overview > .ina {
+    padding: 24px 28px;
+    gap: 16px;
+  }
+  .mp-overview .ina-fig .v { font-size: clamp(28px, 2.6vw, 38px); }
+  .mp-actions {
+    gap: 20px;
+  }
+  .mp-actions .vec { gap: 12px; }
+  .mp-actions .vec button { padding: 11px 16px; font-size: 14px; }
+  .mp-actions .out { padding: 12px 16px; font-size: 13px; }
+  .mp-channel-panel > .mp-h { margin: 0 0 12px; font-size: 15px; }
+  .mp-channel-list { gap: 12px; }
+  .mp-channel-list > .row {
+    padding: 18px 24px;
+    gap: 16px;
+    border-radius: 16px;
+  }
+  .mp-channel-list .row .w { font-size: clamp(30px, 3vw, 44px); }
+  .mp-channel-list .row .spark svg { height: clamp(44px, 8vh, 60px); }
+}
+
+/* Low-height viewports: don't let the hero eat the whole screen. */
+@media (min-width: 980px) and (max-height: 720px) {
+  .mp { padding-block: 16px; gap: 16px; }
+  .mp > .mp-overview > .hero { min-height: 140px; }
+  .mp-overview .hero-plot { height: 90px; }
+  .mp-channel-list > .row { padding-block: 10px; }
+}
+
+.app-status-footer { min-height: 34px; padding-block: 3px; }
+.app-status-footer .ant-btn { height: 27px; padding-inline: 8px; font-size: 11px; }
+
+/* The user chose the original flowing dashboard over the viewport-fit grid. */
+.framework-dashboard-shell .mp {
+  display: block;
+  width: 100%;
+  max-width: 1180px;
+  height: auto;
+  min-height: 0;
+  margin: 0 auto;
+  padding: 20px 20px 40px;
+  overflow: visible;
+}
+.framework-dashboard-shell .mp .ina { gap: 13px; padding: 18px 22px 16px; }
+.framework-dashboard-shell .mp .row {
+  grid-template-columns: 200px 190px 1fr 230px 64px;
+  gap: 22px;
+  margin-bottom: 10px;
+  padding: 18px 22px;
+}
+.framework-dashboard-shell .mp .row .w { font-size: 48px; }
+.framework-dashboard-shell .mp .spark svg { height: 64px; }
+.framework-dashboard-shell .mp .row .sw { transform: none; }
+@media (max-width: 980px) {
+  .framework-dashboard-shell .mp .row { grid-template-columns: 1fr auto; gap: 14px; }
+  .framework-dashboard-shell .mp .row .spark,
+  .framework-dashboard-shell .mp .row .alloc { grid-column: 1 / -1; }
+  .framework-dashboard-shell .mp .row .sw { grid-row: 1; grid-column: 2; }
+}
 @media (max-width: 480px) {
-  .mp { padding: 0 14px 32px; }
-  .mp .big { font-size: 44px; }
-  .mp .row { padding: 14px 16px; }
-  .mp .stats { gap: 16px; }
-  /* Three figures stay three figures — only smaller. Wrapping them would turn
-     one instrument read-out into three and break the left-to-right scan. */
-  .mp .ina { padding: 14px 16px; gap: 11px; }
-  .mp .ina-figs { gap: 10px; }
-  .mp .ina-fig .v { font-size: 24px; letter-spacing: -.5px; }
-  .mp .ina-fig .v small { font-size: 12px; }
-  .mp .ina-fig .k { font-size: 10px; margin-top: 5px; }
+  .framework-dashboard-shell .mp { padding: 0 14px 32px; }
+  .framework-dashboard-shell .mp .row { padding: 14px 16px; }
+  .framework-dashboard-shell .mp .ina { padding: 14px 16px; gap: 11px; }
 }
 
 /* --- reduced motion: kill the pulse AND the width/left transitions -------- */
@@ -3772,6 +4143,102 @@ body {
 .login-footnote { margin: 10px 0 0; color: #8a98a3; font-size: 10px; text-align: center; }
 .login-footer { position: relative; z-index: 1; align-self: end; margin: 16px 0 0; color: #8292a0; font-size: 9px; font-weight: 650; letter-spacing: .13em; text-align: center; }
 .login-footer span { padding: 0 5px; color: #a9b5be; }
+
+/* Shared dropdown trigger and popup used across the console. */
+.mp-select-wrap {
+  position: relative;
+  display: inline-flex;
+  width: fit-content;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.mp-select-wrap.mp-select-full-width { display: flex; width: 100%; }
+.mp-select-wrap.mp-select-sort-width { width: auto; }
+.mp-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: auto;
+  min-width: 160px;
+  max-width: 100%;
+  height: 40px;
+  margin: 0;
+  padding: 0 11px 0 12px;
+  border: 1px solid #d4dbe3;
+  border-radius: 7px;
+  background: #fff;
+  color: #303840;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+  box-shadow: 0 1px 2px rgba(25, 40, 60, 0.05);
+  cursor: pointer;
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+.mp-select-wrap-compact .mp-select-trigger { height: 34px; }
+.mp-select-wrap.mp-select-full-width .mp-select-trigger { width: 100%; min-width: 0; }
+.mp-select-trigger:hover:not(:disabled) { border-color: #aebdce; background: #fcfdff; }
+.mp-select-trigger:focus-visible,
+.mp-select-trigger[aria-expanded='true'] {
+  border-color: var(--primary, #0057c2);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(0, 87, 194, 0.13);
+}
+.mp-select-trigger:disabled { color: #929ba6; background: #f2f4f7; cursor: not-allowed; }
+.mp-select-value { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.mp-select-chevron {
+  flex: none;
+  color: #687586;
+  transition: color 140ms ease, transform 140ms ease;
+}
+.mp-select-trigger:hover .mp-select-chevron,
+.mp-select-trigger:focus-visible .mp-select-chevron { color: var(--primary, #0057c2); }
+.mp-select-chevron.is-open { color: var(--primary, #0057c2); transform: rotate(180deg); }
+.mp-select-menu {
+  position: fixed;
+  z-index: 1200;
+  max-height: min(280px, calc(100vh - 16px));
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid #d7dee7;
+  border-radius: 9px;
+  background: #fff;
+  color: #303840;
+  box-shadow: 0 12px 32px rgba(25, 40, 60, 0.16), 0 2px 6px rgba(25, 40, 60, 0.08);
+  animation: mpSelectMenuIn 120ms ease-out both;
+}
+.mp-select-option {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: #3b4652;
+  font-size: 13px;
+  line-height: 1.35;
+  cursor: pointer;
+  transition: background-color 100ms ease, color 100ms ease;
+}
+.mp-select-option:hover,
+.mp-select-option.is-active { background: #f2f6fc; color: #263c57; }
+.mp-select-option.is-selected { background: #eaf1fd; color: #174b90; font-weight: 600; }
+.mp-select-option.is-disabled { color: #929ba6; cursor: not-allowed; }
+.mp-select-check { flex: none; color: #245bd6; font-size: 14px; font-weight: 700; }
+.mp-select-menu::-webkit-scrollbar { width: 8px; }
+.mp-select-menu::-webkit-scrollbar-thumb { border: 2px solid #fff; border-radius: 8px; background: #c8d1dc; }
+@keyframes mpSelectMenuIn { from { opacity: 0; transform: translateY(-3px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (min-width: 640px) {
+  .mp-select-wrap.mp-select-sort-width { width: 14rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mp-select-menu { animation: none; }
+  .mp-select-trigger, .mp-select-chevron, .mp-select-option { transition: none; }
+}
 @media (max-width: 480px) {
   .login-screen { align-items: center; padding: max(24px, env(safe-area-inset-top)) 14px max(18px, env(safe-area-inset-bottom)); }
   .login-card { margin: 0; border-radius: 16px; padding: 22px 20px; }

@@ -101,7 +101,7 @@ public record LoadSheddingResult(
     double PLimitWatts,
     double RecoveryLimitWatts,
     int ConsecutiveOverLimitBatches,
-    int OverLimitConfirmationBatches,
+    int OverLimitConfirmationSeconds,
     int RecoveryPeriodSeconds,
     IReadOnlyList<int> ShedOutletIds,
     bool ManualOverride,
@@ -448,11 +448,13 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         var recoveryTrial = outlets.FirstOrDefault(o => o.RecoveryTrialPending);
         if (recoveryTrial is not null)
         {
-            var measuredTotal = outlets.Where(o => LoadResponseEvaluator.IsEnergized(o.Status)).Sum(o => o.CurrentWatts);
+            var measuredTotal = outlets
+                .Where(o => !LoadTierMapper.IsMonitoredOnlyOutlet(o.Id) && LoadResponseEvaluator.IsEnergized(o.Status))
+                .Sum(o => o.CurrentWatts);
             if (measuredTotal > pLimit)
             {
                 recoveryTrial.RecoveryTrialOverLimitBatches++;
-                if (recoveryTrial.RecoveryTrialOverLimitBatches >= LoadSheddingSettings.OverLimitConfirmationBatches)
+                if (recoveryTrial.RecoveryTrialOverLimitBatches >= LoadSheddingSettings.RecoveryTrialConfirmationBatches)
                 {
                     recoveryTrial.Status = OutletStatus.Disconnected;
                     recoveryTrial.CommandedAtUtc = now;
@@ -472,7 +474,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                         recoveryTrial.RecoveryLockout ? EventSeverity.Critical : EventSeverity.Warning, now, eventsRaised);
                     return MakeFrameworkResult(LoadSheddingAction.Shed, recoveryTrial.Id, "Recovery attempt exceeded the threshold; disconnecting the same outlet.", pLimit, _framework.Current, outlets);
                 }
-                return MakeFrameworkResult(LoadSheddingAction.None, recoveryTrial.Id, $"Checking recovery attempt ({recoveryTrial.RecoveryTrialOverLimitBatches}/{LoadSheddingSettings.OverLimitConfirmationBatches} over-limit batches).", pLimit, _framework.Current, outlets);
+                return MakeFrameworkResult(LoadSheddingAction.None, recoveryTrial.Id, $"Checking recovery attempt ({recoveryTrial.RecoveryTrialOverLimitBatches}/{LoadSheddingSettings.RecoveryTrialConfirmationBatches} over-limit batches).", pLimit, _framework.Current, outlets);
             }
 
             recoveryTrial.RecoveryTrialPending = false;
@@ -585,7 +587,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             pLimit,
             decision.RecoveryLimitWatts,
             decision.ConsecutiveOverLimitBatches,
-            decision.OverLimitConfirmationBatches,
+            decision.OverLimitConfirmationSeconds,
             LoadSheddingSettings.RecoveryPeriodSeconds,
             decision.NextState.ShedLedger.Select(r => r.OutletId).ToList(),
             decision.NextState.ManualOverride,
@@ -595,7 +597,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
     private LoadSheddingResult MakeFrameworkResult(LoadSheddingAction action, int? outletId, string detail, double limit, LoadSheddingState state, IList<Outlet> outlets)
     {
         var outlet = outlets.FirstOrDefault(o => o.Id == outletId);
-        return new LoadSheddingResult(action.ToString(), outletId, outlet?.Name, outlet is null ? null : LoadTierMapper.ToTier(outlet.Priority).ToString(), detail, limit, LoadSheddingEngine.ComputeRecoveryLimit(limit), state.ConsecutiveOverLimitBatches, LoadSheddingSettings.OverLimitConfirmationBatches, LoadSheddingSettings.RecoveryPeriodSeconds, state.ShedLedger.Select(r => r.OutletId).ToList(), state.ManualOverride, state.FaultLatched);
+        return new LoadSheddingResult(action.ToString(), outletId, outlet?.Name, outlet is null ? null : LoadTierMapper.ToTier(outlet.Priority).ToString(), detail, limit, LoadSheddingEngine.ComputeRecoveryLimit(limit), state.ConsecutiveOverLimitBatches, LoadSheddingSettings.OverLimitConfirmationSeconds, LoadSheddingSettings.RecoveryPeriodSeconds, state.ShedLedger.Select(r => r.OutletId).ToList(), state.ManualOverride, state.FaultLatched);
     }
 
     private void AddEvent(string title, string detail, EventSeverity severity, DateTimeOffset now, List<string> raised)
