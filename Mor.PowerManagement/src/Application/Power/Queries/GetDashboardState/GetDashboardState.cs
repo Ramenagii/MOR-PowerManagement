@@ -73,6 +73,7 @@ public record FrameworkStateDto(
     int RecoveryPeriodSeconds,
     int InterReconnectDelaySeconds,
     int ConsecutiveOverLimitBatches,
+    double OverLimitElapsedSeconds,
     DateTimeOffset? BelowRecoveryLimitSinceUtc,
     IReadOnlyList<int> ShedOutletIds);
 
@@ -140,7 +141,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         var total = LoadResponseEvaluator.TotalLoad(snapshots);
         var state = LoadResponseEvaluator.GetSystemState(total, config.WarningThresholdWatts, config.CriticalThresholdWatts);
 
-        // ESP32 liveness: the device posts telemetry every 5s, so a recent
+        // ESP32 liveness: the device posts telemetry every 1s, so a recent
         // LastSeen means it is actively synced with the dashboard.
         var deviceLastSeen = outlets
             .Where(o => o.LastSeen.HasValue)
@@ -159,6 +160,12 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
         var framework = _framework.Current;
         var shedByFramework = framework.ShedLedger.Select(r => r.OutletId).ToHashSet();
+        var nowUtc = DateTimeOffset.UtcNow;
+        var overLimitElapsedSeconds = framework.OverLimitSinceUtc is { } overLimitSince
+            && framework.LastOverLimitSampleUtc is { } lastOverLimitSample
+            && nowUtc - lastOverLimitSample <= TimeSpan.FromSeconds(LoadSheddingSettings.MaxOverLimitSampleGapSeconds)
+                ? Math.Max(0, (nowUtc - overLimitSince).TotalSeconds)
+                : 0;
 
         // Live INA226 mains volts: average of fresh device samples from MAINS-
         // class outlets only. The USB socket posts the INA226 RAW bus volts
@@ -228,6 +235,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 LoadSheddingSettings.RecoveryPeriodSeconds,
                 LoadSheddingSettings.InterReconnectDelaySeconds,
                 framework.ConsecutiveOverLimitBatches,
+                overLimitElapsedSeconds,
                 framework.BelowRecoveryLimitSinceUtc,
                 framework.ShedLedger.Select(r => r.OutletId).ToList()),
             mainsVolts,

@@ -128,6 +128,7 @@ type BackendState = {
     overLimitConfirmationSeconds?: number
     recoveryLimitWatts?: number
     shedOutletIds?: number[]
+    overLimitElapsedSeconds?: number
   }
   deviceOnline: boolean
   deviceLastSeen: string | null
@@ -221,6 +222,7 @@ export type DashboardSnapshot = {
     overLimitConfirmationSeconds: number
     recoveryLimitWatts: number
     shedOutletIds: number[]
+    overLimitElapsedSeconds: number
   }
 }
 
@@ -310,6 +312,7 @@ export async function fetchDashboardState(): Promise<DashboardSnapshot> {
       overLimitConfirmationSeconds: state.framework?.overLimitConfirmationSeconds ?? 3,
       recoveryLimitWatts: toMeasurement(state.framework?.recoveryLimitWatts) ?? 0,
       shedOutletIds: state.framework?.shedOutletIds ?? [],
+      overLimitElapsedSeconds: toMeasurement(state.framework?.overLimitElapsedSeconds) ?? 0,
     },
   }
 }

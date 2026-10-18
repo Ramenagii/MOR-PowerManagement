@@ -29,7 +29,7 @@ export function PoliciesView() {
   const [deviceOnline, setDeviceOnline] = useState(false)
   const [deviceProtocolReady, setDeviceProtocolReady] = useState(false)
   const [automaticPrioritisationEnabled, setAutomaticPrioritisationEnabledState] = useState(true)
-  const [overloadBatches, setOverloadBatches] = useState(0)
+  const [overloadElapsedSeconds, setOverloadElapsedSeconds] = useState(0)
   const [overloadConfirmationSeconds, setOverloadConfirmationSeconds] = useState(3)
   const [frameworkFaultLatched, setFrameworkFaultLatched] = useState(false)
   const [drafts, setDrafts] = useState<Record<number, OutletDraft>>({})
@@ -55,7 +55,7 @@ export function PoliciesView() {
       setDeviceOnline(snapshot.deviceOnline)
       setDeviceProtocolReady(snapshot.deviceProtocolReady)
       setAutomaticPrioritisationEnabledState(snapshot.framework.automaticPrioritisationEnabled)
-      setOverloadBatches(snapshot.framework.consecutiveOverLimitBatches)
+      setOverloadElapsedSeconds(snapshot.framework.overLimitElapsedSeconds)
       setOverloadConfirmationSeconds(snapshot.framework.overLimitConfirmationSeconds)
       setFrameworkFaultLatched(snapshot.framework.faultLatched)
       setSystemLimit(snapshot.thresholds.critical)
@@ -192,7 +192,7 @@ export function PoliciesView() {
 
     <section className="ant-card mb-space-lg overflow-hidden" aria-labelledby="framework-live-heading">
       <div className="ant-card-header flex items-center justify-between gap-4">
-        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W · overload confirmation {overloadBatches}/{overloadConfirmationSeconds}</p></div>
+        <div><h2 id="framework-live-heading" className="font-title-lg font-semibold">Live framework state</h2><p className="mt-1 text-sm text-on-surface-variant">{deviceOnline ? 'Device reporting' : 'Device offline'} · total {liveTotal === null ? '—' : `${Math.round(liveTotal)} W`} / {systemLimit ?? '—'} W · over limit {overloadElapsedSeconds.toFixed(1)} / {overloadConfirmationSeconds} s</p></div>
         <span className={`rounded-full px-3 py-1 text-xs ${deviceOnline && deviceProtocolReady ? 'bg-surface-container text-on-surface' : 'bg-amber-100 text-amber-900'}`}>{!deviceOnline ? 'NO FRESH DATA' : deviceProtocolReady ? 'MONITORING + CONTROL READY' : 'MONITORING · FIRMWARE UPDATE NEEDED'}</span>
       </div>
       <div className="ant-card-body border-b border-outline-variant">
