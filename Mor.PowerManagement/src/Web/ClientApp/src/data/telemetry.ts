@@ -10,19 +10,18 @@ export const TELEMETRY_WINDOWS: Array<{ id: TelemetryWindow; label: string }> = 
 ]
 
 /**
- * Poll cadence per window. Independent of App.tsx's 1 s dashboard loop (D10) —
+ * Poll cadence per window. Independent of App.tsx's dashboard loop —
  * two loops in one component tree would double the load on a host that sleeps.
  *
- * Kept in step with the device: the ESP32 posts a batch every 1 s, so a 10 s
- * poll discarded nine of every ten readings and made a live chart look static.
- * The short windows now poll at 2 s; longer windows stay slower because there
- * is no new data arriving for them at a useful rate.
+ * These are display refreshes only. The backend still evaluates every device
+ * batch for automatic shedding; a chart does not need to re-query Neon for
+ * every new sample.
  */
 export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
-  '15m': 1_000,
-  '1h': 1_000,
-  '6h': 5_000,
-  '24h': 15_000,
+  '15m': 5_000,
+  '1h': 10_000,
+  '6h': 30_000,
+  '24h': 60_000,
   '7d': null,
 }
 

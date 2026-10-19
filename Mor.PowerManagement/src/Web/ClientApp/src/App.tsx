@@ -35,16 +35,11 @@ type Session = 'authed' | 'login' | 'offline'
 const AUTH_SESSION_KEY = 'mor-power-authenticated-tab'
 
 /**
- * Pacing. The ESP32 posts every 1 s, so a 5 s dashboard poll threw away four
- * out of five readings and made the console feel stalled. These are kept in
- * step with the device cadence; the device remains the clock.
- *
- * 500 ms rather than 1 s: the database is cloud-hosted, so each state request
- * costs roughly 180 ms of round trip. Polling at 1 s meant the number on screen
- * was on average ~700 ms stale on top of the device's own 1 s posting interval,
- * which read as a lagging dashboard rather than a live one.
+ * Dashboard display refresh. The backend evaluates every device telemetry
+ * batch independently; the browser can refresh every 2 s without affecting
+ * overload confirmation or relay timing.
  */
-const DASHBOARD_POLL_MS = 500
+const DASHBOARD_POLL_MS = 2_000
 
 // Let the full logo and circuit animation resolve before revealing the console.
 const INTRO_MS = 3400

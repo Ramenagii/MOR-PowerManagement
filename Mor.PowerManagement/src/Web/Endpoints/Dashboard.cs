@@ -55,9 +55,7 @@ public class Dashboard : IEndpointGroup
     [EndpointDescription("Returns outlets with live load, totals, system state, thresholds and recent events.")]
     public static async Task<Ok<DashboardStateVm>> GetState(ISender sender, IMemoryCache cache)
     {
-        // The console polls this endpoint twice a second while the database is
-        // cloud-hosted (~180 ms per round trip), so every poll paid a visible
-        // lag. A 1 s absolute-expired cache means overlapping polls from the
+        // The console refreshes this endpoint every 2 s. A 3 s absolute-expired cache means overlapping polls from the
         // dashboard and the inventory view share one query, and the worst case
         // staleness is one polling interval. Mutations (activation, shed,
         // thresholds) evict it immediately, so a button press never reads stale.
@@ -65,7 +63,7 @@ public class Dashboard : IEndpointGroup
             DashboardCacheKeys.State,
             async entry =>
             {
-                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(1);
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(3);
                 return await sender.Send(new GetDashboardStateQuery());
             });
 
@@ -108,10 +106,10 @@ public class Dashboard : IEndpointGroup
         var cacheKey = $"dashboard:telemetry:{parsedWindow}:{string.Join(",", outletIds)}";
         var ttl = parsedWindow switch
         {
-            TelemetryWindow.Minutes15 => TimeSpan.FromSeconds(2),
-            TelemetryWindow.Hour1 => TimeSpan.FromSeconds(5),
+            TelemetryWindow.Minutes15 => TimeSpan.FromSeconds(5),
+            TelemetryWindow.Hour1 => TimeSpan.FromSeconds(10),
             TelemetryWindow.Hours6 => TimeSpan.FromSeconds(30),
-            _ => TimeSpan.FromMinutes(1),
+            _ => TimeSpan.FromMinutes(2),
         };
 
         var series = await cache.GetOrCreateAsync(
