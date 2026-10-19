@@ -25,10 +25,12 @@ public record OutletActivationResult(
 public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutletActivationCommand, OutletActivationResult>
 {
     private readonly IApplicationDbContext _context;
+    private readonly TimeProvider _timeProvider;
 
-    public RequestOutletActivationCommandHandler(IApplicationDbContext context)
+    public RequestOutletActivationCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
     {
         _context = context;
+        _timeProvider = timeProvider;
     }
 
     public async Task<OutletActivationResult> Handle(RequestOutletActivationCommand request, CancellationToken cancellationToken)
@@ -66,7 +68,7 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
             ? allowance
             : systemLimit;
 
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         // F3 switch debounce: do not replace an in-flight command. The device
         // must acknowledge the current relay state and send its settled sample

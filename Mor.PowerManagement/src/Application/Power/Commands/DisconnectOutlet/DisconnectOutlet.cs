@@ -13,10 +13,12 @@ public record DisconnectOutletCommand : IRequest<int>
 public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCommand, int>
 {
     private readonly IApplicationDbContext _context;
+    private readonly TimeProvider _timeProvider;
 
-    public DisconnectOutletCommandHandler(IApplicationDbContext context)
+    public DisconnectOutletCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
     {
         _context = context;
+        _timeProvider = timeProvider;
     }
 
     public async Task<int> Handle(DisconnectOutletCommand request, CancellationToken cancellationToken)
@@ -48,7 +50,7 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
         outlet.ManualHold = true;
         outlet.NextRecoveryAtUtc = null;
         outlet.RecoveryTrialPending = false;
-        outlet.CommandedAtUtc = DateTimeOffset.UtcNow;
+        outlet.CommandedAtUtc = _timeProvider.GetUtcNow();
         outlet.PendingCommandId = Guid.NewGuid();
         outlet.PendingRelayClosed = false;
         outlet.PendingCommandOrigin = "manual-off";
@@ -57,7 +59,7 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
 
         _context.PowerEvents.Add(new PowerEvent
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = _timeProvider.GetUtcNow(),
             Title = "Manual relay action",
             Detail = $"{outlet.Name} was disconnected from the dashboard.",
             Severity = EventSeverity.Info,

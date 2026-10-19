@@ -43,16 +43,18 @@ public class RunStagedRestorationCommandHandler
 {
     private readonly IApplicationDbContext _context;
     private readonly LoadSheddingStateStore _framework;
+    private readonly TimeProvider _timeProvider;
 
-    public RunStagedRestorationCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
+    public RunStagedRestorationCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
     {
         _context = context;
         _framework = framework;
+        _timeProvider = timeProvider;
     }
 
     public async Task<StagedRestorationResult> Handle(RunStagedRestorationCommand request, CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         var config = await _context.PowerSystemConfigs
             .FirstOrDefaultAsync(cancellationToken)

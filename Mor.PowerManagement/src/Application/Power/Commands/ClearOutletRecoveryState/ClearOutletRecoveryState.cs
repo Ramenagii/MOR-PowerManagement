@@ -8,7 +8,12 @@ public record ClearOutletRecoveryStateCommand(int OutletId) : IRequest<int>;
 public class ClearOutletRecoveryStateCommandHandler : IRequestHandler<ClearOutletRecoveryStateCommand, int>
 {
     private readonly IApplicationDbContext _context;
-    public ClearOutletRecoveryStateCommandHandler(IApplicationDbContext context) => _context = context;
+    private readonly TimeProvider _timeProvider;
+    public ClearOutletRecoveryStateCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+    }
 
     public async Task<int> Handle(ClearOutletRecoveryStateCommand request, CancellationToken cancellationToken)
     {
@@ -28,7 +33,7 @@ public class ClearOutletRecoveryStateCommandHandler : IRequestHandler<ClearOutle
         outlet.PendingCommandAcknowledgedAtUtc = null;
         _context.PowerEvents.Add(new PowerEvent
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = _timeProvider.GetUtcNow(),
             Title = "Recovery state cleared by Admin",
             Detail = $"{outlet.Name} recovery counter and lockout were cleared after review. Its separate manual/fault holds were preserved.",
             Severity = Mor.PowerManagement.Domain.Enums.EventSeverity.Info,

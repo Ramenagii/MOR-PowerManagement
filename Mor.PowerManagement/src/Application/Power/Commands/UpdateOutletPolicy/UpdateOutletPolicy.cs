@@ -53,10 +53,12 @@ public class UpdateOutletPolicyCommandValidator : AbstractValidator<UpdateOutlet
 public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPolicyCommand, int>
 {
     private readonly IApplicationDbContext _context;
+    private readonly TimeProvider _timeProvider;
 
-    public UpdateOutletPolicyCommandHandler(IApplicationDbContext context)
+    public UpdateOutletPolicyCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
     {
         _context = context;
+        _timeProvider = timeProvider;
     }
 
     public async Task<int> Handle(UpdateOutletPolicyCommand request, CancellationToken cancellationToken)
@@ -119,7 +121,7 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
         {
             _context.PowerEvents.Add(new PowerEvent
             {
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = _timeProvider.GetUtcNow(),
                 Title = "Outlet settings changed",
                 Detail = $"{outlet.Name} (CH{outlet.Id}): {string.Join("; ", changes)}.",
                 Severity = EventSeverity.Info,
