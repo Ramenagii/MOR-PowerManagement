@@ -15,9 +15,10 @@ from memory. Where a number is an estimate rather than a measurement, it says so
 ## 1. Database
 
 PostgreSQL on Neon (`ap-southeast-1`). Migrations are applied at startup by
-`ApplicationDbContextInitialiser`. Retention on raw telemetry is **3 days**
-(`Telemetry:RetentionDays`), which is why the 7-day window returns the same row
-count as 24 hours until enough history accumulates.
+`ApplicationDbContextInitialiser`. Raw telemetry is retained for **6 hours** by
+default (`Telemetry:RawRetentionHours`). Older readings are summarized into
+five-minute outlet rollups and retained for **30 days**
+(`Telemetry:RollupRetentionDays`).
 
 ### 1.1 `Outlets` — the channel roster
 
@@ -44,7 +45,8 @@ One row per controllable branch. Seeded with 13 rows.
 
 ### 1.2 `TelemetryReadings` — the time series
 
-Append-only. This is the table the charts read.
+Recent raw samples. Short chart windows read this table; old readings are moved
+into `TelemetryReadingRollups` after the raw retention window.
 
 | Column | Type | Notes |
 |---|---|---|
@@ -61,13 +63,23 @@ Indexes:
   time-ordered range scans every chart window performs.
 - `(OutletId, Timestamp)` — composite, for per-channel pivots.
 
+### 1.3 `TelemetryReadingRollups` — long-term chart history
+
+One row per outlet per five-minute bucket. The retention worker summarizes and
+deletes each bounded batch in one database statement, so interrupted cleanup
+cannot lose readings between those steps. The 24-hour and 7-day chart windows
+combine rollups with recent raw readings.
+
+Each row stores sample counts and sums for weighted averages, minimum and
+maximum voltage, peak watts, and first/last energy-counter values.
+
 **Bucket alignment.** `GetTelemetrySeries.DateBin` floors to the bucket using
 `value.UtcTicks - BinEpoch.Ticks` before the modulo. `date_bin`'s origin is
 2001-01-01, so flooring raw ticks and adding them to the epoch overshoots by
 ~2025 years. This was the cause of the "year 4026" empty-chart bug; a regression
 test should assert the returned `from`/`to` are near the present.
 
-### 1.3 `PowerSystemConfigs` — thresholds and provenance
+### 1.4 `PowerSystemConfigs` — thresholds and provenance
 
 Expected to be a single row. `UpdateThresholdsCommand` creates one if absent.
 
@@ -337,7 +349,7 @@ test it, send `warning` and `critical` together.
 ### 4.4 `GET /api/Dashboard/telemetry`
 
 `window` is one of `15m`, `1h`, `6h`, `24h`, `7d`. `channels` is a
-comma-separated id list; omit it for all 13. Series are capped at 360 points
+comma-separated id list; omit it for all 13. Series are capped at 168 points
 each, so longer windows are downsampled. A `null` in an array is a **gap**
 (relay open, or no sample in that bucket) and must never be rendered as `0`.
 
@@ -351,7 +363,8 @@ each, so longer windows are downsampled. A `null` in an array is a **gap**
 - Migrations applied — they run on startup.
 - `ASPNETCORE_ENVIRONMENT=Development` when running locally, otherwise
   user-secrets are not loaded and the app fails to reach the database.
-- Telemetry retention is 3 days. Tests that need history must seed it; the rig
+- Recent raw telemetry is kept for 6 hours and older history is rolled up for
+  30 days by default. Tests that need history must seed it; the rig
   cannot produce it in real time.
 
 ### 5.2 Smoke
@@ -412,10 +425,9 @@ Each button in the Scenario panel now posts a real batch through
   break in the series, not a drop to 0 W.
 - **Enum wire format.** Assert `priority` and `meteringMode` are sent as
   integers. See section 2.
-- **Retention.** 24h and 7d return the same `rawSampleCount` until more than
-  3 days of history exists. That is expected, not a bug.
-- **Storage.** Raw telemetry at 3-day retention is roughly 100 MB; the Neon free
-  tier allows 0.5 GB. Seeding long histories will hit this.
+- **Retention.** Recent telemetry remains raw for 6 hours, then the retention
+  service moves it into five-minute summaries. Seven-day history needs seven
+  days of accumulated summaries to become complete.
 
 ---
 

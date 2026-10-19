@@ -7,13 +7,10 @@ using Microsoft.Extensions.Logging;
 namespace Mor.PowerManagement.Infrastructure.Data;
 
 /// <summary>
-/// Bounds telemetry storage by deleting raw samples older than
-/// <c>Telemetry:RetentionDays</c> (default 3). The rig posts 13 channels every
-/// 5 s, which is 224,640 rows/day — roughly 34 MB/day and about 1 GB/month, so
-/// unbounded growth is a genuine defect rather than a theoretical one.
-///
-/// Deliberately no hourly/daily rollup table in v1: one code path, one read path,
-/// and a history measured in days does not justify doubling the read surface.
+/// Moves raw samples older than <c>Telemetry:RawRetentionHours</c> (default 6)
+/// into five-minute per-outlet rollups, then prunes old rollups after
+/// <c>Telemetry:RollupRetentionDays</c> (default 30). INA226 history is pruned
+/// at the raw retention cutoff because the UI only needs its current sample.
 ///
 /// Honest limitation: this is a <see cref="BackgroundService"/> on a host that
 /// sleeps when idle, so pruning is <em>opportunistic</em> — it runs whenever the
@@ -31,7 +28,9 @@ public sealed class TelemetryRetentionService(
     /// Hard ceiling on batches per tick, so one tick can never monopolise the pool.
     public const int MaxBatchesPerTick = 20;
 
-    public int RetentionDays => configuration.GetValue("Telemetry:RetentionDays", 3);
+    public int RawRetentionHours => Math.Clamp(configuration.GetValue("Telemetry:RawRetentionHours", 6), 6, 168);
+
+    public int RollupRetentionDays => Math.Clamp(configuration.GetValue("Telemetry:RollupRetentionDays", 30), 1, 3650);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -63,8 +62,10 @@ public sealed class TelemetryRetentionService(
     {
         try
         {
-            var cutoff = DateTimeOffset.UtcNow.AddDays(-RetentionDays);
-            var deleted = 0;
+            var now = DateTimeOffset.UtcNow;
+            var rawCutoff = now.AddHours(-RawRetentionHours);
+            var rollupCutoff = now.AddDays(-RollupRetentionDays);
+            var rollupBucketsWritten = 0;
             var batches = 0;
 
             using var scope = scopeFactory.CreateScope();
@@ -74,55 +75,106 @@ public sealed class TelemetryRetentionService(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                // Batched by primary key so a single DELETE never takes a long
-                // row lock, and so an idle rig costs one no-op statement per tick.
+                // Move and summarize one bounded batch atomically. If the host
+                // stops between batches, every row is either still raw or already
+                // represented in its rollup; there is no history gap.
                 var rowsAffected = await context.Database.ExecuteSqlInterpolatedAsync(
                     $"""
-                    DELETE FROM "TelemetryReadings" t
-                    WHERE t."Id" IN (
+                    WITH candidates AS (
                         SELECT "Id" FROM "TelemetryReadings"
-                        WHERE "Timestamp" < {cutoff}
+                        WHERE "Timestamp" < {rawCutoff}
                         ORDER BY "Id"
-                        LIMIT {BatchSize})
+                        LIMIT {BatchSize}
+                    ), moved AS (
+                        DELETE FROM "TelemetryReadings" t
+                        USING candidates c
+                        WHERE t."Id" = c."Id"
+                        RETURNING t."OutletId", t."Timestamp", t."Voltage",
+                                  t."CurrentAmps", t."PowerWatts", t."EnergyKwh"
+                    ), grouped AS (
+                        SELECT "OutletId",
+                               date_bin(INTERVAL '5 minutes', "Timestamp", TIMESTAMPTZ '2001-01-01 00:00:00+00') AS "BucketStart",
+                               COUNT(*)::bigint AS "SampleCount",
+                               SUM("Voltage") AS "VoltageSum",
+                               SUM("CurrentAmps") AS "CurrentAmpsSum",
+                               SUM("PowerWatts") AS "PowerWattsSum",
+                               MIN("Voltage") AS "MinVoltage",
+                               MAX("Voltage") AS "MaxVoltage",
+                               MAX("PowerWatts") AS "PeakPowerWatts",
+                               (array_agg("EnergyKwh" ORDER BY "Timestamp" ASC))[1] AS "FirstEnergyKwh",
+                               MIN("Timestamp") AS "FirstSampleAt",
+                               (array_agg("EnergyKwh" ORDER BY "Timestamp" DESC))[1] AS "LastEnergyKwh",
+                               MAX("Timestamp") AS "LatestSampleAt"
+                        FROM moved
+                        GROUP BY "OutletId", 2
+                    )
+                    INSERT INTO "TelemetryReadingRollups" (
+                        "OutletId", "BucketStart", "SampleCount", "VoltageSum",
+                        "CurrentAmpsSum", "PowerWattsSum", "MinVoltage", "MaxVoltage",
+                        "PeakPowerWatts", "FirstEnergyKwh", "FirstSampleAt",
+                        "LastEnergyKwh", "LatestSampleAt")
+                    SELECT "OutletId", "BucketStart", "SampleCount", "VoltageSum",
+                           "CurrentAmpsSum", "PowerWattsSum", "MinVoltage", "MaxVoltage",
+                           "PeakPowerWatts", "FirstEnergyKwh", "FirstSampleAt",
+                           "LastEnergyKwh", "LatestSampleAt"
+                    FROM grouped
+                    ON CONFLICT ("OutletId", "BucketStart") DO UPDATE SET
+                        "SampleCount" = "TelemetryReadingRollups"."SampleCount" + EXCLUDED."SampleCount",
+                        "VoltageSum" = "TelemetryReadingRollups"."VoltageSum" + EXCLUDED."VoltageSum",
+                        "CurrentAmpsSum" = "TelemetryReadingRollups"."CurrentAmpsSum" + EXCLUDED."CurrentAmpsSum",
+                        "PowerWattsSum" = "TelemetryReadingRollups"."PowerWattsSum" + EXCLUDED."PowerWattsSum",
+                        "MinVoltage" = LEAST("TelemetryReadingRollups"."MinVoltage", EXCLUDED."MinVoltage"),
+                        "MaxVoltage" = GREATEST("TelemetryReadingRollups"."MaxVoltage", EXCLUDED."MaxVoltage"),
+                        "PeakPowerWatts" = GREATEST("TelemetryReadingRollups"."PeakPowerWatts", EXCLUDED."PeakPowerWatts"),
+                        "FirstEnergyKwh" = CASE WHEN EXCLUDED."FirstSampleAt" < "TelemetryReadingRollups"."FirstSampleAt" THEN EXCLUDED."FirstEnergyKwh" ELSE "TelemetryReadingRollups"."FirstEnergyKwh" END,
+                        "FirstSampleAt" = LEAST("TelemetryReadingRollups"."FirstSampleAt", EXCLUDED."FirstSampleAt"),
+                        "LastEnergyKwh" = CASE WHEN EXCLUDED."LatestSampleAt" > "TelemetryReadingRollups"."LatestSampleAt" THEN EXCLUDED."LastEnergyKwh" ELSE "TelemetryReadingRollups"."LastEnergyKwh" END,
+                        "LatestSampleAt" = GREATEST("TelemetryReadingRollups"."LatestSampleAt", EXCLUDED."LatestSampleAt")
                     """,
                     cancellationToken);
 
-                deleted += rowsAffected;
+                rollupBucketsWritten += rowsAffected;
                 batches++;
 
-                if (rowsAffected < BatchSize)
+                if (rowsAffected == 0)
                 {
                     break;
                 }
             }
 
-            // The INA226 series grows at exactly the same rate as the branch rows
-            // (one row per batch) and is pruned by the same cutoff. Leaving it
-            // behind would turn a bounded table into an unbounded one and the
-            // "newest InaReading" the dashboard reads would silently get older
-            // and older until it aged out of the freshness window forever.
+            // INA226 historical rows are not used by the time-series endpoint;
+            // the dashboard reads the latest sample, so keep only the same short
+            // raw window here.
             var inaDeleted = await context.Database.ExecuteSqlInterpolatedAsync(
                 $"""
                 DELETE FROM "InaReadings" t
                 WHERE t."Id" IN (
                     SELECT "Id" FROM "InaReadings"
-                    WHERE "Timestamp" < {cutoff}
+                    WHERE "Timestamp" < {rawCutoff}
                     ORDER BY "Id"
                     LIMIT {BatchSize})
+                """,
+                cancellationToken);
+
+            var rollupsDeleted = await context.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                DELETE FROM "TelemetryReadingRollups"
+                WHERE "BucketStart" < {rollupCutoff}
                 """,
                 cancellationToken);
 
             // Deleting readings orphans nothing: Outlet.LastSeen,
             // Outlet.CurrentWatts and PowerEvents are independent rows, and
             // InaReadings reference no outlet at all.
-            if (deleted > 0 || inaDeleted > 0 || batches > 1)
+            if (rollupBucketsWritten > 0 || inaDeleted > 0 || rollupsDeleted > 0 || batches > 1)
             {
                 logger.LogInformation(
-                    "Telemetry retention: deleted {Deleted} reading(s) and {InaDeleted} INA226 row(s) older than {Cutoff:o} ({RetentionDays} day(s), {Batches} batch(es)).",
-                    deleted,
+                    "Telemetry retention: wrote {RollupBucketsWritten} five-minute bucket(s), deleted {InaDeleted} INA226 row(s) and {RollupsDeleted} expired rollup(s) ({RawRetentionHours} raw hour(s), {RollupRetentionDays} rollup day(s), {Batches} batch(es)).",
+                    rollupBucketsWritten,
                     inaDeleted,
-                    cutoff,
-                    RetentionDays,
+                    rollupsDeleted,
+                    RawRetentionHours,
+                    RollupRetentionDays,
                     batches);
             }
         }

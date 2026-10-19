@@ -55,15 +55,14 @@ public class Dashboard : IEndpointGroup
     [EndpointDescription("Returns outlets with live load, totals, system state, thresholds and recent events.")]
     public static async Task<Ok<DashboardStateVm>> GetState(ISender sender, IMemoryCache cache)
     {
-        // The console refreshes this endpoint every 2 s. A 3 s absolute-expired cache means overlapping polls from the
-        // dashboard and the inventory view share one query, and the worst case
-        // staleness is one polling interval. Mutations (activation, shed,
+        // The console refreshes this endpoint every 2 s. A 5 s absolute-expired cache
+        // shares repeated dashboard polls across fewer database reads. Mutations (activation, shed,
         // thresholds) evict it immediately, so a button press never reads stale.
         var state = await cache.GetOrCreateAsync(
             DashboardCacheKeys.State,
             async entry =>
             {
-                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(3);
+                entry.AbsoluteExpirationRelativeToNow = TimeSpan.FromSeconds(5);
                 return await sender.Send(new GetDashboardStateQuery());
             });
 
@@ -73,7 +72,7 @@ public class Dashboard : IEndpointGroup
     [EndpointSummary("Get telemetry series")]
     [EndpointDescription(
         "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), " +
-        "aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a " +
+        "aggregated server-side into fixed time buckets (max 168 points per series). Each channel carries a " +
         "provenance label: both 220 V mains channels (CH1-CH2) report voltage from the INA226 on the mains " +
         "feed, and their current is measured on each channel's own ADS1220 SPI input via its branch CT " +
         "sensor. Empty buckets are returned as null, never zero.")]
@@ -99,17 +98,16 @@ public class Dashboard : IEndpointGroup
             }
         }
 
-        // Same reasoning as the state endpoint, but the aggregation queries are
-        // heavier (they bucket thousands of rows), so the TTL follows the
-        // window: short windows expire fast enough to track live load, long
-        // ones barely change between polls.
+        // Aggregation results are cached by window; longer history changes slowly,
+        // so these TTLs avoid repeatedly scanning and transferring the same rows.
         var cacheKey = $"dashboard:telemetry:{parsedWindow}:{string.Join(",", outletIds)}";
         var ttl = parsedWindow switch
         {
-            TelemetryWindow.Minutes15 => TimeSpan.FromSeconds(5),
-            TelemetryWindow.Hour1 => TimeSpan.FromSeconds(10),
-            TelemetryWindow.Hours6 => TimeSpan.FromSeconds(30),
-            _ => TimeSpan.FromMinutes(2),
+            TelemetryWindow.Minutes15 => TimeSpan.FromSeconds(30),
+            TelemetryWindow.Hour1 => TimeSpan.FromMinutes(1),
+            TelemetryWindow.Hours6 => TimeSpan.FromMinutes(1),
+            TelemetryWindow.Hours24 => TimeSpan.FromMinutes(5),
+            _ => TimeSpan.FromMinutes(10),
         };
 
         var series = await cache.GetOrCreateAsync(

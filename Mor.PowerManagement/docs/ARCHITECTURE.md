@@ -70,15 +70,19 @@ Boot proof on serial @115200:
 
 ### Telemetry retention
 
-- `Telemetry:RetentionDays` (default **3**) controls how much raw telemetry is
-  kept. `TelemetryRetentionService` prunes older samples in 50,000-row batches,
-  on a 15-minute `PeriodicTimer`, first tick 15 min after start (never at
-  startup, so it cannot race `InitialiseDatabaseAsync` on a cold start).
-- Why it exists: the rig posts 13 channels every 5 s = 224,640 rows/day, about
-  34 MB/day and ~1 GB/month. Neon free tier allows 0.5 GB. Three days is ~103 MB.
-- Override with the `Telemetry__RetentionDays` environment variable.
-- Set `Telemetry:RetentionDays` to 0 to prune everything on every tick — useful
-  for reclaiming space after a demo, destructive by design.
+- `Telemetry:RawRetentionHours` (default **6**) keeps recent per-reading
+  telemetry for live charts. Older outlet readings are atomically moved into
+  five-minute rollups by `TelemetryRetentionService`.
+- `Telemetry:RollupRetentionDays` (default **30**) controls long-term chart
+  history. The 24-hour and 7-day charts read rollups together with the latest raw
+  samples; short windows continue to use raw rows.
+- Cleanup runs in batches of at most 50,000 source rows on a 15-minute timer,
+  with up to 20 batches per tick. The first tick is 15 minutes after startup so
+  it cannot race database migrations.
+- INA226 historical rows are kept only for the raw retention window; its live
+  dashboard state is stored separately and remains available.
+- Render overrides: `Telemetry__RawRetentionHours` and
+  `Telemetry__RollupRetentionDays`.
 
 ## 5. Deployment stages
 

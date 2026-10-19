@@ -21,15 +21,15 @@ public record GetTelemetrySeriesQuery : IRequest<TelemetrySeriesVm>
 
     public IReadOnlyList<int> OutletIds { get; init; } = Array.Empty<int>();
 
-    // Fixed bucket ladder (D9). Every window lands on <= 360 buckets, so the
+    // Fixed bucket ladder (D9). Every window lands on <= 168 buckets, so the
     // response size is constant no matter how far back the user looks.
     public static int GetBucketSeconds(TelemetryWindow window) => window switch
     {
-        TelemetryWindow.Minutes15 => 5,      // 180 buckets
-        TelemetryWindow.Hour1 => 10,         // 360 buckets
-        TelemetryWindow.Hours6 => 60,        // 360 buckets
-        TelemetryWindow.Hours24 => 300,      // 288 buckets
-        TelemetryWindow.Days7 => 1800,       // 336 buckets
+        TelemetryWindow.Minutes15 => 10,     // 90 buckets
+        TelemetryWindow.Hour1 => 30,         // 120 buckets
+        TelemetryWindow.Hours6 => 300,       // 72 buckets
+        TelemetryWindow.Hours24 => 900,      // 96 buckets
+        TelemetryWindow.Days7 => 3600,       // 168 buckets
         _ => 10,
     };
 
@@ -214,7 +214,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         // the backend never guesses Simulated on the device's behalf.
         var meteringMode = meta.Count > 0 ? meta[0].Mode.GetValueOrDefault() : MeteringMode.Unknown;
 
-        // ---- Read #2: the aggregated series (one round trip).
+    // ---- Read #2: the aggregated series (one round trip).
         //
         // Three deliberate deviations from a naive reading of the aggregate SQL,
         // each forced by the database:
@@ -229,27 +229,61 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         var bucketInterval = TimeSpan.FromSeconds(bucketSeconds);
         var rows = await _context.Database
             .SqlQuery<TelemetryBucketRow>($"""
-                SELECT t."OutletId",
-                       date_bin({bucketInterval}, t."Timestamp", {BinEpoch}) AS "Timestamp",
-                       AVG(t."Voltage")     AS "Voltage",
-                       AVG(t."CurrentAmps") AS "CurrentAmps",
-                       AVG(t."PowerWatts")  AS "PowerWatts",
-                       MAX(t."EnergyKwh")   AS "EnergyKwh",
-                       MIN(t."Id")          AS "Id",
-                       COUNT(*)             AS "SampleCount",
-                       MAX(t."PowerWatts")  AS "PeakWatts",
-                       MIN(t."Voltage")     AS "MinVolts",
-                       MAX(t."Voltage")     AS "MaxVolts",
-                       MAX(t."Timestamp")   AS "LatestSampleAt"
-                FROM    "TelemetryReadings" t
-                WHERE   t."Timestamp" >= {alignedFrom} AND t."Timestamp" < {alignedTo}
+                WITH samples AS (
+                    SELECT r."OutletId",
+                           r."Timestamp" AS "SampleAt",
+                           r."Voltage" AS "VoltageSum",
+                           r."CurrentAmps" AS "CurrentAmpsSum",
+                           r."PowerWatts" AS "PowerWattsSum",
+                           1::bigint AS "SampleCount",
+                           r."EnergyKwh" AS "EnergyKwh",
+                           r."Id" AS "Id",
+                           r."PowerWatts" AS "PeakWatts",
+                           r."Voltage" AS "MinVolts",
+                           r."Voltage" AS "MaxVolts",
+                           r."Timestamp" AS "LatestSampleAt"
+                    FROM "TelemetryReadings" r
+                    WHERE r."Timestamp" >= {alignedFrom} AND r."Timestamp" < {alignedTo}
+
+                    UNION ALL
+
+                    SELECT h."OutletId",
+                           h."BucketStart" AS "SampleAt",
+                           h."VoltageSum",
+                           h."CurrentAmpsSum",
+                           h."PowerWattsSum",
+                           h."SampleCount",
+                           h."LastEnergyKwh" AS "EnergyKwh",
+                           0::integer AS "Id",
+                           h."PeakPowerWatts" AS "PeakWatts",
+                           h."MinVoltage" AS "MinVolts",
+                           h."MaxVoltage" AS "MaxVolts",
+                           h."LatestSampleAt"
+                    FROM "TelemetryReadingRollups" h
+                    WHERE h."BucketStart" >= {alignedFrom} AND h."BucketStart" < {alignedTo}
+                )
+                SELECT s."OutletId",
+                       date_bin({bucketInterval}, s."SampleAt", {BinEpoch}) AS "Timestamp",
+                       SUM(s."VoltageSum") / SUM(s."SampleCount")::double precision AS "Voltage",
+                       SUM(s."CurrentAmpsSum") / SUM(s."SampleCount")::double precision AS "CurrentAmps",
+                       SUM(s."PowerWattsSum") / SUM(s."SampleCount")::double precision AS "PowerWatts",
+                       MAX(s."EnergyKwh") AS "EnergyKwh",
+                       MIN(s."Id") AS "Id",
+                       SUM(s."SampleCount")::integer AS "SampleCount",
+                       MAX(s."PeakWatts") AS "PeakWatts",
+                       MIN(s."MinVolts") AS "MinVolts",
+                       MAX(s."MaxVolts") AS "MaxVolts",
+                       MAX(s."LatestSampleAt") AS "LatestSampleAt"
+                FROM samples s
                 GROUP BY 1, 2
                 ORDER BY 1, 2
                 """)
             .ToListAsync(cancellationToken);
 
         // ---- Guard (A2-4/E10): bound the rows the aggregate is allowed to scan.
-        var estimatedRawRows = (long)((alignedTo - alignedFrom).TotalSeconds / 5) * meta.Count;
+        var estimatedRawRows = (long)(Math.Min(
+            (alignedTo - alignedFrom).TotalSeconds,
+            TimeSpan.FromHours(6).TotalSeconds)) * meta.Count;
         if (estimatedRawRows > MaxRawScanRows)
         {
             throw new InvalidOperationException(

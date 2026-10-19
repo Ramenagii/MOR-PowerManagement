@@ -18,10 +18,10 @@ export const TELEMETRY_WINDOWS: Array<{ id: TelemetryWindow; label: string }> = 
  * every new sample.
  */
 export const POLL_INTERVAL_MS: Record<TelemetryWindow, number | null> = {
-  '15m': 5_000,
-  '1h': 10_000,
-  '6h': 30_000,
-  '24h': 60_000,
+  '15m': 30_000,
+  '1h': 60_000,
+  '6h': 60_000,
+  '24h': 300_000,
   '7d': null,
 }
 
@@ -34,7 +34,7 @@ export const ALL_CHANNEL_IDS: number[] = Array.from({ length: 4 }, (_, i) => i +
  * The bucket grid belongs to the server, so this is a *span* and not a bucket
  * count: the number of columns that cover it is derived per response as
  * `ceil(HISTORY_SPAN_SECONDS / bucketSeconds)`. A 15 m window served at 60 s
- * buckets yields five columns; served at 5 s buckets it yields sixty. Either way
+ * buckets yields five columns; served at 10 s buckets it yields thirty. Either way
  * the strip shows the same five minutes rather than a varying stretch of time
  * that would silently change what two charts side by side are comparing.
  */
@@ -141,5 +141,3 @@ export const WATTS_CAPTION =
 export const WATTS_CAPTION_SIMULATED =
   'Per-channel watts are an allowance-weighted share of a synthesised mains total. Nothing here is measured.'
 
-/** Matches Telemetry:RetentionDays on the backend. */
-export const TELEMETRY_RETENTION_DAYS = 3

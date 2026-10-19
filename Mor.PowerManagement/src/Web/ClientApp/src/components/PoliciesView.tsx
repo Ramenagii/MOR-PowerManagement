@@ -64,7 +64,7 @@ export function PoliciesView() {
       setLoading(false)
     }).catch(() => { if (active) { setError('Could not load the framework settings.'); setLoading(false) } })
     void load()
-    const timer = window.setInterval(() => void load(), 5000)
+    const timer = window.setInterval(() => void load(), 15000)
     return () => { active = false; window.clearInterval(timer) }
   }, [])
 
