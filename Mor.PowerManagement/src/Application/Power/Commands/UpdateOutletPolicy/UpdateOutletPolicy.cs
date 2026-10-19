@@ -80,6 +80,7 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
             .FirstOrDefaultAsync(o => o.Id == request.OutletId, cancellationToken);
 
         Guard.Against.NotFound(request.OutletId, outlet);
+        mutation.OverlayLiveState(_context, new[] { outlet });
 
         var changes = new List<string>();
 

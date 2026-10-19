@@ -58,6 +58,7 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
             ?? new PowerSystemConfig();
 
         var outlets = await _context.Outlets.ToListAsync(cancellationToken);
+        mutation.OverlayLiveState(_context, outlets, config);
 
         var snapshots = outlets
             .Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name))

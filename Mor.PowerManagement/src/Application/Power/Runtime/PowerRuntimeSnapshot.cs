@@ -115,6 +115,32 @@ public sealed record RuntimeConfig(
         c.ZmctPowerFactor,
         c.ZmctGain);
 
+    /// <summary>
+    /// A detached entity carrying exactly these values (runtime ingest
+    /// evaluates on it and attaches it unchanged, so no query is needed).
+    /// Audit fields are not part of the snapshot and stay default; they are
+    /// never marked modified by an attach.
+    /// </summary>
+    public PowerSystemConfig ToEntity() => new()
+    {
+        Id = Id,
+        MaxCapacityWatts = MaxCapacityWatts,
+        WarningThresholdWatts = WarningThresholdWatts,
+        CriticalThresholdWatts = CriticalThresholdWatts,
+        StandbyThresholdWatts = StandbyThresholdWatts,
+        StandbyIdleMinutes = StandbyIdleMinutes,
+        StabilizationDelayMs = StabilizationDelayMs,
+        AutomaticPrioritisationEnabled = AutomaticPrioritisationEnabled,
+        LastAcquisitionSessionId = LastAcquisitionSessionId,
+        LastAcquisitionSequence = LastAcquisitionSequence,
+        MeteringMode = MeteringMode,
+        MeteringModeUpdatedAt = MeteringModeUpdatedAt,
+        ZmctCtRatio = ZmctCtRatio,
+        ZmctBurdenOhms = ZmctBurdenOhms,
+        ZmctPowerFactor = ZmctPowerFactor,
+        ZmctGain = ZmctGain,
+    };
+
     /// <summary>True when the device-facing configuration (thresholds, calibration) differs.</summary>
     public bool ConfigurationDiffers(RuntimeConfig? other)
         => other is null
@@ -203,6 +229,40 @@ public sealed record RuntimeOutlet(
         RuntimeTime.Normalize(o.PendingCommandAcknowledgedAtUtc),
         o.CommandNeedsReview,
         lastRelayReport);
+
+    /// <summary>A detached entity carrying exactly these values (see <see cref="RuntimeConfig.ToEntity"/>).</summary>
+    public Outlet ToEntity() => new()
+    {
+        Id = Id,
+        Name = Name,
+        Role = Role,
+        MeterChannel = MeterChannel,
+        RelayChannel = RelayChannel,
+        RatedVoltageVolts = RatedVoltageVolts,
+        Priority = Priority,
+        IsProtected = IsProtected,
+        AllowanceWatts = AllowanceWatts,
+        Schedule = Schedule,
+        IdleLimitMinutes = IdleLimitMinutes,
+        Status = Status,
+        CommandedAtUtc = CommandedAtUtc,
+        CurrentWatts = CurrentWatts,
+        LastSeen = LastSeen,
+        ManualHold = ManualHold,
+        FaultHold = FaultHold,
+        RecoveryLockout = RecoveryLockout,
+        AutomaticRecoveryAttempts = AutomaticRecoveryAttempts,
+        RecoveryEpisodeId = RecoveryEpisodeId,
+        NextRecoveryAtUtc = NextRecoveryAtUtc,
+        RecoveryTrialPending = RecoveryTrialPending,
+        RecoveryTrialOverLimitBatches = RecoveryTrialOverLimitBatches,
+        PendingCommandId = PendingCommandId,
+        PendingRelayClosed = PendingRelayClosed,
+        PendingCommandOrigin = PendingCommandOrigin,
+        PendingCommandIssuedAtUtc = PendingCommandIssuedAtUtc,
+        PendingCommandAcknowledgedAtUtc = PendingCommandAcknowledgedAtUtc,
+        CommandNeedsReview = CommandNeedsReview,
+    };
 
     public OutletLoadSnapshot ToLoadSnapshot()
         => new(Id, Priority, Status, CurrentWatts, AllowanceWatts, LastSeen, Name, IsProtected, ManualHold, RecoveryLockout, AutomaticRecoveryAttempts);

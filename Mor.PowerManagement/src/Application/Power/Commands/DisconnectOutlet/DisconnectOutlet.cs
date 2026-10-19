@@ -40,6 +40,7 @@ public class DisconnectOutletCommandHandler : IRequestHandler<DisconnectOutletCo
             .FirstOrDefaultAsync(o => o.Id == request.OutletId, cancellationToken);
 
         Guard.Against.NotFound(request.OutletId, outlet);
+        mutation.OverlayLiveState(_context, new[] { outlet });
 
         // Debounce repeat clicks while the device is still applying the
         // current command. Replacing its command ID here makes the ESP32's

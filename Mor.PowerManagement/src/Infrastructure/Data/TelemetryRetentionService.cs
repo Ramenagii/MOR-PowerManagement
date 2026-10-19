@@ -34,6 +34,8 @@ public sealed class TelemetryRetentionService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (configuration.GetValue<bool>("Telemetry:BatchPersistenceEnabled")) return;
+
         // First prune runs after the first interval tick, never at startup, so it
         // cannot compete with InitialiseDatabaseAsync for the database during a
         // cold start.
@@ -58,7 +60,7 @@ public sealed class TelemetryRetentionService(
         }
     }
 
-    private async Task PruneAsync(CancellationToken cancellationToken)
+    public async Task PruneAsync(CancellationToken cancellationToken)
     {
         try
         {

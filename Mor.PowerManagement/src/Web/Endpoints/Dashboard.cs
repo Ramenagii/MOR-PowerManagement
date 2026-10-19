@@ -1,3 +1,4 @@
+using Mor.PowerManagement.Application.Power.History;
 using Mor.PowerManagement.Application.Power.Commands.ApplySelectiveResponse;
 using Mor.PowerManagement.Application.Power.Commands.DisconnectOutlet;
 using Mor.PowerManagement.Application.Power.Commands.ClearOutletRecoveryState;
@@ -21,6 +22,8 @@ namespace Mor.PowerManagement.Web.Endpoints;
 // Dashboard surface used by the React SPA (cookie auth, like the Todo endpoints).
 public class Dashboard : IEndpointGroup
 {
+    public static HistoryPersistenceStatus GetPersistenceStatus(IHistoryBuffer history) => history.GetStatus();
+
     private static class DashboardCacheKeys
     {
         public const string State = "dashboard:state";
@@ -40,6 +43,7 @@ public class Dashboard : IEndpointGroup
 
         groupBuilder.MapGet(GetState, "state");
         groupBuilder.MapGet(GetTelemetry, "telemetry");
+        groupBuilder.MapGet(GetPersistenceStatus, "telemetry/persistence");
         groupBuilder.MapGet(GetPolicies, "policies");
         groupBuilder.MapPost(RequestActivation, "outlets/{id}/activation");
         groupBuilder.MapPost(DisconnectOutlet, "outlets/{id}/disconnection");
@@ -88,7 +92,7 @@ public class Dashboard : IEndpointGroup
     // BadRequest<string> rather than bare BadRequest: the 400 body names the
     // valid values so a bad request is self-explanatory.
     public static async Task<Results<Ok<TelemetrySeriesVm>, BadRequest<string>>> GetTelemetry(
-        ISender sender, IMemoryCache cache, string? window, string? channels)
+        ISender sender, IMemoryCache cache, string? window, string? channels, IHistoryBuffer history)
     {
         // Validated before dispatch so a bad window surfaces as a plain 400
         // rather than a ValidationException through the exception handler.
@@ -105,6 +109,11 @@ public class Dashboard : IEndpointGroup
             {
                 return TypedResults.BadRequest(channelError);
             }
+        }
+
+        if (history.Enabled)
+        {
+            return TypedResults.Ok(await sender.Send(new GetTelemetrySeriesQuery { Window = parsedWindow, OutletIds = outletIds }));
         }
 
         // Aggregation results are cached by window; longer history changes slowly,

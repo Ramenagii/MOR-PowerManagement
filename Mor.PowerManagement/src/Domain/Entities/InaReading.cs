@@ -35,4 +35,8 @@ public class InaReading : BaseEntity
 
     // When the batch that carried these readings was ingested.
     public DateTimeOffset Timestamp { get; set; }
+
+    // Backend acquisition identity of the batch this sample arrived in; set
+    // only by the batched history writer (see TelemetryReading).
+    public long? AcquisitionOrdinal { get; set; }
 }
