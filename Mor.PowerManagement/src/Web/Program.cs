@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using Mor.PowerManagement.Infrastructure.Data;
 using Scalar.AspNetCore;
+using Mor.PowerManagement.Infrastructure.Observability;
+using Mor.PowerManagement.Web.Observability;
 
 var builder = WebApplication.CreateBuilder(args);
 var isDocGen = string.Join(' ', Environment.GetCommandLineArgs())
@@ -48,10 +50,12 @@ builder.AddKeyVaultIfConfigured();
 builder.AddApplicationServices();
 builder.AddInfrastructureServices();
 builder.AddWebServices();
+builder.AddTelemetryRequestMeasurement();
 
 var app = builder.Build();
 
 app.UseForwardedHeaders();
+app.UseTelemetryRequestMeasurement();
 
 // Migrations are safe to apply on startup for a single instance (Neon-safe:
 // MigrateAsync never deletes). Hosted deploys have no dev machine to run
@@ -60,6 +64,7 @@ app.UseForwardedHeaders();
 // this pipeline without a database.
 if (!isDocGen)
 {
+    using var measurementScope = TelemetryActivityScope.Begin(TelemetryActivityCategory.Startup);
     await app.InitialiseDatabaseAsync();
 }
 
