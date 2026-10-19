@@ -40,16 +40,18 @@ public class SetManualOverrideCommandHandler : IRequestHandler<SetManualOverride
 {
     private readonly IApplicationDbContext _context;
     private readonly LoadSheddingStateStore _framework;
+    private readonly TimeProvider _timeProvider;
 
-    public SetManualOverrideCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
+    public SetManualOverrideCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
     {
         _context = context;
         _framework = framework;
+        _timeProvider = timeProvider;
     }
 
     public async Task<ManualOverrideResult> Handle(SetManualOverrideCommand request, CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         var state = _framework.Update(s => s with { ManualOverride = request.Enabled });
 

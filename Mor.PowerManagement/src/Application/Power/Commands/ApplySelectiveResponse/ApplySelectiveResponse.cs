@@ -62,16 +62,18 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
 {
     private readonly IApplicationDbContext _context;
     private readonly LoadSheddingStateStore _framework;
+    private readonly TimeProvider _timeProvider;
 
-    public ApplySelectiveResponseCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
+    public ApplySelectiveResponseCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
     {
         _context = context;
         _framework = framework;
+        _timeProvider = timeProvider;
     }
 
     public async Task<SelectiveResponseResult> Handle(ApplySelectiveResponseCommand request, CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
 
         var config = await _context.PowerSystemConfigs
             .FirstOrDefaultAsync(cancellationToken)

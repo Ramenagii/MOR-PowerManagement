@@ -148,16 +148,18 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 {
     private readonly IApplicationDbContext _context;
     private readonly LoadSheddingStateStore _framework;
+    private readonly TimeProvider _timeProvider;
 
-    public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
+    public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
     {
         _context = context;
         _framework = framework;
+        _timeProvider = timeProvider;
     }
 
     public async Task<IngestTelemetryResult> Handle(IngestTelemetryCommand request, CancellationToken cancellationToken)
     {
-        var now = DateTimeOffset.UtcNow;
+        var now = _timeProvider.GetUtcNow();
         var eventsRaised = new List<string>();
 
         var config = await _context.PowerSystemConfigs

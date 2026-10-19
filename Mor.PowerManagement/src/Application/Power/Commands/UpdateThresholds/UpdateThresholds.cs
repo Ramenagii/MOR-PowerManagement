@@ -46,10 +46,12 @@ public class UpdateThresholdsCommandValidator : AbstractValidator<UpdateThreshol
 public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCommand, int>
 {
     private readonly IApplicationDbContext _context;
+    private readonly TimeProvider _timeProvider;
 
-    public UpdateThresholdsCommandHandler(IApplicationDbContext context)
+    public UpdateThresholdsCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
     {
         _context = context;
+        _timeProvider = timeProvider;
     }
 
     public async Task<int> Handle(UpdateThresholdsCommand request, CancellationToken cancellationToken)
@@ -111,7 +113,7 @@ public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCo
         {
             _context.PowerEvents.Add(new PowerEvent
             {
-                Timestamp = DateTimeOffset.UtcNow,
+                Timestamp = _timeProvider.GetUtcNow(),
                 Title = "System thresholds changed",
                 Detail = string.Join("; ", changes) + ".",
                 Severity = EventSeverity.Info,

@@ -9,7 +9,12 @@ public record AcknowledgeOutletFaultCommand(int OutletId) : IRequest<int>;
 public class AcknowledgeOutletFaultCommandHandler : IRequestHandler<AcknowledgeOutletFaultCommand, int>
 {
     private readonly IApplicationDbContext _context;
-    public AcknowledgeOutletFaultCommandHandler(IApplicationDbContext context) => _context = context;
+    private readonly TimeProvider _timeProvider;
+    public AcknowledgeOutletFaultCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+    }
 
     public async Task<int> Handle(AcknowledgeOutletFaultCommand request, CancellationToken cancellationToken)
     {
@@ -19,7 +24,7 @@ public class AcknowledgeOutletFaultCommandHandler : IRequestHandler<AcknowledgeO
         outlet.Status = OutletStatus.Disconnected;
         _context.PowerEvents.Add(new PowerEvent
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Timestamp = _timeProvider.GetUtcNow(),
             Title = "Fault hold acknowledged",
             Detail = $"Admin acknowledged the hardware fault hold for {outlet.Name}. The outlet remains OFF until manually restored.",
             Severity = EventSeverity.Warning,
