@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Constants;
 using Mor.PowerManagement.Domain.Entities;
@@ -61,17 +62,25 @@ public class ApplySelectiveResponseCommandValidator : AbstractValidator<ApplySel
 public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelectiveResponseCommand, SelectiveResponseResult>
 {
     private readonly IApplicationDbContext _context;
-    private readonly LoadSheddingStateStore _framework;
     private readonly TimeProvider _timeProvider;
+    private readonly PowerMutationCoordinator _mutations;
 
     public ApplySelectiveResponseCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
+        : this(context, framework, timeProvider, PowerMutationCoordinator.Legacy(framework))
     {
-        _context = context;
-        _framework = framework;
-        _timeProvider = timeProvider;
     }
 
-    public async Task<SelectiveResponseResult> Handle(ApplySelectiveResponseCommand request, CancellationToken cancellationToken)
+    public ApplySelectiveResponseCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider, PowerMutationCoordinator mutations)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+        _mutations = mutations;
+    }
+
+    public Task<SelectiveResponseResult> Handle(ApplySelectiveResponseCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<SelectiveResponseResult> Handle(ApplySelectiveResponseCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
 
@@ -87,7 +96,7 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
         // it. Without this the two paths disagree about what is "shed".
         if (request.ManualOverride)
         {
-            _framework.Update(state => state with { ManualOverride = true });
+            mutation.UpdateFramework(state => state with { ManualOverride = true });
         }
 
         var snapshots = outlets
@@ -122,7 +131,7 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
             outlet.PendingCommandIssuedAtUtc = now;
             outlet.PendingCommandAcknowledgedAtUtc = null;
 
-            _framework.Update(state => state with
+            mutation.UpdateFramework(state => state with
             {
                 ShedLedger = state.ShedLedger
                     .Append(new ShedRecord(outlet.Id, tier, candidates.First(c => c.Id == outlet.Id).Watts, now))
@@ -135,23 +144,24 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
 
         var state = LoadResponseEvaluator.GetSystemState(total, config.WarningThresholdWatts, config.CriticalThresholdWatts);
 
+        PowerEvent powerEvent;
         if (shed.Count > 0)
         {
-            _context.PowerEvents.Add(new PowerEvent
+            powerEvent = new PowerEvent
             {
                 Timestamp = now,
                 Title = "Selective load response applied",
                 Detail = $"Low-priority outlets disconnected first ({string.Join(", ", shed.Select(s => $"Outlet {s.OutletId} ({s.Tier}, {s.WattsAtShed:F0} W)"))}) " +
                     "while high-priority outlets remained active when possible (POL-05).",
                 Severity = EventSeverity.Critical,
-            });
+            };
         }
         else
         {
             // Nothing was eligible. That is a real outcome on a 2-outlet rig
             // once both outlets are down, and silently returning an empty list
             // would read as success.
-            _context.PowerEvents.Add(new PowerEvent
+            powerEvent = new PowerEvent
             {
                 Timestamp = now,
                 Title = "Selective load response had no candidates",
@@ -159,12 +169,19 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
                     $"and every lower tier is already disconnected. P_total {total:F0} W against P_limit {config.CriticalThresholdWatts:F0} W; " +
                     "the rig is NOT assumed safe.",
                 Severity = EventSeverity.Critical,
-            });
+            };
         }
+
+        _context.PowerEvents.Add(powerEvent);
 
         await _context.SaveChangesAsync(cancellationToken);
 
-        var framework = _framework.Current;
+        mutation.StageConfig(config);
+        mutation.StageOutlets(outlets);
+        mutation.StageEvent(powerEvent);
+        mutation.MarkCommitted();
+
+        var framework = mutation.Framework;
 
         return new SelectiveResponseResult(
             shed.Select(s => s.OutletId).ToList(),

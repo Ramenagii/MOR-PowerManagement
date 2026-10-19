@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
@@ -39,21 +40,29 @@ public class SetManualOverrideCommandValidator : AbstractValidator<SetManualOver
 public class SetManualOverrideCommandHandler : IRequestHandler<SetManualOverrideCommand, ManualOverrideResult>
 {
     private readonly IApplicationDbContext _context;
-    private readonly LoadSheddingStateStore _framework;
     private readonly TimeProvider _timeProvider;
+    private readonly PowerMutationCoordinator _mutations;
 
     public SetManualOverrideCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
+        : this(context, framework, timeProvider, PowerMutationCoordinator.Legacy(framework))
     {
-        _context = context;
-        _framework = framework;
-        _timeProvider = timeProvider;
     }
 
-    public async Task<ManualOverrideResult> Handle(SetManualOverrideCommand request, CancellationToken cancellationToken)
+    public SetManualOverrideCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider, PowerMutationCoordinator mutations)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+        _mutations = mutations;
+    }
+
+    public Task<ManualOverrideResult> Handle(SetManualOverrideCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<ManualOverrideResult> Handle(SetManualOverrideCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
 
-        var state = _framework.Update(s => s with { ManualOverride = request.Enabled });
+        var state = mutation.UpdateFramework(s => s with { ManualOverride = request.Enabled });
 
         var detail = request.Enabled
             ? "Operator disabled automatic prioritisation. Load shedding and staged restoration are suspended; measurement and alarms continue."
@@ -69,7 +78,7 @@ public class SetManualOverrideCommandHandler : IRequestHandler<SetManualOverride
             detail += $" Note: {state.ShedLedger.Count} branch(es) are still shed and will NOT be restored automatically until the override is cleared.";
         }
 
-        _context.PowerEvents.Add(new PowerEvent
+        var powerEvent = new PowerEvent
         {
             Timestamp = now,
             Title = request.Enabled ? "Automatic prioritisation disabled" : "Automatic prioritisation enabled",
@@ -78,9 +87,13 @@ public class SetManualOverrideCommandHandler : IRequestHandler<SetManualOverride
             // longer protecting itself, and that must be visible in the event
             // log rather than buried in a settings screen.
             Severity = request.Enabled ? EventSeverity.Warning : EventSeverity.Success,
-        });
+        };
+        _context.PowerEvents.Add(powerEvent);
 
         await _context.SaveChangesAsync(cancellationToken);
+
+        mutation.StageEvent(powerEvent);
+        mutation.MarkCommitted();
 
         return new ManualOverrideResult(
             request.Enabled,

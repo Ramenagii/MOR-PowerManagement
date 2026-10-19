@@ -1,4 +1,6 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
+using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
 using Mor.PowerManagement.Domain.Services;
@@ -27,13 +29,24 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
     private readonly IApplicationDbContext _context;
     private readonly TimeProvider _timeProvider;
 
+    private readonly PowerMutationCoordinator _mutations;
+
     public RequestOutletActivationCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
+        : this(context, timeProvider, PowerMutationCoordinator.Legacy(new LoadSheddingStateStore()))
+    {
+    }
+
+    public RequestOutletActivationCommandHandler(IApplicationDbContext context, TimeProvider timeProvider, PowerMutationCoordinator mutations)
     {
         _context = context;
         _timeProvider = timeProvider;
+        _mutations = mutations;
     }
 
-    public async Task<OutletActivationResult> Handle(RequestOutletActivationCommand request, CancellationToken cancellationToken)
+    public Task<OutletActivationResult> Handle(RequestOutletActivationCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<OutletActivationResult> Handle(RequestOutletActivationCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var outlet = await _context.Outlets
             .FirstOrDefaultAsync(o => o.Id == request.OutletId, cancellationToken);
@@ -84,11 +97,16 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
         if (outlet.FaultHold || outlet.RecoveryLockout || outlet.CommandNeedsReview)
         {
             var holdReason = outlet.FaultHold ? "fault hold" : outlet.RecoveryLockout ? "recovery lockout" : "unresolved relay response";
-            _context.PowerEvents.Add(new PowerEvent { Timestamp = now, Title = "Manual restoration blocked", Detail = $"{outlet.Name} remains OFF because of {holdReason}; Admin clearance and response review are required.", Severity = EventSeverity.Critical });
+            var blocked = new PowerEvent { Timestamp = now, Title = "Manual restoration blocked", Detail = $"{outlet.Name} remains OFF because of {holdReason}; Admin clearance and response review are required.", Severity = EventSeverity.Critical };
+            _context.PowerEvents.Add(blocked);
             await _context.SaveChangesAsync(cancellationToken);
+            mutation.StageOutlets(outlets);
+            mutation.StageEvent(blocked);
+            mutation.MarkCommitted();
             return new OutletActivationResult(outlet.Id, false, "HOLD", $"Cannot restore while {holdReason} is active.", outlet.Status, LoadTierMapper.ToTier(outlet.Priority), capExempt.Contains(outlet.Id));
         }
 
+        PowerEvent decided;
         if (assessment.Verdict == ActivationVerdict.Allowed)
         {
             outlet.Status = OutletStatus.Active;
@@ -102,28 +120,34 @@ public class RequestOutletActivationCommandHandler : IRequestHandler<RequestOutl
             outlet.PendingCommandIssuedAtUtc = now;
             outlet.PendingCommandAcknowledgedAtUtc = null;
 
-            _context.PowerEvents.Add(new PowerEvent
+            decided = new PowerEvent
             {
                 Timestamp = now,
                 Title = "Outlet activation allowed",
                 Detail = $"{assessment.Reason} {outlet.Name} relay energized.",
                 Severity = EventSeverity.Success,
-            });
+            };
         }
         else
         {
             outlet.Status = OutletStatus.Restricted;
 
-            _context.PowerEvents.Add(new PowerEvent
+            decided = new PowerEvent
             {
                 Timestamp = now,
                 Title = "Activation blocked",
                 Detail = assessment.Reason,
                 Severity = EventSeverity.Warning,
-            });
+            };
         }
 
+        _context.PowerEvents.Add(decided);
+
         await _context.SaveChangesAsync(cancellationToken);
+
+        mutation.StageOutlets(outlets);
+        mutation.StageEvent(decided);
+        mutation.MarkCommitted();
 
         return new OutletActivationResult(
             outlet.Id,

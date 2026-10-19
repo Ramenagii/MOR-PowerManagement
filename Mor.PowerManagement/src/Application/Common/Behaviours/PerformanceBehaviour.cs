@@ -1,6 +1,8 @@
 ﻿using System.Diagnostics;
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Mor.PowerManagement.Application.Common.Behaviours;
 
@@ -11,6 +13,8 @@ public class PerformanceBehaviour<TRequest, TResponse> : IPipelineBehavior<TRequ
     private readonly ILogger<TRequest> _logger;
     private readonly IUser _user;
     private readonly IIdentityService _identityService;
+    private readonly bool _claimsOnly;
+    private readonly ICurrentUserName? _currentUserName;
 
     public PerformanceBehaviour(
         ILogger<TRequest> logger,
@@ -22,6 +26,18 @@ public class PerformanceBehaviour<TRequest, TResponse> : IPipelineBehavior<TRequ
         _logger = logger;
         _user = user;
         _identityService = identityService;
+    }
+
+    public PerformanceBehaviour(
+        ILogger<TRequest> logger,
+        IUser user,
+        IIdentityService identityService,
+        IOptions<PowerRuntimeOptions> runtimeOptions,
+        IEnumerable<ICurrentUserName> currentUserName)
+        : this(logger, user, identityService)
+    {
+        _claimsOnly = runtimeOptions.Value.CachedReadsEnabled;
+        _currentUserName = currentUserName.LastOrDefault();
     }
 
     public async Task<TResponse> Handle(TRequest request, RequestHandlerDelegate<TResponse> next, CancellationToken cancellationToken)
@@ -42,7 +58,7 @@ public class PerformanceBehaviour<TRequest, TResponse> : IPipelineBehavior<TRequ
 
             if (!string.IsNullOrEmpty(userId))
             {
-                userName = await _identityService.GetUserNameAsync(userId);
+                userName = await CurrentUserName.ResolveAsync(userId, _claimsOnly, _currentUserName, _identityService);
             }
 
             _logger.LogWarning("Mor.PowerManagement Long Running Request: {Name} ({ElapsedMilliseconds} milliseconds) {@UserId} {@UserName} {@Request}",

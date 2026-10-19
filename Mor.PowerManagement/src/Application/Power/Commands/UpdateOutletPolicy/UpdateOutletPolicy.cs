@@ -1,4 +1,6 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
+using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
 
@@ -55,13 +57,24 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
     private readonly IApplicationDbContext _context;
     private readonly TimeProvider _timeProvider;
 
+    private readonly PowerMutationCoordinator _mutations;
+
     public UpdateOutletPolicyCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
+        : this(context, timeProvider, PowerMutationCoordinator.Legacy(new LoadSheddingStateStore()))
+    {
+    }
+
+    public UpdateOutletPolicyCommandHandler(IApplicationDbContext context, TimeProvider timeProvider, PowerMutationCoordinator mutations)
     {
         _context = context;
         _timeProvider = timeProvider;
+        _mutations = mutations;
     }
 
-    public async Task<int> Handle(UpdateOutletPolicyCommand request, CancellationToken cancellationToken)
+    public Task<int> Handle(UpdateOutletPolicyCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<int> Handle(UpdateOutletPolicyCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var outlet = await _context.Outlets
             .FirstOrDefaultAsync(o => o.Id == request.OutletId, cancellationToken);
@@ -117,18 +130,24 @@ public class UpdateOutletPolicyCommandHandler : IRequestHandler<UpdateOutletPoli
             outlet.IdleLimitMinutes = request.IdleLimitMinutes.Value;
         }
 
+        PowerEvent? changed = null;
         if (changes.Count > 0)
         {
-            _context.PowerEvents.Add(new PowerEvent
+            changed = new PowerEvent
             {
                 Timestamp = _timeProvider.GetUtcNow(),
                 Title = "Outlet settings changed",
                 Detail = $"{outlet.Name} (CH{outlet.Id}): {string.Join("; ", changes)}.",
                 Severity = EventSeverity.Info,
-            });
+            };
+            _context.PowerEvents.Add(changed);
         }
 
         await _context.SaveChangesAsync(cancellationToken);
+
+        mutation.StageOutlet(outlet);
+        if (changed is not null) mutation.StageEvent(changed);
+        mutation.MarkCommitted();
 
         return outlet.Id;
     }

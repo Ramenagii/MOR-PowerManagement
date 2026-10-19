@@ -13,6 +13,8 @@ using Mor.PowerManagement.Application.Power.Queries.GetPolicies;
 using Mor.PowerManagement.Application.Power.Queries.GetTelemetrySeries;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Options;
+using Mor.PowerManagement.Application.Power.Runtime;
 
 namespace Mor.PowerManagement.Web.Endpoints;
 
@@ -53,8 +55,15 @@ public class Dashboard : IEndpointGroup
 
     [EndpointSummary("Get dashboard state")]
     [EndpointDescription("Returns outlets with live load, totals, system state, thresholds and recent events.")]
-    public static async Task<Ok<DashboardStateVm>> GetState(ISender sender, IMemoryCache cache)
+    public static async Task<Ok<DashboardStateVm>> GetState(ISender sender, IMemoryCache cache, IOptions<PowerRuntimeOptions> runtime)
     {
+        if (runtime.Value.CachedReadsEnabled)
+        {
+            // Served from the runtime snapshot with no database access, so the
+            // 5 s cache below would only hide newly committed state. Bypassed.
+            return TypedResults.Ok(await sender.Send(new GetDashboardStateQuery()));
+        }
+
         // The console refreshes this endpoint every 2 s. A 5 s absolute-expired cache
         // shares repeated dashboard polls across fewer database reads. Mutations (activation, shed,
         // thresholds) evict it immediately, so a button press never reads stale.

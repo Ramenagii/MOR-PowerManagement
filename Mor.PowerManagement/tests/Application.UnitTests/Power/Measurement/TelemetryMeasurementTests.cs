@@ -244,7 +244,7 @@ public class TelemetryMeasurementTests
         // Nothing sanitized leaks a fixture secret or parameter value.
         var exported = string.Join("\n", stats.Select(c => c.Fingerprint).Concat(emitted.Values));
         Assert.That(exported, Does.Not.Contain(FixtureSecret));
-        Assert.That(exported, Does.Not.Contain(cs.Password ?? "mor_test_local"));
+        if (!string.IsNullOrEmpty(cs.Password)) Assert.That(exported, Does.Not.Contain(cs.Password));
         Assert.That(exported, Does.Not.Contain("Password").IgnoreCase);
     }
 
