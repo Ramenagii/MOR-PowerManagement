@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Constants;
 using Mor.PowerManagement.Domain.Entities;
@@ -117,15 +118,32 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
 {
     private readonly IApplicationDbContext _context;
     private readonly LoadSheddingStateStore _framework;
+    private readonly TimeProvider _timeProvider;
+    private readonly IPowerRuntimeStore? _runtime;
 
     public GetDashboardStateQueryHandler(IApplicationDbContext context, LoadSheddingStateStore framework)
+        : this(context, framework, TimeProvider.System, null)
+    {
+    }
+
+    public GetDashboardStateQueryHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider, IPowerRuntimeStore? runtime)
     {
         _context = context;
         _framework = framework;
+        _timeProvider = timeProvider;
+        _runtime = runtime;
     }
 
     public async Task<DashboardStateVm> Handle(GetDashboardStateQuery request, CancellationToken cancellationToken)
     {
+        if (_runtime is { Enabled: true })
+        {
+            // Cached reads: no database access. Freshness (device online, the
+            // over-limit timer, the mains-voltage window, the INA226 sample)
+            // is judged against the clock now, on every request.
+            return Project(await _runtime.GetAsync(cancellationToken), _timeProvider.GetUtcNow());
+        }
+
         var outlets = await _context.Outlets
             .OrderBy(o => o.Id)
             .ToListAsync(cancellationToken);
@@ -149,7 +167,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
             .DefaultIfEmpty()
             .Max();
         var hasSeen = outlets.Any(o => o.LastSeen.HasValue);
-        var deviceOnline = hasSeen && deviceLastSeen >= DateTimeOffset.UtcNow.AddSeconds(-30);
+        var deviceOnline = hasSeen && deviceLastSeen >= _timeProvider.GetUtcNow().AddSeconds(-30);
 
         var events = await _context.PowerEvents
             .OrderByDescending(e => e.Timestamp)
@@ -160,7 +178,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
         var framework = _framework.Current;
         var shedByFramework = framework.ShedLedger.Select(r => r.OutletId).ToHashSet();
-        var nowUtc = DateTimeOffset.UtcNow;
+        var nowUtc = _timeProvider.GetUtcNow();
         var overLimitElapsedSeconds = framework.OverLimitSinceUtc is { } overLimitSince
             && framework.LastOverLimitSampleUtc is { } lastOverLimitSample
             && nowUtc - lastOverLimitSample <= TimeSpan.FromSeconds(LoadSheddingSettings.MaxOverLimitSampleGapSeconds)
@@ -173,7 +191,7 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
         // down to ~187 V. Stale or absent readings yield null so the UI falls
         // back to rated volts instead of presenting a dead number as live.
         var mainsIds = outlets.Where(o => o.RatedVoltageVolts >= 100).Select(o => o.Id).ToList();
-        var cutoff = DateTimeOffset.UtcNow.AddSeconds(-30);
+        var cutoff = _timeProvider.GetUtcNow().AddSeconds(-30);
         var mainsVolts = await _context.TelemetryReadings
             .Where(r => r.Timestamp >= cutoff && r.Voltage > 0 && mainsIds.Contains(r.OutletId))
             .Select(r => (double?)r.Voltage)
@@ -199,6 +217,99 @@ public class GetDashboardStateQueryHandler : IRequestHandler<GetDashboardStateQu
                 latestIna.CurrentA,
                 latestIna.PowerW,
                 latestIna.Timestamp);
+
+        return new DashboardStateVm(
+            outlets.Select(o => new OutletStateDto(
+                o.Id, o.Name, o.Role, o.MeterChannel, o.RelayChannel,
+                o.Priority, o.AllowanceWatts, o.RatedVoltageVolts, o.CurrentWatts, o.Status,
+                o.Schedule, o.IdleLimitMinutes, o.LastSeen,
+                LoadTierMapper.ToTier(o.Priority),
+                capExempt.Contains(o.Id),
+                shedByFramework.Contains(o.Id), o.IsProtected, o.ManualHold, o.FaultHold,
+                o.RecoveryLockout, o.AutomaticRecoveryAttempts, o.NextRecoveryAtUtc,
+                o.CommandNeedsReview, o.PendingCommandId.HasValue, o.RecoveryTrialPending)).ToList(),
+            total,
+            Math.Max(config.MaxCapacityWatts - total, 0),
+            config.MaxCapacityWatts <= 0 ? 0 : Math.Min(total / config.MaxCapacityWatts * 100, 100),
+            state,
+            snapshots.Count(s => LoadResponseEvaluator.IsEnergized(s.Status)),
+            new ThresholdsDto(
+                config.MaxCapacityWatts,
+                config.WarningThresholdWatts,
+                config.CriticalThresholdWatts,
+                config.StandbyThresholdWatts,
+                config.StandbyIdleMinutes,
+                config.StabilizationDelayMs),
+            events,
+            deviceOnline,
+            hasSeen ? deviceLastSeen : null,
+            new FrameworkStateDto(
+                !framework.ManualOverride,
+                config.LastAcquisitionSessionId.HasValue,
+                framework.FaultLatched,
+                LoadSheddingEngine.ComputeRecoveryLimit(config.CriticalThresholdWatts),
+                LoadSheddingSettings.RecoveryHysteresisFraction,
+                LoadSheddingSettings.OverLimitConfirmationSeconds,
+                LoadSheddingSettings.RecoveryPeriodSeconds,
+                LoadSheddingSettings.InterReconnectDelaySeconds,
+                framework.ConsecutiveOverLimitBatches,
+                overLimitElapsedSeconds,
+                framework.BelowRecoveryLimitSinceUtc,
+                framework.ShedLedger.Select(r => r.OutletId).ToList()),
+            mainsVolts,
+            ina226);
+    }
+
+    /// <summary>
+    /// The legacy response, built from the runtime snapshot. Every rule above
+    /// is repeated against the snapshot's copies: the same totals and state,
+    /// the 30 s device-online and voltage/INA freshness windows, the latest 20
+    /// events newest first, and the framework counters.
+    /// </summary>
+    public static DashboardStateVm Project(PowerRuntimeSnapshot snapshot, DateTimeOffset now)
+    {
+        var outlets = snapshot.Outlets.OrderBy(o => o.Id).ToList();
+        var config = snapshot.EffectiveConfig;
+
+        var snapshots = outlets.Select(o => o.ToLoadSnapshot()).ToList();
+
+        var total = LoadResponseEvaluator.TotalLoad(snapshots);
+        var state = LoadResponseEvaluator.GetSystemState(total, config.WarningThresholdWatts, config.CriticalThresholdWatts);
+
+        var deviceLastSeen = outlets
+            .Where(o => o.LastSeen.HasValue)
+            .Select(o => o.LastSeen!.Value)
+            .DefaultIfEmpty()
+            .Max();
+        var hasSeen = outlets.Any(o => o.LastSeen.HasValue);
+        var deviceOnline = hasSeen && deviceLastSeen >= now.AddSeconds(-30);
+
+        var events = snapshot.RecentEvents
+            .Take(PowerRuntimeSnapshot.RecentEventCapacity)
+            .Select(e => new PowerEventDto(e.Id, e.Timestamp, e.Title, e.Detail, e.Severity, e.Actor))
+            .ToList();
+
+        var capExempt = LoadTierMapper.SelectCapExemptOutletIds(snapshots);
+        var framework = snapshot.Framework;
+        var shedByFramework = framework.ShedLedger.Select(r => r.OutletId).ToHashSet();
+        var overLimitElapsedSeconds = framework.OverLimitSinceUtc is { } overLimitSince
+            && framework.LastOverLimitSampleUtc is { } lastOverLimitSample
+            && now - lastOverLimitSample <= TimeSpan.FromSeconds(LoadSheddingSettings.MaxOverLimitSampleGapSeconds)
+                ? Math.Max(0, (now - overLimitSince).TotalSeconds)
+                : 0;
+
+        var mainsIds = outlets.Where(o => o.RatedVoltageVolts >= 100).Select(o => o.Id).ToHashSet();
+        var cutoff = now.AddSeconds(-30);
+        var mainsVolts = snapshot.VoltageWindow.Average(cutoff, mainsIds);
+
+        var ina226 = snapshot.LatestIna is { } latestIna && latestIna.Timestamp >= cutoff
+            ? new Ina226StateDto(
+                latestIna.BusVoltageV,
+                latestIna.ShuntVoltageMv,
+                latestIna.CurrentA,
+                latestIna.PowerW,
+                latestIna.Timestamp)
+            : null;
 
         return new DashboardStateVm(
             outlets.Select(o => new OutletStateDto(

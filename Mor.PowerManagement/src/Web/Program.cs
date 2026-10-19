@@ -3,6 +3,8 @@ using Mor.PowerManagement.Infrastructure.Data;
 using Scalar.AspNetCore;
 using Mor.PowerManagement.Infrastructure.Observability;
 using Mor.PowerManagement.Web.Observability;
+using Mor.PowerManagement.Application.Common.Behaviours;
+using Mor.PowerManagement.Infrastructure.Power;
 
 var builder = WebApplication.CreateBuilder(args);
 var isDocGen = string.Join(' ', Environment.GetCommandLineArgs())
@@ -52,6 +54,12 @@ builder.AddInfrastructureServices();
 builder.AddWebServices();
 builder.AddTelemetryRequestMeasurement();
 
+// Logging/performance behaviours read the signed-in user's name from the
+// authenticated principal when Telemetry:CachedReadsEnabled is on, instead of
+// an AspNetUsers query per request (W-12). Authentication is unchanged.
+builder.Services.AddScoped<ICurrentUserName>(sp =>
+    new ClaimsCurrentUserName(() => sp.GetRequiredService<IHttpContextAccessor>().HttpContext?.User));
+
 var app = builder.Build();
 
 app.UseForwardedHeaders();
@@ -65,7 +73,12 @@ app.UseTelemetryRequestMeasurement();
 if (!isDocGen)
 {
     using var measurementScope = TelemetryActivityScope.Begin(TelemetryActivityCategory.Startup);
+
+    // Cached reads only: one backend process per database on this host, then
+    // hydrate the runtime snapshot before any request is accepted.
+    app.AcquirePowerRuntimeWriterGuard();
     await app.InitialiseDatabaseAsync();
+    await app.HydratePowerRuntimeAsync();
 }
 
 // Configure the HTTP request pipeline.

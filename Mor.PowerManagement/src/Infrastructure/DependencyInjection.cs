@@ -1,4 +1,4 @@
-﻿using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Common.Interfaces;
 using Mor.PowerManagement.Infrastructure.Data;
 using Mor.PowerManagement.Infrastructure.Data.Interceptors;
 using Mor.PowerManagement.Infrastructure.Identity;
@@ -9,6 +9,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
 using Mor.PowerManagement.Infrastructure.Observability;
+using Mor.PowerManagement.Infrastructure.Power;
 
 namespace Microsoft.Extensions.DependencyInjection;
 
@@ -83,6 +84,10 @@ public static class DependencyInjection
 
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddTransient<IIdentityService, IdentityService>();
+
+        // Runtime snapshot hydration and the single-writer guard identity
+        // (PLAN-0001 Spec D). Inert while Telemetry:CachedReadsEnabled is off.
+        builder.Services.AddPowerRuntime(connectionString);
 
         // Bounds TelemetryReadings growth. Opportunistic, not scheduled: the job
         // only ticks while the host is awake.

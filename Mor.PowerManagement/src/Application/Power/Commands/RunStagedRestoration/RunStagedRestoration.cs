@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Constants;
 using Mor.PowerManagement.Domain.Entities;
@@ -42,17 +43,25 @@ public class RunStagedRestorationCommandHandler
     : IRequestHandler<RunStagedRestorationCommand, StagedRestorationResult>
 {
     private readonly IApplicationDbContext _context;
-    private readonly LoadSheddingStateStore _framework;
     private readonly TimeProvider _timeProvider;
+    private readonly PowerMutationCoordinator _mutations;
 
     public RunStagedRestorationCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
+        : this(context, framework, timeProvider, PowerMutationCoordinator.Legacy(framework))
     {
-        _context = context;
-        _framework = framework;
-        _timeProvider = timeProvider;
     }
 
-    public async Task<StagedRestorationResult> Handle(RunStagedRestorationCommand request, CancellationToken cancellationToken)
+    public RunStagedRestorationCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider, PowerMutationCoordinator mutations)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+        _mutations = mutations;
+    }
+
+    public Task<StagedRestorationResult> Handle(RunStagedRestorationCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<StagedRestorationResult> Handle(RunStagedRestorationCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
 
@@ -68,7 +77,7 @@ public class RunStagedRestorationCommandHandler
             .ToList();
 
         var total = LoadResponseEvaluator.TotalLoad(snapshots);
-        var current = _framework.Current;
+        var current = mutation.Framework;
 
         // Force skips the two WAITS only. It never skips the recovery-limit
         // check: forcing a reconnect into the hysteresis band is precisely the
@@ -120,19 +129,25 @@ public class RunStagedRestorationCommandHandler
         // Only persist the state when a relay actually moved. A refused step
         // must not reset the recovery clock, or repeatedly polling this command
         // would make the ladder permanently wait.
-        _framework.Update(_ => decision.NextState);
+        mutation.UpdateFramework(_ => decision.NextState);
 
-        _context.PowerEvents.Add(new PowerEvent
+        var powerEvent = new PowerEvent
         {
             Timestamp = now,
             Title = "Staged restoration (operator)",
             Detail = decision.Detail,
             Severity = EventSeverity.Info,
-        });
+        };
+        _context.PowerEvents.Add(powerEvent);
 
         await _context.SaveChangesAsync(cancellationToken);
 
-        var next = _framework.Current;
+        mutation.StageConfig(config);
+        mutation.StageOutlets(outlets);
+        mutation.StageEvent(powerEvent);
+        mutation.MarkCommitted();
+
+        var next = mutation.Framework;
 
         return new StagedRestorationResult(
             decision.Action.ToString(),

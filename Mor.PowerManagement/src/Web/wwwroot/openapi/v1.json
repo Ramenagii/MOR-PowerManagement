@@ -42,7 +42,7 @@
           "Dashboard"
         ],
         "summary": "Get telemetry series",
-        "description": "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), aggregated server-side into fixed time buckets (max 360 points per series). Each channel carries a provenance label: both 220 V mains channels (CH1-CH2) report voltage from the INA226 on the mains feed, and their current is measured on each channel's own ADS1220 SPI input via its branch CT sensor. Empty buckets are returned as null, never zero.",
+        "description": "Returns per-channel voltage, current and power time series for a bounded window (15m|1h|6h|24h|7d), aggregated server-side into fixed time buckets (max 168 points per series). Each channel carries a provenance label: both 220 V mains channels (CH1-CH2) report voltage from the INA226 on the mains feed, and their current is measured on each channel's own ADS1220 SPI input via its branch CT sensor. Empty buckets are returned as null, never zero.",
         "operationId": "GetTelemetry",
         "parameters": [
           {
@@ -1169,7 +1169,14 @@
             "description": "OK"
           },
           "400": {
-            "description": "Bad Request"
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpValidationProblemDetails"
+                }
+              }
+            }
           }
         }
       }
@@ -1893,6 +1900,7 @@
           "recoveryPeriodSeconds",
           "interReconnectDelaySeconds",
           "consecutiveOverLimitBatches",
+          "overLimitElapsedSeconds",
           "belowRecoveryLimitSinceUtc",
           "shedOutletIds"
         ],
@@ -1954,6 +1962,14 @@
               "string"
             ],
             "format": "int32"
+          },
+          "overLimitElapsedSeconds": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?$",
+            "type": [
+              "number",
+              "string"
+            ],
+            "format": "double"
           },
           "belowRecoveryLimitSinceUtc": {
             "type": [

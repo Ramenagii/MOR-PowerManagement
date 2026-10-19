@@ -1,4 +1,6 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
+using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Entities;
 using Mor.PowerManagement.Domain.Enums;
 
@@ -48,13 +50,24 @@ public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCo
     private readonly IApplicationDbContext _context;
     private readonly TimeProvider _timeProvider;
 
+    private readonly PowerMutationCoordinator _mutations;
+
     public UpdateThresholdsCommandHandler(IApplicationDbContext context, TimeProvider timeProvider)
+        : this(context, timeProvider, PowerMutationCoordinator.Legacy(new LoadSheddingStateStore()))
+    {
+    }
+
+    public UpdateThresholdsCommandHandler(IApplicationDbContext context, TimeProvider timeProvider, PowerMutationCoordinator mutations)
     {
         _context = context;
         _timeProvider = timeProvider;
+        _mutations = mutations;
     }
 
-    public async Task<int> Handle(UpdateThresholdsCommand request, CancellationToken cancellationToken)
+    public Task<int> Handle(UpdateThresholdsCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<int> Handle(UpdateThresholdsCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var config = await _context.PowerSystemConfigs
             .FirstOrDefaultAsync(cancellationToken);
@@ -109,18 +122,24 @@ public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCo
             config.StabilizationDelayMs = request.StabilizationDelayMs.Value;
         }
 
+        PowerEvent? changed = null;
         if (changes.Count > 0)
         {
-            _context.PowerEvents.Add(new PowerEvent
+            changed = new PowerEvent
             {
                 Timestamp = _timeProvider.GetUtcNow(),
                 Title = "System thresholds changed",
                 Detail = string.Join("; ", changes) + ".",
                 Severity = EventSeverity.Info,
-            });
+            };
+            _context.PowerEvents.Add(changed);
         }
 
         await _context.SaveChangesAsync(cancellationToken);
+
+        mutation.StageConfig(config);
+        if (changed is not null) mutation.StageEvent(changed);
+        mutation.MarkCommitted();
 
         return config.Id;
     }

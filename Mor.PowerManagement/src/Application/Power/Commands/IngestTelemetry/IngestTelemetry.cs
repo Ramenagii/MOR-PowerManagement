@@ -1,4 +1,5 @@
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Constants;
 using Mor.PowerManagement.Domain.Entities;
@@ -147,17 +148,25 @@ public class IngestTelemetryCommandValidator : AbstractValidator<IngestTelemetry
 public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryCommand, IngestTelemetryResult>
 {
     private readonly IApplicationDbContext _context;
-    private readonly LoadSheddingStateStore _framework;
     private readonly TimeProvider _timeProvider;
+    private readonly PowerMutationCoordinator _mutations;
 
     public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
+        : this(context, framework, timeProvider, PowerMutationCoordinator.Legacy(framework))
     {
-        _context = context;
-        _framework = framework;
-        _timeProvider = timeProvider;
     }
 
-    public async Task<IngestTelemetryResult> Handle(IngestTelemetryCommand request, CancellationToken cancellationToken)
+    public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider, PowerMutationCoordinator mutations)
+    {
+        _context = context;
+        _timeProvider = timeProvider;
+        _mutations = mutations;
+    }
+
+    public Task<IngestTelemetryResult> Handle(IngestTelemetryCommand request, CancellationToken cancellationToken)
+        => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
+
+    private async Task<IngestTelemetryResult> Handle(IngestTelemetryCommand request, PowerMutation mutation, CancellationToken cancellationToken)
     {
         var now = _timeProvider.GetUtcNow();
         var eventsRaised = new List<string>();
@@ -209,7 +218,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 continue;
             }
 
-            _context.TelemetryReadings.Add(new TelemetryReading
+            var reading = new TelemetryReading
             {
                 OutletId = outlet.Id,
                 Timestamp = now,
@@ -217,7 +226,9 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 CurrentAmps = sample.CurrentAmps,
                 PowerWatts = sample.PowerWatts,
                 EnergyKwh = sample.EnergyKwh,
-            });
+            };
+            _context.TelemetryReadings.Add(reading);
+            mutation.StageReading(reading);
 
             outlet.CurrentWatts = sample.PowerWatts;
             outlet.LastSeen = now;
@@ -235,14 +246,16 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         if (request.Ina is { } ina &&
             (ina.BusV.HasValue || ina.ShuntMv.HasValue || ina.CurrentA.HasValue || ina.PowerW.HasValue))
         {
-            _context.InaReadings.Add(new InaReading
+            var inaReading = new InaReading
             {
                 Timestamp = now,
                 BusVoltageV = ina.BusV,
                 ShuntVoltageMv = ina.ShuntMv,
                 CurrentA = ina.CurrentA,
                 PowerW = ina.PowerW,
-            });
+            };
+            _context.InaReadings.Add(inaReading);
+            mutation.StageIna(inaReading);
 
             // On this four-branch bench, outlet 5 is the monitored USB/DC rail.
             // It has no relay or CT: mirror the INA226 sample into that outlet's
@@ -256,7 +269,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     : 0.0);
                 usbOutlet.CurrentWatts = usbPower;
                 usbOutlet.LastSeen = now;
-                _context.TelemetryReadings.Add(new TelemetryReading
+                var mirror = new TelemetryReading
                 {
                     OutletId = usbOutlet.Id,
                     Timestamp = now,
@@ -264,7 +277,9 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     CurrentAmps = ina.CurrentA ?? 0.0,
                     PowerWatts = usbPower,
                     EnergyKwh = 0.0,
-                });
+                };
+                _context.TelemetryReadings.Add(mirror);
+                mutation.StageReading(mirror);
                 readingsStored++;
             }
         }
@@ -275,6 +290,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             {
                 continue;
             }
+
+            mutation.StageRelayReport(report.OutletId, report.RelayClosed, report.CommandId, now);
 
             // Backend restriction sticks until cleared by policy action.
             if (outlet.PendingCommandId is { } pendingId && report.CommandId == pendingId
@@ -329,7 +346,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 outlet.FaultHold = true;
             }
 
-            AddEvent("Hardware fault isolation", "S_fault is TRUE: all relays restricted and the prototype isolated (POL-01).", EventSeverity.Critical, now, eventsRaised);
+            AddEvent("Hardware fault isolation", "S_fault is TRUE: all relays restricted and the prototype isolated (POL-01).", EventSeverity.Critical, now, eventsRaised, mutation);
         }
 
         var snapshots = outlets
@@ -363,7 +380,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     if (!pending.CommandNeedsReview)
                     {
                         pending.CommandNeedsReview = true;
-                        AddEvent("Relay response needs review", $"{pending.Name} did not acknowledge command {pending.PendingCommandId} within {LoadSheddingSettings.SwitchingResponseTimeoutSeconds} seconds. Automatic switching is paused.", EventSeverity.Critical, now, eventsRaised);
+                        AddEvent("Relay response needs review", $"{pending.Name} did not acknowledge command {pending.PendingCommandId} within {LoadSheddingSettings.SwitchingResponseTimeoutSeconds} seconds. Automatic switching is paused.", EventSeverity.Critical, now, eventsRaised, mutation);
                     }
                 }
                 else if (pending.PendingCommandAcknowledgedAtUtc is { } acknowledged
@@ -377,7 +394,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 }
             }
 
-            shedding = RunFramework(outlets, config, now, eventsRaised);
+            shedding = RunFramework(outlets, config, now, eventsRaised, mutation);
 
             // The framework may have opened a relay, which changes P_total.
             // Re-derive it so the returned total and state describe the rig as
@@ -405,11 +422,18 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     $"P_total {total:F0} W crossed the configured threshold.",
                     state == SystemState.Critical ? EventSeverity.Critical : EventSeverity.Warning,
                     now,
-                    eventsRaised);
+                    eventsRaised,
+                    mutation);
             }
         }
 
         await _context.SaveChangesAsync(cancellationToken);
+
+        // Committed: publish the config, every outlet this batch loaded, its
+        // readings, INA sample, relay reports and events (cached reads only).
+        mutation.StageConfig(config);
+        mutation.StageOutlets(outlets);
+        mutation.MarkCommitted();
 
         return new IngestTelemetryResult(total, state, readingsStored, eventsRaised, shedding);
     }
@@ -422,7 +446,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         IList<Outlet> outlets,
         PowerSystemConfig config,
         DateTimeOffset now,
-        List<string> eventsRaised)
+        List<string> eventsRaised,
+        PowerMutation mutation)
     {
         // P_limit is the existing critical threshold - the whole-system
         // operating limit POL-02..POL-07 already run on. No new config column.
@@ -430,19 +455,19 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
 
         if (outlets.Any(o => o.CommandNeedsReview))
         {
-            return MakeFrameworkResult(LoadSheddingAction.None, null, "Relay command response needs Admin review; automatic switching is paused.", pLimit, _framework.Current, outlets);
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Relay command response needs Admin review; automatic switching is paused.", pLimit, mutation.Framework, outlets);
         }
         if (outlets.Any(o => o.PendingCommandId.HasValue))
         {
-            return MakeFrameworkResult(LoadSheddingAction.None, null, "Waiting for the matching relay acknowledgement and a fresh post-switch sample.", pLimit, _framework.Current, outlets);
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Waiting for the matching relay acknowledgement and a fresh post-switch sample.", pLimit, mutation.Framework, outlets);
         }
         if (config.LastAcquisitionSessionId is null)
         {
-            return MakeFrameworkResult(LoadSheddingAction.None, null, "Automatic switching is paused until firmware reports acquisition identity and command acknowledgements. Monitoring remains active.", pLimit, _framework.Current, outlets);
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Automatic switching is paused until firmware reports acquisition identity and command acknowledgements. Monitoring remains active.", pLimit, mutation.Framework, outlets);
         }
         if (outlets.Any(o => !o.LastSeen.HasValue || o.LastSeen < now.AddSeconds(-LoadSheddingSettings.SensorStalenessSeconds)))
         {
-            return MakeFrameworkResult(LoadSheddingAction.None, null, "Fresh readings are required before automatic switching; missing or stale inputs are unknown, not zero.", pLimit, _framework.Current, outlets);
+            return MakeFrameworkResult(LoadSheddingAction.None, null, "Fresh readings are required before automatic switching; missing or stale inputs are unknown, not zero.", pLimit, mutation.Framework, outlets);
         }
 
         // F3/F4: judge a recovery against the fresh demand after the settling
@@ -473,16 +498,16 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                         recoveryTrial.RecoveryLockout
                             ? $"{recoveryTrial.Name} remained over the operating limit after its fifth automatic reconnection. It is OFF and requires Admin review."
                             : $"The return of {recoveryTrial.Name} kept total demand above {pLimit:F0} W. That same outlet was disconnected; another trial is delayed {LoadSheddingSettings.RecoveryPeriodSeconds} seconds.",
-                        recoveryTrial.RecoveryLockout ? EventSeverity.Critical : EventSeverity.Warning, now, eventsRaised);
-                    return MakeFrameworkResult(LoadSheddingAction.Shed, recoveryTrial.Id, "Recovery attempt exceeded the threshold; disconnecting the same outlet.", pLimit, _framework.Current, outlets);
+                        recoveryTrial.RecoveryLockout ? EventSeverity.Critical : EventSeverity.Warning, now, eventsRaised, mutation);
+                    return MakeFrameworkResult(LoadSheddingAction.Shed, recoveryTrial.Id, "Recovery attempt exceeded the threshold; disconnecting the same outlet.", pLimit, mutation.Framework, outlets);
                 }
-                return MakeFrameworkResult(LoadSheddingAction.None, recoveryTrial.Id, $"Checking recovery attempt ({recoveryTrial.RecoveryTrialOverLimitBatches}/{LoadSheddingSettings.RecoveryTrialConfirmationBatches} over-limit batches).", pLimit, _framework.Current, outlets);
+                return MakeFrameworkResult(LoadSheddingAction.None, recoveryTrial.Id, $"Checking recovery attempt ({recoveryTrial.RecoveryTrialOverLimitBatches}/{LoadSheddingSettings.RecoveryTrialConfirmationBatches} over-limit batches).", pLimit, mutation.Framework, outlets);
             }
 
             recoveryTrial.RecoveryTrialPending = false;
             recoveryTrial.RecoveryTrialOverLimitBatches = 0;
             recoveryTrial.NextRecoveryAtUtc = null;
-            AddEvent("Recovery successful", $"{recoveryTrial.Name} remained connected after its fresh post-switch measurement.", EventSeverity.Success, now, eventsRaised);
+            AddEvent("Recovery successful", $"{recoveryTrial.Name} remained connected after its fresh post-switch measurement.", EventSeverity.Success, now, eventsRaised, mutation);
         }
 
         var dueRecovery = outlets.Where(o => o.Status == OutletStatus.Disconnected && o.NextRecoveryAtUtc <= now
@@ -502,17 +527,17 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             dueRecovery.AutomaticRecoveryAttempts++;
             dueRecovery.RecoveryTrialPending = true;
             dueRecovery.RecoveryTrialOverLimitBatches = 0;
-            AddEvent("Automatic recovery trial", $"Trial reconnection {dueRecovery.AutomaticRecoveryAttempts}/5 for {dueRecovery.Name}.", EventSeverity.Info, now, eventsRaised);
-            return MakeFrameworkResult(LoadSheddingAction.Restore, dueRecovery.Id, $"Timed recovery elapsed; issuing trial {dueRecovery.AutomaticRecoveryAttempts}/5.", pLimit, _framework.Current, outlets);
+            AddEvent("Automatic recovery trial", $"Trial reconnection {dueRecovery.AutomaticRecoveryAttempts}/5 for {dueRecovery.Name}.", EventSeverity.Info, now, eventsRaised, mutation);
+            return MakeFrameworkResult(LoadSheddingAction.Restore, dueRecovery.Id, $"Timed recovery elapsed; issuing trial {dueRecovery.AutomaticRecoveryAttempts}/5.", pLimit, mutation.Framework, outlets);
         }
 
         var decision = LoadSheddingEngine.Evaluate(
             outlets.Select(o => new OutletLoadSnapshot(o.Id, o.Priority, o.Status, o.CurrentWatts, o.AllowanceWatts, o.LastSeen, o.Name, o.IsProtected, o.ManualHold, o.RecoveryLockout, o.AutomaticRecoveryAttempts)).ToList(),
             pLimit,
-            _framework.Current,
+            mutation.Framework,
             now);
 
-        _framework.Update(_ => decision.NextState);
+        mutation.UpdateFramework(_ => decision.NextState);
 
         switch (decision.Action)
         {
@@ -534,7 +559,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     decision.Detail,
                     EventSeverity.Warning,
                     now,
-                    eventsRaised);
+                    eventsRaised,
+                    mutation);
                 break;
             }
 
@@ -557,7 +583,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     decision.Detail,
                     EventSeverity.Info,
                     now,
-                    eventsRaised);
+                    eventsRaised,
+                    mutation);
                 break;
             }
 
@@ -567,7 +594,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     decision.Detail,
                     EventSeverity.Critical,
                     now,
-                    eventsRaised);
+                    eventsRaised,
+                    mutation);
                 break;
 
             case LoadSheddingAction.None:
@@ -602,15 +630,17 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         return new LoadSheddingResult(action.ToString(), outletId, outlet?.Name, outlet is null ? null : LoadTierMapper.ToTier(outlet.Priority).ToString(), detail, limit, LoadSheddingEngine.ComputeRecoveryLimit(limit), state.ConsecutiveOverLimitBatches, LoadSheddingSettings.OverLimitConfirmationSeconds, LoadSheddingSettings.RecoveryPeriodSeconds, state.ShedLedger.Select(r => r.OutletId).ToList(), state.ManualOverride, state.FaultLatched);
     }
 
-    private void AddEvent(string title, string detail, EventSeverity severity, DateTimeOffset now, List<string> raised)
+    private void AddEvent(string title, string detail, EventSeverity severity, DateTimeOffset now, List<string> raised, PowerMutation mutation)
     {
-        _context.PowerEvents.Add(new PowerEvent
+        var powerEvent = new PowerEvent
         {
             Timestamp = now,
             Title = title,
             Detail = detail,
             Severity = severity,
-        });
+        };
+        _context.PowerEvents.Add(powerEvent);
+        mutation.StageEvent(powerEvent);
 
         raised.Add(title);
     }
