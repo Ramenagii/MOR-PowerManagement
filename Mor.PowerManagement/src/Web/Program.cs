@@ -53,6 +53,11 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 builder.Services.AddMemoryCache();
 
 builder.AddKeyVaultIfConfigured();
+
+// Telemetry:QuietDatabaseMode (off by default): no recurring database wake
+// sources, so an idle backend lets Neon suspend. Must precede infrastructure.
+var quietDatabase = builder.AddQuietDatabase();
+
 builder.AddApplicationServices();
 builder.AddInfrastructureServices();
 builder.AddWebServices();
@@ -77,6 +82,9 @@ app.UseTelemetryRequestMeasurement();
 if (!isDocGen)
 {
     using var measurementScope = TelemetryActivityScope.Begin(TelemetryActivityCategory.Startup);
+
+    // Quiet mode only; static checks, no connection.
+    app.EnsureQuietDatabasePolicy();
 
     // Cached reads only: one backend process per database on this host, then
     // hydrate the runtime snapshot before any request is accepted.
@@ -126,7 +134,16 @@ app.Use(async (context, next) =>
 });
 
 
-app.MapDefaultEndpoints();
+// Quiet mode serves in-memory health in every environment; otherwise the
+// Development-only defaults (including the database check) are unchanged.
+if (quietDatabase.Enabled)
+{
+    app.MapQuietDatabaseHealthEndpoints();
+}
+else
+{
+    app.MapDefaultEndpoints();
+}
 app.MapEndpoints(typeof(Program).Assembly);
 
 app.MapFallbackToFile("index.html");
