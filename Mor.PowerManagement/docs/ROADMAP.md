@@ -21,6 +21,7 @@ document remains the source of truth for topology, deployment, and known limits.
 | **Admin writes (thresholds, per-outlet policy)** | ❌ Backend exists, **zero UI** |
 | **Statistical graphs** | ❌ Not built |
 | **Scenario panel honesty** | ⚠️ 4 of 6 buttons are fake |
+| Neon Free-tier compute (PLAN-0001) | ⚠️ Quiet database mode built behind `Telemetry:QuietDatabaseMode` (default off) and proven locally. Real Neon suspension (G-10), external probes (G-9) and the ≤75 CU-h/month gate are **pending**; retention is pending F. See `docs/NEON_WAKE_VALIDATION.md`. Not applied to production. |
 
 The backend is not the constraint. `UpdateThresholdsCommand` and
 `UpdateOutletPolicyCommand` are fully implemented, validated, and exposed at

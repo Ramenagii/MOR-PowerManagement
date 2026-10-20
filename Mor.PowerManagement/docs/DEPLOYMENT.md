@@ -77,9 +77,37 @@ Render instance for continuous operation. A sleeping Neon compute can also add a
 cold-start delay after an idle period. Configure Neon to keep the compute active
 if your plan supports disabling scale-to-zero; otherwise allow for wake-up delay.
 
+> **PLAN-0001 (rehearsal; not yet applied to production).** The sentence above
+> about keeping Neon active no longer describes the target backend. On the Free
+> tier, Neon's scale-to-zero is what keeps compute inside the monthly budget.
+> With `Telemetry__CachedReadsEnabled`, `Telemetry__RuntimeIngestEnabled`,
+> `Telemetry__BatchPersistenceEnabled` and `Telemetry__QuietDatabaseMode` all
+> `true`, the backend serves device and dashboard traffic from memory and writes
+> history in one batch every 15 minutes, so Neon can suspend between batches
+> while the web process stays up. Backend-host availability and Neon idle
+> windows are separate:
+>
+> - The **web process must stay up**: it holds the runtime state and up to one
+>   batch window of history in memory. A graceful stop drains that buffer. An
+>   abrupt process loss discards it, because there is no durable journal
+>   (`docs/TELEMETRY_PERSISTENCE.md`).
+> - **Neon suspending** about 5 minutes after a batch is expected and wanted. A
+>   suspended compute adds wake latency only to the next database call.
+> - Run **one active backend, stop-before-start**. Never overlap two instances
+>   during a deploy.
+>
+> Evidence and pending gates: `docs/NEON_WAKE_VALIDATION.md`.
+
 ## First deploy checks
 
-1. Render build completes and the `/health` endpoint returns `Healthy`.
+1. Render build completes and the service starts. In Production with the
+   default settings, `/health` and `/alive` are **not mapped**: they return the
+   SPA's `index.html`, not `Healthy` (`src/ServiceDefaults/Extensions.cs`, which
+   maps them in Development only). With `Telemetry__QuietDatabaseMode=true`,
+   `/alive` (process liveness, no database) and `/health` (runtime readiness from
+   memory; 503 until the runtime is hydrated) are mapped in every environment.
+   Point a platform health check at `/alive`, never at an `/api/*` path, which
+   would wake the database.
 2. Logs show EF migrations completed and the service listening on Render's port.
 3. Sign in as `administrator@localhost` with the password in your password
    manager; change it if the database had an existing account.

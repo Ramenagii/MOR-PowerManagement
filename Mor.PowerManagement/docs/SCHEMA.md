@@ -427,7 +427,11 @@ Each button in the Scenario panel now posts a real batch through
   integers. See section 2.
 - **Retention.** Recent telemetry remains raw for 6 hours, then the retention
   service moves it into five-minute summaries. Seven-day history needs seven
-  days of accumulated summaries to become complete.
+  days of accumulated summaries to become complete. With
+  `Telemetry:BatchPersistenceEnabled=true` (PLAN-0001, rehearsal), raw rows
+  are written in 15-minute batches, and retention runs only inside those batch
+  windows instead of on its own timer. The final retention tiers are
+  **pending F merge** (`docs/NEON_WAKE_VALIDATION.md`).
 
 ---
 

@@ -9,9 +9,9 @@ controller, ASP.NET Core backend, Postgres, React dashboard.
 ```
 +------------------+   Wi-Fi (Tenda_7C8018)   +------------------+   +------------------+
 | ESP32-S3         |  POST /api/Device/       | ASP.NET Core 10  |   | Postgres         |
-| PowerFeather     |  telemetry (5s)          | Web API + React  |-->| Neon (now) /     |
+| PowerFeather     |  telemetry (1s)          | Web API + React  |-->| Neon (now) /     |
 | 13 relay GPIOs   |  GET  /api/Device/       | SPA from wwwroot |   | Pi-local (later) |
-| 1 mains PZEM     |  config (15s)            +------------------+   +------------------+
+| 1 mains PZEM     |  config (500ms)          +------------------+   +------------------+
 | NVS policy table |                           ^  serves UI at /  ( :5211 )
 +------------------+                           |
                                                v
@@ -118,11 +118,14 @@ Boot proof on serial @115200:
   5. Dashboard + ESP32 then work from any device anywhere; the PC can stay
      off. Use always-on Render and Neon compute settings for continuous
      telemetry; Free-tier sleep interrupts operation when either service idles.
+     (PLAN-0001 rehearsal: with quiet database mode, Neon suspending between
+     15-minute history batches is expected and does not interrupt operation;
+     only the web process must stay up. See `docs/DEPLOYMENT.md`, Availability.)
 
 ## 6. Operability (how you know it works)
 
 - Serial @115200: `IP:` → Wi-Fi ok; `config synced` → backend reachable;
-  `telemetry: HTTP 200` every 5s → healthy loop; `HTTP -1` → backend down;
+  `telemetry: HTTP 200` every 1 s → healthy loop; `HTTP -1` → backend down;
   `Wi-Fi failed` → credentials/router.
 - Dashboard header: `ESP32 online` = telemetry within 30s
   (`deviceOnline` from max `LastSeen`); `ESP32 offline` otherwise.
@@ -140,9 +143,15 @@ Boot proof on serial @115200:
   never in tracked firmware files.
 - **Telemetry retention is opportunistic, not scheduled.** `TelemetryRetentionService`
   is an in-process `BackgroundService`. On a Render free-tier host that sleeps
-  after ~15 min idle, neither the retention job nor the ESP32's 5 s telemetry POST
+  after ~15 min idle, neither the retention job nor the ESP32's 1 s telemetry POST
+  (`firmware/mor-power-device/config.h:88`; config sync every 500 ms, `:107`)
   can run, so the rig's real history accumulates only in ~15-minute bursts.
   Pruning happens whenever the host is awake. Do not claim guaranteed retention.
+  With `Telemetry:BatchPersistenceEnabled=true` (PLAN-0001, rehearsal), this
+  timer returns at once and pruning runs only inside the 15-minute history
+  batch windows, so an idle backend issues no retention SQL
+  (`docs/NEON_WAKE_VALIDATION.md`). The final retention, catch-up and
+  compaction behaviour is **pending F merge**.
 - The 7-day telemetry window therefore usually returns less than 7 days: the
   storage bound above and the sleep behaviour both bite. The seeded demo data
   (`scripts/seed-telemetry.sql`) is what makes a full window look populated.
