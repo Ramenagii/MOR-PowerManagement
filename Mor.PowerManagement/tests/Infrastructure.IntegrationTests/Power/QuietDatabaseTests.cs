@@ -103,6 +103,24 @@ public class QuietDatabaseTests
     }
 
     [Test]
+    public async Task QuietDatabase_PhysicalSessionCounter_DetectsANewConnection()
+    {
+        // Positive control for the zero readings elsewhere: one short unpooled
+        // connection must show up in pg_stat_database.sessions.
+        var sessions = await PhysicalSessions.OpenAsync(_database);
+        await using (var probe = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(_database.ConnectionString) { Pooling = false }.ConnectionString))
+        {
+            await probe.OpenAsync();
+            await using var command = new NpgsqlCommand("SELECT 1", probe);
+            await command.ExecuteScalarAsync();
+        }
+
+        var physical = await sessions.DeltaAsync();
+        _evidence.Add($"positive control: 1 unpooled connection -> {physical} physical session(s) counted");
+        Assert.That(physical, Is.EqualTo(1));
+    }
+
+    [Test]
     public async Task QuietDatabase_G1_FlagOff_NonDevelopment_HealthEndpointsStayUnmapped()
     {
         await using var host = await QuietHost.StartAsync(_database, new() { Quiet = false });
