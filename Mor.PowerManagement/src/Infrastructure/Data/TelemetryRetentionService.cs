@@ -19,7 +19,8 @@ namespace Mor.PowerManagement.Infrastructure.Data;
 public sealed class TelemetryRetentionService(
     IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
-    ILogger<TelemetryRetentionService> logger) : BackgroundService
+    ILogger<TelemetryRetentionService> logger,
+    TimeProvider clock) : BackgroundService
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(15);
 
@@ -34,6 +35,8 @@ public sealed class TelemetryRetentionService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        if (configuration.GetValue<bool>("Telemetry:BatchPersistenceEnabled")) return;
+
         // First prune runs after the first interval tick, never at startup, so it
         // cannot compete with InitialiseDatabaseAsync for the database during a
         // cold start.
@@ -58,11 +61,11 @@ public sealed class TelemetryRetentionService(
         }
     }
 
-    private async Task PruneAsync(CancellationToken cancellationToken)
+    public async Task PruneAsync(CancellationToken cancellationToken)
     {
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = clock.GetUtcNow();
             var rawCutoff = now.AddHours(-RawRetentionHours);
             var rollupCutoff = now.AddDays(-RollupRetentionDays);
             var rollupBucketsWritten = 0;

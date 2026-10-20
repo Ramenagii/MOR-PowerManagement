@@ -34,6 +34,7 @@ public class AcknowledgeOutletFaultCommandHandler : IRequestHandler<AcknowledgeO
     {
         var outlet = await _context.Outlets.FirstOrDefaultAsync(x => x.Id == request.OutletId, cancellationToken);
         Guard.Against.NotFound(request.OutletId, outlet);
+        mutation.OverlayLiveState(_context, new[] { outlet });
         outlet.FaultHold = false;
         outlet.Status = OutletStatus.Disconnected;
         var powerEvent = new PowerEvent

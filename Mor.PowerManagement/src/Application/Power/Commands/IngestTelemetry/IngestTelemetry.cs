@@ -1,4 +1,7 @@
+using System.Collections.Immutable;
+using Microsoft.Extensions.Options;
 using Mor.PowerManagement.Application.Common.Interfaces;
+using Mor.PowerManagement.Application.Power.History;
 using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Power.Services;
 using Mor.PowerManagement.Domain.Constants;
@@ -86,7 +89,25 @@ public record IngestTelemetryResult(
     // Framework outcome for this batch. Null when the framework did not run
     // (it is skipped outright while the device is in hardware fault isolation,
     // because POL-01 has already restricted every relay).
-    LoadSheddingResult? Shedding = null);
+    LoadSheddingResult? Shedding = null,
+    // Additive (PLAN-0001 Spec E): what happened to this batch's history rows.
+    // "committed" - written in this request's transaction (legacy and
+    // runtime/synchronous paths); "buffered" - accepted into the bounded
+    // in-memory buffer, NOT yet durable (written by the next batch flush);
+    // "dropped" - the buffer was full, the batch was evaluated but its history
+    // is part of a recorded gap. Null for a duplicate/older acquisition, which
+    // stores nothing. ReadingsStored keeps its legacy value on every path.
+    string? HistoryPersistence = null);
+
+/// <summary>Values of <see cref="IngestTelemetryResult.HistoryPersistence"/>.</summary>
+public static class HistoryPersistenceOutcome
+{
+    public const string Committed = "committed";
+
+    public const string Buffered = "buffered";
+
+    public const string Dropped = "dropped";
+}
 
 /// <summary>
 /// What the load-shedding framework decided for one telemetry batch, and why.
@@ -111,8 +132,27 @@ public record LoadSheddingResult(
 public class IngestTelemetryCommandValidator : AbstractValidator<IngestTelemetryCommand>
 {
     public IngestTelemetryCommandValidator()
+        : this(null)
+    {
+    }
+
+    /// <summary>
+    /// With <c>Telemetry:RuntimeIngestEnabled</c> on, the request is also
+    /// bounded before anything is buffered: at most 13 outlet samples and 13
+    /// relay reports (the full rig). Repeated samples within that bound are
+    /// accepted exactly as the baseline accepts them.
+    /// </summary>
+    public IngestTelemetryCommandValidator(IOptions<HistoryPersistenceOptions>? history)
     {
         RuleFor(x => x.Readings).NotEmpty();
+
+        if (history?.Value is { RuntimeIngestEnabled: true } bounds)
+        {
+            RuleFor(x => x.Readings.Count).LessThanOrEqualTo(bounds.MaxOutletSamples)
+                .OverridePropertyName(nameof(IngestTelemetryCommand.Readings));
+            RuleFor(x => x.RelayStates.Count).LessThanOrEqualTo(bounds.MaxRelayReports)
+                .OverridePropertyName(nameof(IngestTelemetryCommand.RelayStates));
+        }
 
         RuleForEach(x => x.Readings).ChildRules(sample =>
         {
@@ -150,6 +190,7 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
     private readonly IApplicationDbContext _context;
     private readonly TimeProvider _timeProvider;
     private readonly PowerMutationCoordinator _mutations;
+    private readonly IHistoryBuffer? _history;
 
     public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider)
         : this(context, framework, timeProvider, PowerMutationCoordinator.Legacy(framework))
@@ -163,6 +204,12 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         _mutations = mutations;
     }
 
+    public IngestTelemetryCommandHandler(IApplicationDbContext context, LoadSheddingStateStore framework, TimeProvider timeProvider,
+        PowerMutationCoordinator mutations, IHistoryBuffer history) : this(context, framework, timeProvider, mutations)
+    {
+        _history = history;
+    }
+
     public Task<IngestTelemetryResult> Handle(IngestTelemetryCommand request, CancellationToken cancellationToken)
         => _mutations.ExecuteAsync(mutation => Handle(request, mutation, cancellationToken), cancellationToken);
 
@@ -171,9 +218,14 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         var now = _timeProvider.GetUtcNow();
         var eventsRaised = new List<string>();
 
-        var config = await _context.PowerSystemConfigs
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? new PowerSystemConfig();
+        var runtime = mutation.RuntimeIngest;
+        var batched = runtime && _history is { Enabled: true };
+        var readings = new List<TelemetryReading>();
+        InaReading? diagnostic = null;
+        var config = runtime ? mutation.Captured!.EffectiveConfig.ToEntity()
+            : await _context.PowerSystemConfigs.FirstOrDefaultAsync(cancellationToken) ?? new PowerSystemConfig();
+        if (runtime && config.Id > 0) _context.Entry(config).State = Microsoft.EntityFrameworkCore.EntityState.Unchanged;
+        var ordinal = batched ? _history!.ReserveOrdinal() : 0;
 
         if (request.AcquisitionSessionId.HasValue && request.AcquisitionSequence.HasValue)
         {
@@ -203,7 +255,12 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             config.MeteringModeUpdatedAt = now;
         }
 
-        var outlets = await _context.Outlets.ToListAsync(cancellationToken);
+        var outlets = runtime ? mutation.Captured!.Outlets.Select(o => o.ToEntity()).ToList()
+            : await _context.Outlets.ToListAsync(cancellationToken);
+        if (runtime)
+        {
+            foreach (var outlet in outlets) _context.Entry(outlet).State = Microsoft.EntityFrameworkCore.EntityState.Unchanged;
+        }
         var byId = outlets.ToDictionary(o => o.Id);
 
         var readingsStored = 0;
@@ -227,7 +284,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 PowerWatts = sample.PowerWatts,
                 EnergyKwh = sample.EnergyKwh,
             };
-            _context.TelemetryReadings.Add(reading);
+            readings.Add(reading);
+            if (!batched) _context.TelemetryReadings.Add(reading);
             mutation.StageReading(reading);
 
             outlet.CurrentWatts = sample.PowerWatts;
@@ -254,7 +312,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                 CurrentA = ina.CurrentA,
                 PowerW = ina.PowerW,
             };
-            _context.InaReadings.Add(inaReading);
+            diagnostic = inaReading;
+            if (!batched) _context.InaReadings.Add(inaReading);
             mutation.StageIna(inaReading);
 
             // On this four-branch bench, outlet 5 is the monitored USB/DC rail.
@@ -278,7 +337,8 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
                     PowerWatts = usbPower,
                     EnergyKwh = 0.0,
                 };
-                _context.TelemetryReadings.Add(mirror);
+                readings.Add(mirror);
+                if (!batched) _context.TelemetryReadings.Add(mirror);
                 mutation.StageReading(mirror);
                 readingsStored++;
             }
@@ -411,9 +471,10 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
         if (state is SystemState.Warning or SystemState.Critical)
         {
             var title = $"System state: {state}";
-            var latest = await _context.PowerEvents
-                .OrderByDescending(e => e.Timestamp)
-                .FirstOrDefaultAsync(cancellationToken);
+            var latest = runtime
+                ? mutation.Captured!.LatestEvent is { } recent
+                    ? new PowerEvent { Title = recent.Title, Timestamp = recent.Timestamp } : null
+                : await _context.PowerEvents.OrderByDescending(e => e.Timestamp).FirstOrDefaultAsync(cancellationToken);
 
             if (latest is null || latest.Title != title || latest.Timestamp < now.AddMinutes(-5))
             {
@@ -427,15 +488,58 @@ public class IngestTelemetryCommandHandler : IRequestHandler<IngestTelemetryComm
             }
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        var transition = runtime && (eventsRaised.Count > 0 || outlets.Any(o =>
+            RuntimeOutlet.From(o) with { CurrentWatts = 0, LastSeen = null, LastRelayReport = null }
+            != mutation.Captured!.Outlets.First(c => c.Id == o.Id) with { CurrentWatts = 0, LastSeen = null, LastRelayReport = null }));
+        string persistence = HistoryPersistenceOutcome.Committed;
+        if (!batched || transition)
+        {
+            if (batched)
+            {
+                // Serialize live checkpoints with the background writer, in this same transaction.
+                await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                await _context.Database.ExecuteSqlInterpolatedAsync($"""
+                    INSERT INTO "TelemetryPersistenceCheckpoints" ("Stream", "LastCommittedOrdinal", "CommittedAcquisitions", "CommittedRows", "DroppedAcquisitions", "DroppedRows")
+                    VALUES ('live-state', {ordinal}, 0, 0, 0, 0)
+                    ON CONFLICT ("Stream") DO UPDATE SET "LastCommittedOrdinal" = EXCLUDED."LastCommittedOrdinal";
+                    """, cancellationToken);
+                foreach (var outlet in outlets)
+                {
+                    _context.Entry(outlet).Property(o => o.CurrentWatts).IsModified = true;
+                    _context.Entry(outlet).Property(o => o.LastSeen).IsModified = true;
+                }
+                if (config.Id > 0)
+                {
+                    _context.Entry(config).Property(c => c.LastAcquisitionSessionId).IsModified = true;
+                    _context.Entry(config).Property(c => c.LastAcquisitionSequence).IsModified = true;
+                    _context.Entry(config).Property(c => c.MeteringMode).IsModified = true;
+                    _context.Entry(config).Property(c => c.MeteringModeUpdatedAt).IsModified = true;
+                }
+                await _context.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            else await _context.SaveChangesAsync(cancellationToken);
+            mutation.MarkCommitted();
+        }
+        else mutation.MarkEvaluated();
 
-        // Committed: publish the config, every outlet this batch loaded, its
-        // readings, INA sample, relay reports and events (cached reads only).
+        if (batched)
+        {
+            var acquisition = new AcceptedAcquisition(ordinal, RuntimeTime.Normalize(now),
+                readings.Select(r => new HistorySample(r.OutletId, r.Voltage, r.CurrentAmps, r.PowerWatts, r.EnergyKwh)).ToImmutableArray(),
+                diagnostic is null ? null : new HistoryInaSample(diagnostic.BusVoltageV, diagnostic.ShuntVoltageMv, diagnostic.CurrentA, diagnostic.PowerW),
+                new AcquisitionLiveState(config.Id, config.LastAcquisitionSessionId, config.LastAcquisitionSequence,
+                    config.MeteringMode, RuntimeTime.Normalize(config.MeteringModeUpdatedAt),
+                    outlets.Select(o => new OutletLiveState(o.Id, o.CurrentWatts, RuntimeTime.Normalize(o.LastSeen))).ToImmutableArray()));
+            persistence = _history!.Accept(acquisition) == HistoryAcceptance.Buffered
+                ? HistoryPersistenceOutcome.Buffered : HistoryPersistenceOutcome.Dropped;
+        }
+
+        // Stage the accepted live state; the coordinator publishes it after
+        // the handler returns, with durable fields gated by the commit above.
         mutation.StageConfig(config);
         mutation.StageOutlets(outlets);
-        mutation.MarkCommitted();
-
-        return new IngestTelemetryResult(total, state, readingsStored, eventsRaised, shedding);
+        return new IngestTelemetryResult(total, state, readingsStored, eventsRaised, shedding, persistence);
     }
 
     /// <summary>

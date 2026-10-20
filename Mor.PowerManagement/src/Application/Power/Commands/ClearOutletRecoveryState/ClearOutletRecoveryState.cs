@@ -33,6 +33,7 @@ public class ClearOutletRecoveryStateCommandHandler : IRequestHandler<ClearOutle
     {
         var outlet = await _context.Outlets.FirstOrDefaultAsync(x => x.Id == request.OutletId, cancellationToken);
         Guard.Against.NotFound(request.OutletId, outlet);
+        mutation.OverlayLiveState(_context, new[] { outlet });
         outlet.AutomaticRecoveryAttempts = 0;
         outlet.RecoveryEpisodeId = Guid.NewGuid();
         outlet.RecoveryLockout = false;

@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using Mor.PowerManagement.Application.Power.History;
+using Mor.PowerManagement.Application.Power.Runtime;
 using Mor.PowerManagement.Application.Common.Interfaces;
 using Mor.PowerManagement.Domain.Enums;
 
@@ -149,7 +152,10 @@ internal sealed record TelemetryBucketRow(
     double PeakWatts,
     double MinVolts,
     double MaxVolts,
-    DateTimeOffset LatestSampleAt);
+    DateTimeOffset LatestSampleAt,
+    double VoltageSum,
+    double CurrentAmpsSum,
+    double PowerWattsSum);
 
 public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeriesQuery, TelemetrySeriesVm>
 {
@@ -169,6 +175,21 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     private const int MaxChannels = 13;
 
     private readonly IApplicationDbContext _context;
+    private readonly IHistoryBuffer? _history;
+    private readonly IPowerRuntimeStore? _runtime;
+    private readonly HistoryTailMerger? _merger;
+    private readonly TimeProvider _clock = TimeProvider.System;
+
+    public GetTelemetrySeriesQueryHandler(IApplicationDbContext context, IHistoryBuffer history,
+        IPowerRuntimeStore runtime, HistoryTailMerger merger, TimeProvider clock) : this(context)
+    {
+        _history = history;
+        _runtime = runtime;
+        _merger = merger;
+        _clock = clock;
+    }
+
+    private sealed record ChannelMetadata(int Id, string Name, string RelayChannel, int RatedVoltageVolts, MeteringMode? Mode);
 
     public GetTelemetrySeriesQueryHandler(IApplicationDbContext context) => _context = context;
 
@@ -176,7 +197,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
     {
         var bucketSeconds = GetTelemetrySeriesQuery.GetBucketSeconds(request.Window);
         var bucket = TimeSpan.FromSeconds(bucketSeconds);
-        var now = DateTimeOffset.UtcNow;
+        var now = _clock.GetUtcNow();
 
         // from floored, to ceiled. Both echoed back so the client renders
         // exactly the axis the server aggregated over.
@@ -197,18 +218,15 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         // ---- Read #1: channel metadata + metering mode (one round trip). The
         // metering mode is folded in as a correlated scalar subquery so the
         // handler stays at exactly two round trips (A2-4).
-        var meta = await _context.Outlets
-            .Where(o => ids == null || ids.Contains(o.Id))
-            .OrderBy(o => o.Id)
-            .Select(o => new
-            {
-                o.Id,
-                o.Name,
-                o.RelayChannel,
-                o.RatedVoltageVolts,
-                Mode = _context.PowerSystemConfigs.Select(c => (MeteringMode?)c.MeteringMode).FirstOrDefault(),
-            })
-            .ToListAsync(cancellationToken);
+        var batched = _history is { Enabled: true };
+        var capture = batched ? _history!.CaptureTail() : null;
+        var snapshot = batched ? await _runtime!.GetAsync(cancellationToken) : null;
+        var meta = batched
+            ? snapshot!.Outlets.Where(o => ids == null || ids.Contains(o.Id))
+                .Select(o => new ChannelMetadata(o.Id, o.Name, o.RelayChannel, o.RatedVoltageVolts, snapshot.EffectiveConfig.MeteringMode)).ToList()
+            : await _context.Outlets.Where(o => ids == null || ids.Contains(o.Id)).OrderBy(o => o.Id)
+                .Select(o => new ChannelMetadata(o.Id, o.Name, o.RelayChannel, o.RatedVoltageVolts,
+                    _context.PowerSystemConfigs.Select(c => (MeteringMode?)c.MeteringMode).FirstOrDefault())).ToListAsync(cancellationToken);
 
         // A device that never reported a metering mode reads as Unknown (E19):
         // the backend never guesses Simulated on the device's behalf.
@@ -227,7 +245,19 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         //     parse nodes, so Postgres does not treat them as the same grouping
         //     key and rejects the query.
         var bucketInterval = TimeSpan.FromSeconds(bucketSeconds);
-        var rows = await _context.Database
+        var prefixKey = request.Window.ToString();
+        var cachedPrefix = batched ? _merger!.TryGetPrefix(prefixKey, bucketSeconds, alignedFrom, capture!) : null;
+        IDisposable? durableWindow = null;
+        if (batched && cachedPrefix is null)
+        {
+            durableWindow = await _merger!.EnterDurableWindowAsync(cancellationToken);
+            // A flush/maintenance window may have finished while this request waited.
+            capture = _history!.CaptureTail();
+            cachedPrefix = _merger.TryGetPrefix(prefixKey, bucketSeconds, alignedFrom, capture);
+        }
+        using var durableRead = durableWindow;
+        var boundary = capture?.CommittedWatermark ?? long.MaxValue;
+        var rows = cachedPrefix is not null ? new List<TelemetryBucketRow>() : await _context.Database
             .SqlQuery<TelemetryBucketRow>($"""
                 WITH samples AS (
                     SELECT r."OutletId",
@@ -244,6 +274,7 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
                            r."Timestamp" AS "LatestSampleAt"
                     FROM "TelemetryReadings" r
                     WHERE r."Timestamp" >= {alignedFrom} AND r."Timestamp" < {alignedTo}
+                        AND (r."AcquisitionOrdinal" IS NULL OR r."AcquisitionOrdinal" <= {boundary})
 
                     UNION ALL
 
@@ -273,12 +304,34 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
                        MAX(s."PeakWatts") AS "PeakWatts",
                        MIN(s."MinVolts") AS "MinVolts",
                        MAX(s."MaxVolts") AS "MaxVolts",
-                       MAX(s."LatestSampleAt") AS "LatestSampleAt"
+                       MAX(s."LatestSampleAt") AS "LatestSampleAt",
+                       SUM(s."VoltageSum") AS "VoltageSum",
+                       SUM(s."CurrentAmpsSum") AS "CurrentAmpsSum",
+                       SUM(s."PowerWattsSum") AS "PowerWattsSum"
                 FROM samples s
                 GROUP BY 1, 2
                 ORDER BY 1, 2
                 """)
             .ToListAsync(cancellationToken);
+
+        if (batched)
+        {
+            var prefix = cachedPrefix?.Prefix;
+            if (prefix is null)
+            {
+                prefix = new HistoryDurablePrefix(prefixKey, bucketSeconds, boundary, alignedFrom, alignedTo,
+                    rows.Select(r => new HistoryBucketAggregate(r.OutletId, r.Timestamp,
+                        r.VoltageSum, r.CurrentAmpsSum, r.PowerWattsSum,
+                        r.SampleCount, r.EnergyKwh, r.PeakWatts, r.MinVolts, r.MaxVolts, r.LatestSampleAt)).ToImmutableArray());
+                _merger!.Store(prefix);
+            }
+            var bridge = cachedPrefix?.Bridge ?? Array.Empty<AcceptedAcquisition>();
+            rows = HistoryTailMerger.Merge(prefix.Buckets, bridge.Concat(capture!.Tail), bucketSeconds, BinEpoch, alignedFrom, alignedTo)
+                .Select(b => new TelemetryBucketRow(b.OutletId, b.BucketStart,
+                    b.VoltageSum / b.SampleCount, b.CurrentAmpsSum / b.SampleCount, b.PowerWattsSum / b.SampleCount,
+                    b.EnergyKwh, 0, checked((int)b.SampleCount), b.PeakWatts, b.MinVolts, b.MaxVolts, b.LatestSampleAt,
+                    b.VoltageSum, b.CurrentAmpsSum, b.PowerWattsSum)).ToList();
+        }
 
         // ---- Guard (A2-4/E10): bound the rows the aggregate is allowed to scan.
         var estimatedRawRows = (long)(Math.Min(

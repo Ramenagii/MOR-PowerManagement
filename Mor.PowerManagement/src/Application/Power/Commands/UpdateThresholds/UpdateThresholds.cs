@@ -78,6 +78,7 @@ public class UpdateThresholdsCommandHandler : IRequestHandler<UpdateThresholdsCo
             _context.PowerSystemConfigs.Add(config);
         }
 
+        mutation.OverlayLiveState(_context, Array.Empty<Outlet>(), config);
         var changes = new List<string>();
 
         if (request.MaxCapacityWatts.HasValue)

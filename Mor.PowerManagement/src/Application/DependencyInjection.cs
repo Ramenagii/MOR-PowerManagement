@@ -1,3 +1,4 @@
+using Mor.PowerManagement.Application.Power.History;
 using System.Reflection;
 using Mor.PowerManagement.Application.Common.Behaviours;
 using Mor.PowerManagement.Application.Power.Runtime;
@@ -25,6 +26,10 @@ public static class DependencyInjection
         // defaults to false; while it is false the store is inert and the
         // coordinator runs every mutation on the legacy path.
         var runtimeOptions = PowerRuntimeOptions.FromConfiguration(builder.Configuration);
+        var historyOptions = HistoryPersistenceOptions.FromConfiguration(builder.Configuration);
+        historyOptions.Validate(runtimeOptions);
+        builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(historyOptions));
+        builder.Services.AddSingleton<HistoryTailMerger>();
         builder.Services.AddSingleton(Microsoft.Extensions.Options.Options.Create(runtimeOptions));
         builder.Services.AddSingleton<IPowerRuntimeStore, PowerRuntimeStore>();
         builder.Services.AddSingleton<PowerMutationCoordinator>();

@@ -223,6 +223,9 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<long?>("AcquisitionOrdinal")
+                        .HasColumnType("bigint");
+
                     b.Property<double?>("BusVoltageV")
                         .HasColumnType("double precision");
 
@@ -477,6 +480,44 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.ToTable("PowerSystemConfigs");
                 });
 
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryPersistenceCheckpoint", b =>
+                {
+                    b.Property<string>("Stream")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<long>("CommittedAcquisitions")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("CommittedRows")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("DroppedAcquisitions")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("DroppedRows")
+                        .HasColumnType("bigint");
+
+                    b.Property<Guid?>("LastBatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("LastCommittedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("LastCommittedOrdinal")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTimeOffset?>("LastGapFromUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastGapToUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Stream");
+
+                    b.ToTable("TelemetryPersistenceCheckpoints");
+                });
+
             modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryReading", b =>
                 {
                     b.Property<int>("Id")
@@ -484,6 +525,9 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                         .HasColumnType("integer");
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<long?>("AcquisitionOrdinal")
+                        .HasColumnType("bigint");
 
                     b.Property<double>("CurrentAmps")
                         .HasColumnType("double precision");
@@ -496,6 +540,9 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
 
                     b.Property<double>("PowerWatts")
                         .HasColumnType("double precision");
+
+                    b.Property<short?>("SampleOrdinal")
+                        .HasColumnType("smallint");
 
                     b.Property<DateTimeOffset>("Timestamp")
                         .HasColumnType("timestamp with time zone");

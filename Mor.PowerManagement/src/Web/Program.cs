@@ -1,3 +1,7 @@
+using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Options;
+using Mor.PowerManagement.Application.Power.History;
+using Mor.PowerManagement.Infrastructure.Power.History;
 using Microsoft.AspNetCore.HttpOverrides;
 using Mor.PowerManagement.Infrastructure.Data;
 using Scalar.AspNetCore;
@@ -79,6 +83,7 @@ if (!isDocGen)
     app.AcquirePowerRuntimeWriterGuard();
     await app.InitialiseDatabaseAsync();
     await app.HydratePowerRuntimeAsync();
+    await app.InitializeHistoryPersistenceAsync();
 }
 
 // Configure the HTTP request pipeline.
@@ -100,6 +105,25 @@ app.MapOpenApi();
 app.MapScalarApiReference();
 
 app.UseExceptionHandler(options => { });
+
+// Set the request bound before minimal API JSON binding reads the body (including chunked requests).
+app.Use(async (context, next) =>
+{
+    var history = context.RequestServices.GetRequiredService<IOptions<HistoryPersistenceOptions>>().Value;
+    if (history.RuntimeIngestEnabled && context.Request.Method == "POST"
+        && (context.Request.Path.Equals("/api/Device/telemetry", StringComparison.OrdinalIgnoreCase)
+            || context.Request.Path.Equals("/api/Dashboard/scenarios/ingest", StringComparison.OrdinalIgnoreCase)))
+    {
+        var limit = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (limit is { IsReadOnly: false }) limit.MaxRequestBodySize = history.MaxRequestBodyBytes;
+        if (context.Request.ContentLength > history.MaxRequestBodyBytes)
+        {
+            context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
+            return;
+        }
+    }
+    await next(context);
+});
 
 
 app.MapDefaultEndpoints();

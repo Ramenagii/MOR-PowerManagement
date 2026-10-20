@@ -27,6 +27,8 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
     public DbSet<PowerEvent> PowerEvents => Set<PowerEvent>();
 
+    public DbSet<TelemetryPersistenceCheckpoint> TelemetryPersistenceCheckpoints => Set<TelemetryPersistenceCheckpoint>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);

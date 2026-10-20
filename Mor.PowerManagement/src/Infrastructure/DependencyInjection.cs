@@ -1,3 +1,4 @@
+using Mor.PowerManagement.Infrastructure.Power.History;
 using Mor.PowerManagement.Application.Common.Interfaces;
 using Mor.PowerManagement.Infrastructure.Data;
 using Mor.PowerManagement.Infrastructure.Data.Interceptors;
@@ -37,6 +38,13 @@ public static class DependencyInjection
         });
 
         builder.EnrichNpgsqlDbContext<ApplicationDbContext>();
+        if (builder.Configuration.GetValue<bool>("Telemetry:BatchPersistenceEnabled"))
+        {
+            // The batch coordinator retries stable identities itself. Never replay an
+            // immediate control transaction after an ambiguous commit behind its back.
+            builder.Services.ConfigureDbContext<ApplicationDbContext>(options => options.UseNpgsql(connectionString,
+                npgsql => npgsql.ExecutionStrategy(dependencies => new Microsoft.EntityFrameworkCore.Storage.NonRetryingExecutionStrategy(dependencies))));
+        }
 
         builder.Services.AddScoped<IApplicationDbContext>(provider => provider.GetRequiredService<ApplicationDbContext>());
 
@@ -91,7 +99,9 @@ public static class DependencyInjection
 
         // Bounds TelemetryReadings growth. Opportunistic, not scheduled: the job
         // only ticks while the host is awake.
-        builder.Services.AddHostedService<TelemetryRetentionService>();
+        builder.Services.AddSingleton<TelemetryRetentionService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TelemetryRetentionService>());
+        builder.Services.AddHistoryPersistence();
     }
 
     private static string NormalizePostgresConnectionString(string raw, bool requireTls)

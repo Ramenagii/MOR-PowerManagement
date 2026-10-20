@@ -89,6 +89,7 @@ public class ApplySelectiveResponseCommandHandler : IRequestHandler<ApplySelecti
             ?? new PowerSystemConfig();
 
         var outlets = await _context.Outlets.ToListAsync(cancellationToken);
+        mutation.OverlayLiveState(_context, outlets, config);
 
         // A manual shed is recorded in the same ledger the staged-restoration
         // ladder reads, so a branch the operator dropped by hand is restored by

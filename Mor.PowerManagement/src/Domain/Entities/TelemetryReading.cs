@@ -16,4 +16,13 @@ public class TelemetryReading : BaseEntity
     public double PowerWatts { get; set; }
 
     public double EnergyKwh { get; set; }
+
+    // Backend acquisition identity (PLAN-0001 Spec E). Set only by the batched
+    // history writer: a monotonic per-database ordinal of the accepted
+    // acquisition and this row's position inside it. Null on rows written by
+    // the legacy and runtime/synchronous paths. The history query uses the
+    // ordinal to read exactly the committed side of a memory-tail merge.
+    public long? AcquisitionOrdinal { get; set; }
+
+    public short? SampleOrdinal { get; set; }
 }
