@@ -282,6 +282,12 @@ public class ApplicationDbContextInitialiser
                 {
                     outlet.Role = spec.Role;
                     outlet.MeterChannel = "PZEM-01 · mains bus";
+                    if (outlet.RelayChannel != spec.Relay)
+                    {
+                        await GuardRetainedHistoryAsync(outlet,
+                            $"seeding would re-key its relay channel from '{outlet.RelayChannel}' to '{spec.Relay}'");
+                    }
+
                     outlet.RelayChannel = spec.Relay;
                     outlet.Priority = spec.Priority;
                     outlet.RatedVoltageVolts = spec.Volts;
@@ -300,6 +306,12 @@ public class ApplicationDbContextInitialiser
             var stale = existing.Where(outlet => outlet.Id > testingRigSpecs.Length || outlet.Id < 1).ToList();
             if (stale.Count > 0)
             {
+                foreach (var outlet in stale)
+                {
+                    await GuardRetainedHistoryAsync(outlet,
+                        "it is not in the testing-rig roster and removing it would delete its history");
+                }
+
                 _context.Outlets.RemoveRange(stale);
                 await _context.SaveChangesAsync();
             }
@@ -322,16 +334,12 @@ public class ApplicationDbContextInitialiser
                     (outlet.Name != spec.Name || outlet.RelayChannel != spec.Relay);
                 if (identityChanged)
                 {
-                    // Outlet 5 used to be a mains branch in the larger rig. Drop
-                    // its old branch history before reusing that ID for USB, so
-                    // the chart cannot label AC data as INA226 data.
-                    if (spec.Relay == "INA226 monitor")
-                    {
-                        var oldReadings = await _context.TelemetryReadings
-                            .Where(reading => reading.OutletId == outlet.Id)
-                            .ToListAsync();
-                        _context.TelemetryReadings.RemoveRange(oldReadings);
-                    }
+                    // Reusing an ID for a different channel (e.g. outlet 5 going
+                    // from a mains branch to INA226 USB) would label its old
+                    // history as the new channel's. Retained history is never
+                    // deleted or relabelled here: stop instead (PLAN-0001 Spec F).
+                    await GuardRetainedHistoryAsync(outlet,
+                        $"seeding would change its identity to '{spec.Name}' on '{spec.Relay}'");
                     outlet.AllowanceWatts = spec.Allowance;
                     outlet.Status = spec.Status;
                     outlet.CurrentWatts = spec.Watts;
@@ -494,6 +502,26 @@ public class ApplicationDbContextInitialiser
         }
 
         return password;
+    }
+
+    /// <summary>
+    /// Stops seeding when an outlet whose identity would change still owns
+    /// retained history (raw, minute or five-minute). The message names the
+    /// outlet and the reason only, never connection details.
+    /// </summary>
+    private async Task GuardRetainedHistoryAsync(Outlet outlet, string reason)
+    {
+        var id = outlet.Id;
+        var hasHistory = await _context.TelemetryReadings.AnyAsync(r => r.OutletId == id)
+            || await _context.TelemetryMinuteRollups.AnyAsync(r => r.OutletId == id)
+            || await _context.Database.SqlQuery<bool>(
+                $"""SELECT EXISTS (SELECT 1 FROM "TelemetryReadingRollups" WHERE "OutletId" = {id}) AS "Value" """).SingleAsync();
+        if (hasHistory)
+        {
+            throw new InvalidOperationException(
+                $"Outlet {id} ('{outlet.Name}') has retained telemetry history; {reason}. "
+                + "Startup stops instead of deleting or relabelling history. See docs/TELEMETRY_RETENTION.md (Rollout implications).");
+        }
     }
 
     private static void ThrowIfFailed(IdentityResult result, string operation)

@@ -85,7 +85,7 @@ public class ControlCharacterizationTests
         var second = await PostgresFixture.CreateAsync();
         Assert.That(second.SchemaName, Is.Not.EqualTo(_database.SchemaName));
         Assert.That(second.IsolationEvidence.Any(x => x.Contains("pre-migration:")), Is.True);
-        Assert.That(second.AppliedMigrations.Last(), Is.EqualTo("20261019220000_BufferedTelemetryPersistence"));
+        Assert.That(second.AppliedMigrations.Last(), Is.EqualTo("20261020090000_TelemetryMinuteRetention"));
         await second.DisposeAsync();
         Assert.That(await second.SchemaExistsAsync(), Is.False);
         Assert.That(await _database.SchemaExistsAsync(), Is.True);

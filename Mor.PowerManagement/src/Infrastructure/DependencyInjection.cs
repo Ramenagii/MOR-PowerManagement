@@ -102,6 +102,8 @@ public static class DependencyInjection
         builder.Services.AddSingleton<TelemetryRetentionService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TelemetryRetentionService>());
         builder.Services.AddHistoryPersistence();
+        // Seven-day raw retention (PLAN-0001 Spec F). Inert while Telemetry:RetentionV2Enabled is off.
+        builder.Services.AddRetentionV2(builder.Configuration);
     }
 
     private static string NormalizePostgresConnectionString(string raw, bool requireTls)

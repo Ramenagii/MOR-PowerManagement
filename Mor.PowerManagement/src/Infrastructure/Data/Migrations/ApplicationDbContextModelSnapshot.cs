@@ -215,6 +215,73 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.ToTable("ControlPolicies");
                 });
 
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.InaMinuteRollup", b =>
+                {
+                    b.Property<DateTimeOffset>("BucketStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("BusVoltageVCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<double?>("BusVoltageVSum")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("CurrentACount")
+                        .HasColumnType("bigint");
+
+                    b.Property<double?>("CurrentASum")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset>("FirstSampleAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset>("LatestSampleAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double?>("MaxBusVoltageV")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MaxCurrentA")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MaxPowerW")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MaxShuntVoltageMv")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MinBusVoltageV")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MinCurrentA")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MinPowerW")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("MinShuntVoltageMv")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("PowerWCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<double?>("PowerWSum")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("SampleCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("ShuntVoltageMvCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<double?>("ShuntVoltageMvSum")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("BucketStart");
+
+                    b.ToTable("InaMinuteRollups");
+                });
+
             modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.InaReading", b =>
                 {
                     b.Property<int>("Id")
@@ -478,6 +545,95 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("PowerSystemConfigs");
+                });
+
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryCompactionCheckpoint", b =>
+                {
+                    b.Property<string>("Stream")
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<long>("CompactedBatches")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("CompactedRows")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("LastBatchRows")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset?>("LastCompactedAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("LastCutoffUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTimeOffset?>("MinuteCoverageFromUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Stream");
+
+                    b.ToTable("TelemetryCompactionCheckpoints");
+                });
+
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryMinuteRollup", b =>
+                {
+                    b.Property<int>("OutletId")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTimeOffset>("BucketStart")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double>("CurrentAmpsSum")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("FirstEnergyKwh")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset>("FirstSampleAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double>("LastEnergyKwh")
+                        .HasColumnType("double precision");
+
+                    b.Property<DateTimeOffset>("LatestSampleAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double>("MaxCurrentAmps")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MaxEnergyKwh")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MaxPowerWatts")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MaxVoltage")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MinCurrentAmps")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MinPowerWatts")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("MinVoltage")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("PowerWattsSum")
+                        .HasColumnType("double precision");
+
+                    b.Property<long>("SampleCount")
+                        .HasColumnType("bigint");
+
+                    b.Property<double>("VoltageSum")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("OutletId", "BucketStart");
+
+                    b.HasIndex("BucketStart");
+
+                    b.ToTable("TelemetryMinuteRollups");
                 });
 
             modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryPersistenceCheckpoint", b =>
@@ -751,12 +907,21 @@ namespace Mor.PowerManagement.Infrastructure.Data.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryMinuteRollup", b =>
+                {
+                    b.HasOne("Mor.PowerManagement.Domain.Entities.Outlet", null)
+                        .WithMany()
+                        .HasForeignKey("OutletId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Mor.PowerManagement.Domain.Entities.TelemetryReading", b =>
                 {
                     b.HasOne("Mor.PowerManagement.Domain.Entities.Outlet", "Outlet")
                         .WithMany("Readings")
                         .HasForeignKey("OutletId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Outlet");

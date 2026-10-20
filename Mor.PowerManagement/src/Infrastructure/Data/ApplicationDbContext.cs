@@ -29,6 +29,12 @@ public class ApplicationDbContext : IdentityDbContext<ApplicationUser>, IApplica
 
     public DbSet<TelemetryPersistenceCheckpoint> TelemetryPersistenceCheckpoints => Set<TelemetryPersistenceCheckpoint>();
 
+    public DbSet<TelemetryMinuteRollup> TelemetryMinuteRollups => Set<TelemetryMinuteRollup>();
+
+    public DbSet<InaMinuteRollup> InaMinuteRollups => Set<InaMinuteRollup>();
+
+    public DbSet<TelemetryCompactionCheckpoint> TelemetryCompactionCheckpoints => Set<TelemetryCompactionCheckpoint>();
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);
