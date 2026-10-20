@@ -19,7 +19,8 @@ namespace Mor.PowerManagement.Infrastructure.Data;
 public sealed class TelemetryRetentionService(
     IServiceScopeFactory scopeFactory,
     IConfiguration configuration,
-    ILogger<TelemetryRetentionService> logger) : BackgroundService
+    ILogger<TelemetryRetentionService> logger,
+    TimeProvider clock) : BackgroundService
 {
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(15);
 
@@ -64,7 +65,7 @@ public sealed class TelemetryRetentionService(
     {
         try
         {
-            var now = DateTimeOffset.UtcNow;
+            var now = clock.GetUtcNow();
             var rawCutoff = now.AddHours(-RawRetentionHours);
             var rollupCutoff = now.AddDays(-RollupRetentionDays);
             var rollupBucketsWritten = 0;
