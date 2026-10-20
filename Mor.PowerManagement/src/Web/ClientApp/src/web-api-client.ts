@@ -132,6 +132,55 @@ export class DashboardClient {
     }
 
     /**
+     * @return OK
+     */
+    getPersistenceStatus(): Promise<HistoryPersistenceStatus> {
+        let url_ = this.baseUrl + "/api/Dashboard/telemetry/persistence";
+        url_ = url_.replace(/[?&]$/, "");
+
+        let options_: RequestInit = {
+            method: "GET",
+            headers: {
+                "Accept": "application/json"
+            }
+        };
+
+        return this.http.fetch(url_, options_).then((_response: Response) => {
+            return this.processGetPersistenceStatus(_response);
+        });
+    }
+
+    protected processGetPersistenceStatus(response: Response): Promise<HistoryPersistenceStatus> {
+        const status = response.status;
+        let _headers: any = {}; if (response.headers && response.headers.forEach) { response.headers.forEach((v: any, k: any) => _headers[k] = v); };
+        if (status === 200) {
+            return response.text().then((_responseText) => {
+            let result200: any = null;
+            let resultData200 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result200 = HistoryPersistenceStatus.fromJS(resultData200);
+            return result200;
+            });
+        } else if (status === 400) {
+            return response.text().then((_responseText) => {
+            return throwException("Bad Request", status, _responseText, _headers);
+            });
+        } else if (status === 401) {
+            return response.text().then((_responseText) => {
+            return throwException("Unauthorized", status, _responseText, _headers);
+            });
+        } else if (status === 403) {
+            return response.text().then((_responseText) => {
+            return throwException("Forbidden", status, _responseText, _headers);
+            });
+        } else if (status !== 200 && status !== 204) {
+            return response.text().then((_responseText) => {
+            return throwException("An unexpected server error occurred.", status, _responseText, _headers);
+            });
+        }
+        return Promise.resolve<HistoryPersistenceStatus>(null as any);
+    }
+
+    /**
      * Get framework rules
      * @return OK
      */
@@ -1502,7 +1551,10 @@ export class UsersClient {
             });
         } else if (status === 400) {
             return response.text().then((_responseText) => {
-            return throwException("Bad Request", status, _responseText, _headers);
+            let result400: any = null;
+            let resultData400 = _responseText === "" ? null : JSON.parse(_responseText, this.jsonParseReviver);
+            result400 = HttpValidationProblemDetails.fromJS(resultData400);
+            return throwException("Bad Request", status, _responseText, _headers, result400);
             });
         } else if (status !== 200 && status !== 204) {
             return response.text().then((_responseText) => {
@@ -2599,6 +2651,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
     recoveryPeriodSeconds!: number;
     interReconnectDelaySeconds!: number;
     consecutiveOverLimitBatches!: number;
+    overLimitElapsedSeconds!: number;
     belowRecoveryLimitSinceUtc!: Date | undefined;
     shedOutletIds!: number[];
 
@@ -2631,6 +2684,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
             this.recoveryPeriodSeconds = _data["recoveryPeriodSeconds"];
             this.interReconnectDelaySeconds = _data["interReconnectDelaySeconds"];
             this.consecutiveOverLimitBatches = _data["consecutiveOverLimitBatches"];
+            this.overLimitElapsedSeconds = _data["overLimitElapsedSeconds"];
             this.belowRecoveryLimitSinceUtc = _data["belowRecoveryLimitSinceUtc"] ? new Date(_data["belowRecoveryLimitSinceUtc"].toString()) : undefined as any;
             if (Array.isArray(_data["shedOutletIds"])) {
                 this.shedOutletIds = [] as any;
@@ -2662,6 +2716,7 @@ export class FrameworkStateDto implements IFrameworkStateDto {
         data["recoveryPeriodSeconds"] = this.recoveryPeriodSeconds;
         data["interReconnectDelaySeconds"] = this.interReconnectDelaySeconds;
         data["consecutiveOverLimitBatches"] = this.consecutiveOverLimitBatches;
+        data["overLimitElapsedSeconds"] = this.overLimitElapsedSeconds;
         data["belowRecoveryLimitSinceUtc"] = this.belowRecoveryLimitSinceUtc ? this.belowRecoveryLimitSinceUtc.toISOString() : undefined as any;
         if (Array.isArray(this.shedOutletIds)) {
             data["shedOutletIds"] = [];
@@ -2682,8 +2737,296 @@ export interface IFrameworkStateDto {
     recoveryPeriodSeconds: number;
     interReconnectDelaySeconds: number;
     consecutiveOverLimitBatches: number;
+    overLimitElapsedSeconds: number;
     belowRecoveryLimitSinceUtc: Date | undefined;
     shedOutletIds: number[];
+
+    [key: string]: any;
+}
+
+export class HistoryFlushRecord implements IHistoryFlushRecord {
+    startedAtUtc!: Date;
+    duration!: string;
+    trigger!: string;
+    outcome!: string;
+    acquisitions!: number;
+    rows!: number;
+    error!: string | undefined;
+
+    [key: string]: any;
+
+    constructor(data?: IHistoryFlushRecord) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.startedAtUtc = _data["startedAtUtc"] ? new Date(_data["startedAtUtc"].toString()) : undefined as any;
+            this.duration = _data["duration"];
+            this.trigger = _data["trigger"];
+            this.outcome = _data["outcome"];
+            this.acquisitions = _data["acquisitions"];
+            this.rows = _data["rows"];
+            this.error = _data["error"];
+        }
+    }
+
+    static fromJS(data: any): HistoryFlushRecord {
+        data = typeof data === 'object' ? data : {};
+        let result = new HistoryFlushRecord();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["startedAtUtc"] = this.startedAtUtc ? this.startedAtUtc.toISOString() : undefined as any;
+        data["duration"] = this.duration;
+        data["trigger"] = this.trigger;
+        data["outcome"] = this.outcome;
+        data["acquisitions"] = this.acquisitions;
+        data["rows"] = this.rows;
+        data["error"] = this.error;
+        return data;
+    }
+}
+
+export interface IHistoryFlushRecord {
+    startedAtUtc: Date;
+    duration: string;
+    trigger: string;
+    outcome: string;
+    acquisitions: number;
+    rows: number;
+    error: string | undefined;
+
+    [key: string]: any;
+}
+
+export class HistoryGap implements IHistoryGap {
+    fromUtc!: Date;
+    toUtc!: Date;
+    droppedAcquisitions!: number;
+    droppedRows!: number;
+    recorded!: boolean;
+
+    [key: string]: any;
+
+    constructor(data?: IHistoryGap) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.fromUtc = _data["fromUtc"] ? new Date(_data["fromUtc"].toString()) : undefined as any;
+            this.toUtc = _data["toUtc"] ? new Date(_data["toUtc"].toString()) : undefined as any;
+            this.droppedAcquisitions = _data["droppedAcquisitions"];
+            this.droppedRows = _data["droppedRows"];
+            this.recorded = _data["recorded"];
+        }
+    }
+
+    static fromJS(data: any): HistoryGap {
+        data = typeof data === 'object' ? data : {};
+        let result = new HistoryGap();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["fromUtc"] = this.fromUtc ? this.fromUtc.toISOString() : undefined as any;
+        data["toUtc"] = this.toUtc ? this.toUtc.toISOString() : undefined as any;
+        data["droppedAcquisitions"] = this.droppedAcquisitions;
+        data["droppedRows"] = this.droppedRows;
+        data["recorded"] = this.recorded;
+        return data;
+    }
+}
+
+export interface IHistoryGap {
+    fromUtc: Date;
+    toUtc: Date;
+    droppedAcquisitions: number;
+    droppedRows: number;
+    recorded: boolean;
+
+    [key: string]: any;
+}
+
+export class HistoryPersistenceStatus implements IHistoryPersistenceStatus {
+    mode!: number;
+    initialized!: boolean;
+    acceptedWatermark!: number;
+    committedWatermark!: number;
+    activeAcquisitions!: number;
+    inFlightAcquisitions!: number;
+    bufferedRows!: number;
+    accountedBytes!: number;
+    bridgeAcquisitions!: number;
+    oldestUncommittedAtUtc!: Date | undefined;
+    oldestUncommittedAge!: string | undefined;
+    lossBound!: string;
+    lossGuaranteeBreached!: boolean;
+    breachReason!: string | undefined;
+    totalAcceptedAcquisitions!: number;
+    totalCommittedAcquisitions!: number;
+    totalCommittedRows!: number;
+    totalDroppedAcquisitions!: number;
+    totalDroppedRows!: number;
+    gaps!: HistoryGap[];
+    lastFlush!: HistoryFlushRecord | undefined;
+    consecutiveFlushFailures!: number;
+    shutdownFlush!: HistoryFlushRecord | undefined;
+    acceptanceFailing?: boolean;
+
+    [key: string]: any;
+
+    constructor(data?: IHistoryPersistenceStatus) {
+        if (data) {
+            for (var property in data) {
+                if (data.hasOwnProperty(property))
+                    (this as any)[property] = (data as any)[property];
+            }
+        }
+        if (!data) {
+            this.gaps = [];
+        }
+    }
+
+    init(_data?: any) {
+        if (_data) {
+            for (var property in _data) {
+                if (_data.hasOwnProperty(property))
+                    this[property] = _data[property];
+            }
+            this.mode = _data["mode"];
+            this.initialized = _data["initialized"];
+            this.acceptedWatermark = _data["acceptedWatermark"];
+            this.committedWatermark = _data["committedWatermark"];
+            this.activeAcquisitions = _data["activeAcquisitions"];
+            this.inFlightAcquisitions = _data["inFlightAcquisitions"];
+            this.bufferedRows = _data["bufferedRows"];
+            this.accountedBytes = _data["accountedBytes"];
+            this.bridgeAcquisitions = _data["bridgeAcquisitions"];
+            this.oldestUncommittedAtUtc = _data["oldestUncommittedAtUtc"] ? new Date(_data["oldestUncommittedAtUtc"].toString()) : undefined as any;
+            this.oldestUncommittedAge = _data["oldestUncommittedAge"];
+            this.lossBound = _data["lossBound"];
+            this.lossGuaranteeBreached = _data["lossGuaranteeBreached"];
+            this.breachReason = _data["breachReason"];
+            this.totalAcceptedAcquisitions = _data["totalAcceptedAcquisitions"];
+            this.totalCommittedAcquisitions = _data["totalCommittedAcquisitions"];
+            this.totalCommittedRows = _data["totalCommittedRows"];
+            this.totalDroppedAcquisitions = _data["totalDroppedAcquisitions"];
+            this.totalDroppedRows = _data["totalDroppedRows"];
+            if (Array.isArray(_data["gaps"])) {
+                this.gaps = [] as any;
+                for (let item of _data["gaps"])
+                    this.gaps!.push(HistoryGap.fromJS(item));
+            }
+            this.lastFlush = _data["lastFlush"] ? HistoryFlushRecord.fromJS(_data["lastFlush"]) : undefined as any;
+            this.consecutiveFlushFailures = _data["consecutiveFlushFailures"];
+            this.shutdownFlush = _data["shutdownFlush"] ? HistoryFlushRecord.fromJS(_data["shutdownFlush"]) : undefined as any;
+            this.acceptanceFailing = _data["acceptanceFailing"];
+        }
+    }
+
+    static fromJS(data: any): HistoryPersistenceStatus {
+        data = typeof data === 'object' ? data : {};
+        let result = new HistoryPersistenceStatus();
+        result.init(data);
+        return result;
+    }
+
+    toJSON(data?: any) {
+        data = typeof data === 'object' ? data : {};
+        for (var property in this) {
+            if (this.hasOwnProperty(property))
+                data[property] = this[property];
+        }
+        data["mode"] = this.mode;
+        data["initialized"] = this.initialized;
+        data["acceptedWatermark"] = this.acceptedWatermark;
+        data["committedWatermark"] = this.committedWatermark;
+        data["activeAcquisitions"] = this.activeAcquisitions;
+        data["inFlightAcquisitions"] = this.inFlightAcquisitions;
+        data["bufferedRows"] = this.bufferedRows;
+        data["accountedBytes"] = this.accountedBytes;
+        data["bridgeAcquisitions"] = this.bridgeAcquisitions;
+        data["oldestUncommittedAtUtc"] = this.oldestUncommittedAtUtc ? this.oldestUncommittedAtUtc.toISOString() : undefined as any;
+        data["oldestUncommittedAge"] = this.oldestUncommittedAge;
+        data["lossBound"] = this.lossBound;
+        data["lossGuaranteeBreached"] = this.lossGuaranteeBreached;
+        data["breachReason"] = this.breachReason;
+        data["totalAcceptedAcquisitions"] = this.totalAcceptedAcquisitions;
+        data["totalCommittedAcquisitions"] = this.totalCommittedAcquisitions;
+        data["totalCommittedRows"] = this.totalCommittedRows;
+        data["totalDroppedAcquisitions"] = this.totalDroppedAcquisitions;
+        data["totalDroppedRows"] = this.totalDroppedRows;
+        if (Array.isArray(this.gaps)) {
+            data["gaps"] = [];
+            for (let item of this.gaps)
+                data["gaps"].push(item ? item.toJSON() : undefined as any);
+        }
+        data["lastFlush"] = this.lastFlush ? this.lastFlush.toJSON() : undefined as any;
+        data["consecutiveFlushFailures"] = this.consecutiveFlushFailures;
+        data["shutdownFlush"] = this.shutdownFlush ? this.shutdownFlush.toJSON() : undefined as any;
+        data["acceptanceFailing"] = this.acceptanceFailing;
+        return data;
+    }
+}
+
+export interface IHistoryPersistenceStatus {
+    mode: number;
+    initialized: boolean;
+    acceptedWatermark: number;
+    committedWatermark: number;
+    activeAcquisitions: number;
+    inFlightAcquisitions: number;
+    bufferedRows: number;
+    accountedBytes: number;
+    bridgeAcquisitions: number;
+    oldestUncommittedAtUtc: Date | undefined;
+    oldestUncommittedAge: string | undefined;
+    lossBound: string;
+    lossGuaranteeBreached: boolean;
+    breachReason: string | undefined;
+    totalAcceptedAcquisitions: number;
+    totalCommittedAcquisitions: number;
+    totalCommittedRows: number;
+    totalDroppedAcquisitions: number;
+    totalDroppedRows: number;
+    gaps: HistoryGap[];
+    lastFlush: HistoryFlushRecord | undefined;
+    consecutiveFlushFailures: number;
+    shutdownFlush: HistoryFlushRecord | undefined;
+    acceptanceFailing?: boolean;
 
     [key: string]: any;
 }
@@ -3098,6 +3441,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
     readingsStored!: number;
     eventsRaised!: string[];
     shedding?: LoadSheddingResult | undefined;
+    historyPersistence?: string | undefined;
 
     [key: string]: any;
 
@@ -3128,6 +3472,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
                     this.eventsRaised!.push(item);
             }
             this.shedding = _data["shedding"] ? LoadSheddingResult.fromJS(_data["shedding"]) : undefined as any;
+            this.historyPersistence = _data["historyPersistence"];
         }
     }
 
@@ -3153,6 +3498,7 @@ export class IngestTelemetryResult implements IIngestTelemetryResult {
                 data["eventsRaised"].push(item);
         }
         data["shedding"] = this.shedding ? this.shedding.toJSON() : undefined as any;
+        data["historyPersistence"] = this.historyPersistence;
         return data;
     }
 }
@@ -3163,6 +3509,7 @@ export interface IIngestTelemetryResult {
     readingsStored: number;
     eventsRaised: string[];
     shedding?: LoadSheddingResult | undefined;
+    historyPersistence?: string | undefined;
 
     [key: string]: any;
 }
