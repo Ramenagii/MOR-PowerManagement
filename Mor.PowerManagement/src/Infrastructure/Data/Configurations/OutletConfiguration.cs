@@ -27,9 +27,13 @@ public class OutletConfiguration : IEntityTypeConfiguration<Outlet>
         builder.Property(o => o.Schedule)
             .HasMaxLength(200);
 
+        // Restrict, not cascade (PLAN-0001 Spec F): removing or re-keying an
+        // outlet must never silently delete its retained raw history. The
+        // seeder refuses such a roster change instead (see
+        // ApplicationDbContextInitialiser).
         builder.HasMany(o => o.Readings)
             .WithOne(r => r.Outlet)
             .HasForeignKey(r => r.OutletId)
-            .OnDelete(DeleteBehavior.Cascade);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -257,6 +257,13 @@ public class GetTelemetrySeriesQueryHandler : IRequestHandler<GetTelemetrySeries
         }
         using var durableRead = durableWindow;
         var boundary = capture?.CommittedWatermark ?? long.MaxValue;
+        // Tier selection: every sample is read from exactly one representation.
+        // Uncompacted samples are raw rows; compacted ones (legacy six-hour job,
+        // or retention V2 after seven days) live in the five-minute rollups,
+        // which both jobs write in the same transaction that deletes the raw
+        // row. The V2 minute tier (TelemetryMinuteRollups) only ever holds
+        // samples older than seven days, outside every window here, so it is
+        // deliberately not unioned; reading it as well would double count.
         var rows = cachedPrefix is not null ? new List<TelemetryBucketRow>() : await _context.Database
             .SqlQuery<TelemetryBucketRow>($"""
                 WITH samples AS (
