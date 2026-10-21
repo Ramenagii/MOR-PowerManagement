@@ -45,8 +45,8 @@
     I2C     SDA = GPIO 8, SCL = GPIO 9  (I2C_SDA_PIN / I2C_SCL_PIN), INA226
             only. The CT channels are on SPI, so the two sensors no longer
             share a bus.
-    RELAY   CH1 = GPIO 1, CH2 = GPIO 2, CH3 = GPIO 4, CH4 = GPIO 5 (RELAY_PINS).
-             Operator wiring, corrected 2026-10-16 (was CH1 = GPIO 2, CH2 = GPIO 1).
+    RELAY   CH1 = GPIO 4, CH2 = GPIO 5, CH3 = GPIO 6, CH4 = GPIO 7 (RELAY_PINS).
+             Operator-confirmed wiring, 2026-10-21; physical switching unverified.
 
   Channels
     CH1-CH4  220 V mains outlets, CT-metered (BRANCH_CT_COUNT = 4). Watts are
@@ -84,7 +84,13 @@ INA226_WE ina226(INA226_ADDR);
 // be the default set; DRDY on 14 is what the library polls between conversions).
 // pc = true is the flag that tells the library "SPI has been remapped, call
 // begin(sclk, miso, mosi, cs)"; init() below is what actually performs it.
-ADS1220_WE ads1220(&SPI, ADS1220_CS_PIN, ADS1220_DRDY_PIN,
+class BenchADS1220 : public ADS1220_WE {
+ public:
+  using ADS1220_WE::ADS1220_WE;
+  // Called only by the sampling task while it owns spiMutex.
+  uint8_t inputConfiguration() { return readRegister(ADS1220_CONF_REG_0); }
+};
+BenchADS1220 ads1220(&SPI, ADS1220_CS_PIN, ADS1220_DRDY_PIN,
                    ADS1220_MOSI_PIN, ADS1220_MISO_PIN, ADS1220_SCLK_PIN, true);
 
 // MUX per CT channel. Single-ended against AVSS: the ZMCT103C output is a
@@ -128,6 +134,13 @@ struct ZmctReading {
   float countsRms;      // ADS1220 code RMS, raw, DC-removed (NOT volts)
   float millivoltsRms;  // the same window in mV at the running reference + gain
   float amps;           // millivoltsRms / 1000 x ZMCT_CAL_FACTOR (A per V)
+#if ADS1220_DIAGNOSTICS
+  float meanMillivolts;
+  float minMillivolts;
+  float maxMillivolts;
+  uint16_t nearFullScaleSamples;
+  uint8_t inputConfiguration;
+#endif
 };
 
 // The USB outlet (outletId 5) is MONITORED, not fabricated.
@@ -564,7 +577,23 @@ void setup() {
     Serial.print("[ADC] self-test: DRDY(GPIO"); Serial.print(ADS1220_DRDY_PIN);
     Serial.print(") before="); Serial.print(digitalRead(ADS1220_DRDY_PIN) ? "HIGH" : "LOW");
     uint32_t t0 = micros();
-    const int32_t probeCode = ads1220.getRawData();
+    // The library's blocking read waits forever for DRDY. An unpowered ADC
+    // must not prevent the ESP32 from reaching Wi-Fi initialization.
+    ads1220.setNonBlockingMode(true);
+    ads1220.start();
+    const uint32_t probeStarted = millis();
+    while (digitalRead(ADS1220_DRDY_PIN) == HIGH &&
+           (uint32_t)(millis() - probeStarted) < 100) {
+      delay(1);
+    }
+    const bool probeReady = digitalRead(ADS1220_DRDY_PIN) == LOW;
+    const int32_t probeCode = probeReady ? ads1220.getRawData() : 0;
+    ads1220.setNonBlockingMode(false);
+    if (!probeReady) {
+      ads1220Present = false;
+      Serial.println(" | timed out: ADC unavailable; continuing to Wi-Fi.");
+    }
+    if (probeReady) {
     const uint32_t t1 = micros();
     Serial.print(" | 1 conversion="); Serial.print((uint32_t)(t1 - t0));
     Serial.print(" us | code="); Serial.print(probeCode);
@@ -599,6 +628,7 @@ void setup() {
     // Hand the measured per-conversion cost to the sweep so it can bound itself
     // instead of running flat out into the watchdog. See sensorTask().
     gSampleCostUs = probeUs;
+    }
   }
 
   // Pin High-Speed Sampling Engine to Core 0. Only when the ADC is actually
@@ -889,10 +919,23 @@ ZmctReading readChannel(uint8_t channel) {
   ads1220.setCompareChannels(CT_MUX[channel]);
   delay(2); // match the reference sketch's MUX settling delay
 
+#if ADS1220_DIAGNOSTICS
+  const uint8_t inputConfiguration = ads1220.inputConfiguration();
+  const float fullScaleMv = ads1220.getVRef_V() * 1000.0f / ads1220.getGainFactor();
+  float minMv = fullScaleMv;
+  float maxMv = -fullScaleMv;
+  uint16_t nearFullScaleSamples = 0;
+#endif
+
   for (uint16_t i = 0; i < ZMCT_DEDICATED_SAMPLES; i++) {
     // Wolfgang's getVoltage_mV() waits for one conversion and scales the raw
     // code using the configured VREF and PGA gain, matching the reference sketch.
     const float voltage_mV = ads1220.getVoltage_mV();
+#if ADS1220_DIAGNOSTICS
+    if (voltage_mV < minMv) minMv = voltage_mV;
+    if (voltage_mV > maxMv) maxMv = voltage_mV;
+    if (fabsf(voltage_mV) >= fullScaleMv * 0.999f) ++nearFullScaleSamples;
+#endif
     sumMillivolts += voltage_mV;
     sumSqMillivolts += (double)voltage_mV * voltage_mV;
   }
@@ -913,6 +956,13 @@ ZmctReading readChannel(uint8_t channel) {
   // Convert voltage RMS to the reference sketch's base current estimate; the
   // configured piecewise curve is applied to this value by sensorTask().
   out.amps = (out.millivoltsRms / 1000.0f) * ZMCT_CAL_FACTOR;
+#if ADS1220_DIAGNOSTICS
+  out.meanMillivolts = (float)meanMillivolts;
+  out.minMillivolts = minMv;
+  out.maxMillivolts = maxMv;
+  out.nearFullScaleSamples = nearFullScaleSamples;
+  out.inputConfiguration = inputConfiguration;
+#endif
   return out;
 }
 
@@ -1034,6 +1084,20 @@ void printSerialTelemetry() {
   Serial.print(" V | "); Serial.print(inaI, 3);
   Serial.print(" A | "); Serial.print(inaP, 2);
   Serial.println(" W (separate from the 4 outlet channels)");
+
+#if ADS1220_DIAGNOSTICS
+  static uint32_t lastAdcDiagnosticMs = 0;
+  if ((uint32_t)(millis() - lastAdcDiagnosticMs) >= 1000UL) {
+    lastAdcDiagnosticMs = millis();
+    for (uint8_t ch = 0; ch < BRANCH_CT_COUNT; ++ch) {
+      Serial.printf("[ADC-DIAG] CH%u AIN%u present=%u stale=%u reg0=0x%02X mean=%.3f min=%.3f max=%.3f rms=%.3f mV raw=%.6f A nearFS=%u/%u\n",
+                    ch + 1, ch, ads1220Present, stale[ch], raw[ch].inputConfiguration,
+                    raw[ch].meanMillivolts, raw[ch].minMillivolts, raw[ch].maxMillivolts,
+                    raw[ch].millivoltsRms, raw[ch].amps,
+                    raw[ch].nearFullScaleSamples, ZMCT_DEDICATED_SAMPLES);
+    }
+  }
+#endif
 
 #if ZMCT_CALIBRATION_MODE
   // ---- CT calibration helper (config.h ZMCT_CALIBRATION_MODE 1) ----
@@ -1262,9 +1326,12 @@ bool postTelemetry() {
   String payload;
   serializeJson(doc, payload);
 
-  HTTPClient http;
   WiFiClient plainClient;
   WiFiClientSecure secureClient;
+  // HTTPClient retains a pointer to its transport, including after end() when
+  // keep-alive is enabled. Declare it last so it is destroyed FIRST, while
+  // both transports are still alive.
+  HTTPClient http;
   if (!beginBackendRequest(http, plainClient, secureClient, "/Device/telemetry")) return false;
   http.addHeader("Content-Type", "application/json");
   if (strlen(DEVICE_API_KEY) > 0) http.addHeader("X-Device-Key", DEVICE_API_KEY);
@@ -1305,9 +1372,10 @@ bool postTelemetry() {
 // status it never receives, because the dashboard shows the outlet as
 // disconnected while the load is still live.
 bool syncConfig() {
-  HTTPClient http;
   WiFiClient plainClient;
   WiFiClientSecure secureClient;
+  // Destroy HTTPClient before the transport it borrows (reverse local order).
+  HTTPClient http;
   if (!beginBackendRequest(http, plainClient, secureClient, "/Device/config")) {
     // Never silent. This function failing quietly for a whole session is how a
     // disconnect command can sit in the backend forever while the firmware

@@ -318,6 +318,12 @@
 // active setting here as well.
 #define ADS1220_USE_AVDD_AS_VREF 0
 
+// Print ADC input statistics before calibration/noise suppression. Enable only
+// for bench diagnosis in ignored config.local.h; does not change ADC settings.
+#ifndef ADS1220_DIAGNOSTICS
+#define ADS1220_DIAGNOSTICS 0
+#endif
+
 // ---- ZMCT103C CT calibration factor: provenance ----
 // This is amps RMS per volt RMS at the CT output. It is the ONE constant in the
 // current path that cannot be derived from a datasheet, and the only honest way
@@ -553,21 +559,14 @@
 //   SPI   10-14         (ADS1220 CS/DRDY/SCLK/MISO/MOSI)
 //   strapping 0, 3, 45, 46
 //   USB-JTAG 19, 20
-//   GPIO 1, 2, 4, 5 clear ALL of the above. They are ordinary GPIOs on the
+//   GPIO 4, 5, 6, 7 clear ALL of the above. They are ordinary GPIOs on the
 //   ESP32-S3 (not strapping, not ADC-only, not in the octal-PSRAM pin set,
 //   which the N16R8 module uses at 26-32 and 35-37), so nothing else on this
 //   board claims them.
 //
-// GPIO 1 CHECKED, NOT ASSUMED (2026-10-15, re-confirmed 2026-10-16): on the
-// ESP32-S3 the strapping pins are 0, 3, 45 and 46 only. GPIO 1 is an ordinary
-// GPIO (ADC1_CH0), is not in the USB-JTAG pair (19/20), is not a PSRAM pin on
-// the N16R8 module, and is not touched by the boot loader on this board. There
-// is NO conflict, so CH1 = GPIO 1 is fine - do not remap it on suspicion. It is
-// still worth knowing that it is an ADC1 pin, so it cannot be sampled by ADC2
-// while ADC1 is busy; that does not affect a digital output.
-//
-// Relay order: outlet 1 = GPIO 1, outlet 2 = GPIO 2, outlet 3 = GPIO 4,
-// outlet 4 = GPIO 5.
+// Operator-confirmed wiring, 2026-10-21: outlet 1 = GPIO 4,
+// outlet 2 = GPIO 5, outlet 3 = GPIO 6, outlet 4 = GPIO 7.
+// Physical relay operation on this revised wiring has not yet been verified.
 //
 // VERIFY BEFORE POWERING: the exclusion-bank argument above is
 // correct-by-construction but NOT an observation of the physical board, and the
@@ -585,12 +584,11 @@
 // click, put a transistor or level shifter in front of it - or power the opto
 // from VCC with the ESP32 side pulled low - rather than raising the ESP32 pin,
 // which is not possible at 3.3 V anyway.
-// Operator wiring, corrected 2026-10-16 (CH1/CH2 pin mapping verified).
-static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 1, 2, 4, 5, 0 };
-#define RELAY_PIN_1 1
-#define RELAY_PIN_2 2
-#define RELAY_PIN_3 4
-#define RELAY_PIN_4 5
+static constexpr uint8_t RELAY_PINS[OUTLET_COUNT] = { 4, 5, 6, 7, 0 };
+#define RELAY_PIN_1 4
+#define RELAY_PIN_2 5
+#define RELAY_PIN_3 6
+#define RELAY_PIN_4 7
 #define USB_OUTLET_NO_RELAY 1
 
 // ---- Relay-transition window drop (2026-10-16) ----
